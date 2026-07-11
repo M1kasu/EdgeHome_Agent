@@ -88,6 +88,8 @@ from .const import (
     DEFAULT_EDGEHOME_ENABLED,
     CONF_EDGEHOME_FAST_PATH_ENABLED,
     DEFAULT_EDGEHOME_FAST_PATH_ENABLED,
+    CONF_EDGEHOME_PLANNING_ENABLED,
+    DEFAULT_EDGEHOME_PLANNING_ENABLED,
     CONF_PROMPT_CACHING_ENABLED,
     CONF_PROMPT_CACHING_INTERVAL,
     CONF_USE_IN_CONTEXT_LEARNING_EXAMPLES,
@@ -782,6 +784,11 @@ def local_llama_config_option_schema(
                 CONF_EDGEHOME_FAST_PATH_ENABLED,
                 description={"suggested_value": options.get(CONF_EDGEHOME_FAST_PATH_ENABLED, DEFAULT_EDGEHOME_FAST_PATH_ENABLED)},
                 default=options.get(CONF_EDGEHOME_FAST_PATH_ENABLED, DEFAULT_EDGEHOME_FAST_PATH_ENABLED),
+            ): BooleanSelector(BooleanSelectorConfig()),
+            vol.Required(
+                CONF_EDGEHOME_PLANNING_ENABLED,
+                description={"suggested_value": options.get(CONF_EDGEHOME_PLANNING_ENABLED, DEFAULT_EDGEHOME_PLANNING_ENABLED)},
+                default=options.get(CONF_EDGEHOME_PLANNING_ENABLED, DEFAULT_EDGEHOME_PLANNING_ENABLED),
             ): BooleanSelector(BooleanSelectorConfig()),
         })
 

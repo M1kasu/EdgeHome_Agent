@@ -19,3 +19,7 @@
 ## 模型后端复用
 
 `LLMTaskPlanner` 复用现有 `LocalLLMClient._generate()`，但强制关闭流式输出、传入 `TaskPlan` JSON Schema，并将 Home Assistant LLM API 设为 `None`。因此这次模型调用没有原有设备控制工具；它只返回文本 JSON。后端异常、空输出、非法 JSON、非法 Schema 或计划校验失败都会返回不可执行结果，不触发服务调用。
+
+## 复杂请求接入
+
+仅当 EdgeHome 已启用、结构化规划开关开启，且请求是场景或明显多动作设备请求时，Conversation 才调用受限规划器。生成的计划会重新经过固定计划验证器后交给执行器；规划失败则回退到原 Home LLM 对话流程，合法计划的执行失败则直接报告，不会重复调用旧模型路径。

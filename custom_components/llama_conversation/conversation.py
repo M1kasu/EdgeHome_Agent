@@ -26,6 +26,7 @@ from .const import (
     CONF_MAX_TOOL_CALL_ITERATIONS,
     CONF_EDGEHOME_ENABLED,
     CONF_EDGEHOME_FAST_PATH_ENABLED,
+    CONF_EDGEHOME_PLANNING_ENABLED,
     CONF_THINKING_PREFIX,
     CONF_THINKING_SUFFIX,
     DEFAULT_PROMPT,
@@ -35,6 +36,7 @@ from .const import (
     DEFAULT_MAX_TOOL_CALL_ITERATIONS,
     DEFAULT_EDGEHOME_ENABLED,
     DEFAULT_EDGEHOME_FAST_PATH_ENABLED,
+    DEFAULT_EDGEHOME_PLANNING_ENABLED,
     DEFAULT_THINKING_PREFIX,
     DEFAULT_THINKING_SUFFIX,
     DOMAIN,
@@ -282,9 +284,23 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
         if self._edgehome_coordinator is None:
             self._edgehome_coordinator = EdgeHomeCoordinator(self.hass)
         result = await self._edgehome_coordinator.async_handle(user_input.text)
-        if not result.handled:
+        if result.handled:
+            intent_response = intent.IntentResponse(language=user_input.language)
+            intent_response.async_set_speech(result.speech or "请求已由 EdgeHome 处理。")
+            return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
+
+        if not self.runtime_options.get(CONF_EDGEHOME_PLANNING_ENABLED, DEFAULT_EDGEHOME_PLANNING_ENABLED):
+            return None
+        planner = self._edgehome_coordinator.build_planner(self.client)
+        planned_result = await self._edgehome_coordinator.async_handle_complex(
+            user_input.text,
+            user_input.agent_id,
+            self.runtime_options,
+            planner,
+        )
+        if not planned_result.handled:
             return None
 
         intent_response = intent.IntentResponse(language=user_input.language)
-        intent_response.async_set_speech(result.speech or "请求已由 EdgeHome 处理。")
+        intent_response.async_set_speech(planned_result.speech or "请求已由 EdgeHome 处理。")
         return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)

@@ -6,9 +6,13 @@ from dataclasses import dataclass
 
 from homeassistant.core import HomeAssistant
 
+from ..entity import LocalLLMClient
 from .entity_resolver import EntityNameResolver
 from .execution.executor import FixedPlanExecutor
+from .context.home_state import TaskHomeStateBuilder
 from .models import EntitySnapshot, StepExecutionResult, TaskStatus
+from .planner.llm_planner import LLMTaskPlanner, PlanningRequest, PlanningStatus
+from .planner.parser import StructuredPlanParser
 from .router import ChineseFastRouter
 from .understanding.models import FastIntent, FastRouteDecision, FastRouteStatus
 
@@ -55,6 +59,36 @@ class EdgeHomeCoordinator:
             handled=True,
             speech=self._failure_speech(decision, report.step_results),
             decision=decision,
+        )
+
+    async def async_handle_complex(
+        self,
+        text: str,
+        agent_id: str,
+        runtime_options: dict[str, object],
+        planner: LLMTaskPlanner,
+    ) -> FastPathResponse:
+        """Plan and run a complex request only after the model result passes all fixed-plan gates."""
+        if not planner.is_candidate(text):
+            return FastPathResponse(handled=False)
+        planning = await planner.async_plan(PlanningRequest(goal=text, agent_id=agent_id), runtime_options)
+        if planning.status != PlanningStatus.ACCEPTED or planning.plan is None:
+            return FastPathResponse(handled=False)
+
+        report = await self._executor.async_execute(planning.plan)
+        if report.status == TaskStatus.SUCCESS:
+            return FastPathResponse(handled=True, speech=f"已完成任务：{planning.plan.goal}。")
+        failure = report.step_results[-1] if report.step_results else None
+        reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
+        return FastPathResponse(handled=True, speech=f"任务未完成：{reason}。")
+
+    def build_planner(self, client: LocalLLMClient) -> LLMTaskPlanner:
+        """Build the model adapter from the same resolver, registry, and validator as execution."""
+        return LLMTaskPlanner(
+            client,
+            TaskHomeStateBuilder(self._resolver),
+            StructuredPlanParser(self._executor.validator),
+            self._executor.tools,
         )
 
     @staticmethod

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from enum import StrEnum
 from typing import Any
 
@@ -89,6 +90,15 @@ class LLMTaskPlanner:
         if parsed.status != PlanParseStatus.ACCEPTED or parsed.plan is None:
             return PlanningResult(status=PlanningStatus.REJECTED, reason=parsed.reason or parsed.status.value, scene=scene)
         return PlanningResult(status=PlanningStatus.ACCEPTED, plan=parsed.plan, scene=scene)
+
+    def is_candidate(self, text: str) -> bool:
+        """Avoid sending ordinary chat or already-handled fast commands to the planner."""
+        if self._templates.match(text):
+            return True
+        return bool(
+            re.search(r"打开|关闭|调到|设置|查询|查看", text)
+            and re.search(r"然后|再把|并且|同时|以及|全部|所有|都|、|；|;|如果|定时|后", text)
+        )
 
     def _build_prompt(self, goal: str, snapshot: dict[str, Any], scene_guidance: str | None) -> str:
         tool_metadata = [
