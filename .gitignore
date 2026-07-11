@@ -15,3 +15,6 @@ runpod_bootstrap.sh
 .coverage
 .vscode/
 .python-version
+deployment/.env
+deployment/homeassistant/
+deployment/models/
