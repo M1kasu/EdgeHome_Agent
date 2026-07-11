@@ -6,6 +6,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..models import EntitySnapshot, TaskPlan
+
 
 class FastIntent(StrEnum):
     """Small, explicit intent set eligible for direct device execution."""
@@ -37,3 +39,23 @@ class FastSlots(BaseModel):
     entity_query: str = Field(min_length=1, max_length=300)
     value: float | None = None
     errors: list[str] = Field(default_factory=list)
+
+
+class FastRouteStatus(StrEnum):
+    """Whether the fast path can execute, needs clarification, or must defer."""
+
+    READY = "ready"
+    CLARIFICATION = "clarification"
+    FALLBACK = "fallback"
+
+
+class FastRouteDecision(BaseModel):
+    """Auditable route decision; only READY may contain an executable fixed plan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: FastRouteStatus
+    intent: FastIntent
+    reason: str
+    entity: EntitySnapshot | None = None
+    plan: TaskPlan | None = None
