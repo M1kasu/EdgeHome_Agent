@@ -112,7 +112,10 @@
                         "tool_call_suffix": "Tool Call Suffix",
                         "enable_legacy_tool_calling": "Enable Legacy Tool Calling",
                         "tool_response_as_string": "Tool Response as String",
-                        "max_tool_call_iterations": "Maximum Tool Call Attempts"
+                        "max_tool_call_iterations": "Maximum Tool Call Attempts",
+                        "edgehome_enabled": "Enable EdgeHome safe execution",
+                        "edgehome_fast_path_enabled": "Enable EdgeHome Chinese fast path",
+                        "edgehome_planning_enabled": "Enable EdgeHome structured model planning"
                     },
                     "data_description": {
                         "llm_hass_api": "Select 'Assist' if you want the model to be able to control devices. If you are using the Home-LLM (v1-3) model then select 'Home Assistant Services'",
@@ -173,7 +176,10 @@
                         "tool_call_suffix": "Tool Call Suffix",
                         "enable_legacy_tool_calling": "Enable Legacy Tool Calling",
                         "tool_response_as_string": "Tool Response as String",
-                        "max_tool_call_iterations": "Maximum Tool Call Attempts"
+                        "max_tool_call_iterations": "Maximum Tool Call Attempts",
+                        "edgehome_enabled": "Enable EdgeHome safe execution",
+                        "edgehome_fast_path_enabled": "Enable EdgeHome Chinese fast path",
+                        "edgehome_planning_enabled": "Enable EdgeHome structured model planning"
                     },
                     "data_description": {
                         "llm_hass_api": "Select 'Assist' if you want the model to be able to control devices. If you are using the Home-LLM (v1-3) model then select 'Home Assistant Services'",

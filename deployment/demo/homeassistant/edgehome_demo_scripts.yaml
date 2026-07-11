@@ -1,0 +1,74 @@
+edgehome_reset_demo_environment:
+  alias: EdgeHome 重置虚拟家居测试环境
+  description: 将全部 edgehome_* 虚拟设备恢复到晚间场景，供每次测试前调用。
+  mode: single
+  sequence:
+    - action: input_boolean.turn_on
+      target:
+        entity_id:
+          - input_boolean.edgehome_living_room_main_power
+          - input_boolean.edgehome_living_room_presence_state
+          - input_boolean.edgehome_router_power
+          - input_boolean.edgehome_refrigerator_power
+          - input_boolean.edgehome_test_socket_power
+    - action: input_boolean.turn_off
+      target:
+        entity_id:
+          - input_boolean.edgehome_living_room_ambient_power
+          - input_boolean.edgehome_living_room_tv_power
+          - input_boolean.edgehome_bedroom_presence_state
+          - input_boolean.edgehome_bedroom_main_power
+          - input_boolean.edgehome_living_room_ac_relay
+          - input_boolean.edgehome_bedroom_ac_relay
+          - input_boolean.edgehome_window_open_state
+          - input_boolean.edgehome_simulate_curtain_failure
+          - input_boolean.edgehome_security_mode
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.edgehome_living_room_main_brightness
+      data:
+        value: 80
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.edgehome_living_room_ambient_brightness
+      data:
+        value: 30
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.edgehome_living_room_curtain_position
+      data:
+        value: 100
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.edgehome_living_room_temperature_value
+      data:
+        value: 29
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.edgehome_bedroom_temperature_value
+      data:
+        value: 27
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.edgehome_living_room_illuminance_value
+      data:
+        value: 200
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.edgehome_bedroom_main_brightness
+      data:
+        value: 60
+    - action: climate.set_temperature
+      target:
+        entity_id:
+          - climate.edgehome_living_room_ac
+          - climate.edgehome_bedroom_ac
+      data:
+        temperature: 26
+    - action: climate.set_hvac_mode
+      target:
+        entity_id:
+          - climate.edgehome_living_room_ac
+          - climate.edgehome_bedroom_ac
+      data:
+        hvac_mode: "off"

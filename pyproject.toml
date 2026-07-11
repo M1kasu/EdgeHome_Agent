@@ -1,0 +1,24 @@
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+extend-exclude = ["data", "train"]
+
+[tool.ruff.lint]
+# 上游尚未使用 Ruff；基线只拦截语法错误和未定义名称，避免批量修改历史代码。
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.mypy]
+python_version = "3.14"
+files = ["custom_components/llama_conversation"]
+ignore_missing_imports = true
+# 上游代码目前没有类型检查基线。旧模块只做解析，EdgeHome 模块单独收紧。
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["custom_components.llama_conversation.edgehome.*"]
+ignore_errors = false
+check_untyped_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_return_any = true
+warn_unused_ignores = true

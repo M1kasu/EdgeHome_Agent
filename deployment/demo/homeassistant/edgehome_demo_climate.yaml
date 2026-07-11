@@ -1,0 +1,25 @@
+# Generic Thermostat 用 input_boolean 和模板温度传感器创建真实可调用的 climate 实体。
+- platform: generic_thermostat
+  name: EdgeHome Living Room AC
+  unique_id: edgehome_living_room_ac
+  heater: input_boolean.edgehome_living_room_ac_relay
+  target_sensor: sensor.edgehome_living_room_temperature
+  min_temp: 16
+  max_temp: 30
+  target_temp: 26
+  ac_mode: true
+  initial_hvac_mode: "off"
+  precision: 0.5
+  target_temp_step: 0.5
+- platform: generic_thermostat
+  name: EdgeHome Bedroom AC
+  unique_id: edgehome_bedroom_ac
+  heater: input_boolean.edgehome_bedroom_ac_relay
+  target_sensor: sensor.edgehome_bedroom_temperature
+  min_temp: 16
+  max_temp: 30
+  target_temp: 26
+  ac_mode: true
+  initial_hvac_mode: "off"
+  precision: 0.5
+  target_temp_step: 0.5

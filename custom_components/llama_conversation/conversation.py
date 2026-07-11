@@ -16,6 +16,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from custom_components.llama_conversation.utils import MalformedToolCallException, strip_thinking_blocks
 
 from .entity import LocalLLMEntity, LocalLLMClient, LocalLLMConfigEntry
+from .edgehome.coordinator import EdgeHomeCoordinator
 from .const import (
     CONF_CHAT_MODEL,
     CONF_PROMPT,
@@ -23,6 +24,9 @@ from .const import (
     CONF_REMEMBER_CONVERSATION,
     CONF_REMEMBER_NUM_INTERACTIONS,
     CONF_MAX_TOOL_CALL_ITERATIONS,
+    CONF_EDGEHOME_ENABLED,
+    CONF_EDGEHOME_FAST_PATH_ENABLED,
+    CONF_EDGEHOME_PLANNING_ENABLED,
     CONF_THINKING_PREFIX,
     CONF_THINKING_SUFFIX,
     DEFAULT_PROMPT,
@@ -30,6 +34,9 @@ from .const import (
     DEFAULT_REMEMBER_CONVERSATION,
     DEFAULT_REMEMBER_NUM_INTERACTIONS,
     DEFAULT_MAX_TOOL_CALL_ITERATIONS,
+    DEFAULT_EDGEHOME_ENABLED,
+    DEFAULT_EDGEHOME_FAST_PATH_ENABLED,
+    DEFAULT_EDGEHOME_PLANNING_ENABLED,
     DEFAULT_THINKING_PREFIX,
     DEFAULT_THINKING_SUFFIX,
     DOMAIN,
@@ -64,6 +71,7 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, subentry: ConfigSubentry, client: LocalLLMClient) -> None:
         super().__init__(hass, entry, subentry, client)
+        self._edgehome_coordinator: EdgeHomeCoordinator | None = None
 
         if subentry.data.get(CONF_LLM_HASS_API):
             self._attr_supported_features = (
@@ -78,6 +86,8 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
     async def async_will_remove_from_hass(self) -> None:
         """When entity will be removed from Home Assistant."""
         conversation.async_unset_agent(self.hass, self.entry)
+        if self._edgehome_coordinator is not None:
+            await self._edgehome_coordinator.async_shutdown()
         await super().async_will_remove_from_hass()
 
     @property
@@ -94,6 +104,10 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
         self, user_input: ConversationInput
     ) -> ConversationResult:
         """Process a sentence."""
+        fast_path_result = await self._async_process_edgehome_fast_path(user_input)
+        if fast_path_result is not None:
+            return fast_path_result
+
         with (
             chat_session.async_get_chat_session(
                 self.hass, user_input.conversation_id
@@ -259,3 +273,39 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
             return ConversationResult(
                 response=intent_response, conversation_id=user_input.conversation_id
             )
+
+    async def _async_process_edgehome_fast_path(
+        self, user_input: ConversationInput
+    ) -> ConversationResult | None:
+        """Run the opt-in fast path before any model prompt or tool loop is created."""
+        if not self.runtime_options.get(CONF_EDGEHOME_ENABLED, DEFAULT_EDGEHOME_ENABLED):
+            return None
+        if not self.runtime_options.get(CONF_EDGEHOME_FAST_PATH_ENABLED, DEFAULT_EDGEHOME_FAST_PATH_ENABLED):
+            return None
+
+        if self._edgehome_coordinator is None:
+            self._edgehome_coordinator = EdgeHomeCoordinator(self.hass)
+        result = await self._edgehome_coordinator.async_handle_with_dialogue(user_input.text, user_input.conversation_id)
+        if result.handled:
+            intent_response = intent.IntentResponse(language=user_input.language)
+            intent_response.async_set_speech(result.speech or "请求已由 EdgeHome 处理。")
+            return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
+
+        if not self.runtime_options.get(CONF_EDGEHOME_PLANNING_ENABLED, DEFAULT_EDGEHOME_PLANNING_ENABLED):
+            return None
+        planner = self._edgehome_coordinator.build_planner(self.client)
+        planning_text = result.planning_text or user_input.text
+        planned_result = await self._edgehome_coordinator.async_handle_complex(
+            planning_text,
+            user_input.conversation_id,
+            user_input.agent_id,
+            self.runtime_options,
+            planner,
+        )
+        if not planned_result.handled:
+            return None
+        await self._edgehome_coordinator.async_remember_completed(user_input.conversation_id, planned_result.completed_plan)
+
+        intent_response = intent.IntentResponse(language=user_input.language)
+        intent_response.async_set_speech(planned_result.speech or "请求已由 EdgeHome 处理。")
+        return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
