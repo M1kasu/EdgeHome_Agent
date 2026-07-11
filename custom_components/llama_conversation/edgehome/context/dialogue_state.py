@@ -1,0 +1,39 @@
+"""Structured EdgeHome dialogue state kept alongside Home Assistant ChatLog."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from ..models import TaskPlan
+
+
+class PendingClarification(BaseModel):
+    """The original goal and question required before planning may resume."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    original_goal: str = Field(min_length=1, max_length=300)
+    question: str = Field(min_length=1, max_length=300)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class DialogueState(BaseModel):
+    """Persisted per-conversation memory used only by EdgeHome orchestration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str = Field(min_length=1, max_length=256)
+    last_plan: TaskPlan | None = None
+    last_entity_id: str | None = None
+    last_arguments: dict[str, Any] = Field(default_factory=dict)
+    pending_clarification: PendingClarification | None = None
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc) + timedelta(hours=12))
+
+    def refreshed(self, ttl_hours: int = 12) -> "DialogueState":
+        """Return a copy with a bounded expiry to avoid permanent conversational memory."""
+        now = datetime.now(timezone.utc)
+        return self.model_copy(update={"updated_at": now, "expires_at": now + timedelta(hours=ttl_hours)})
