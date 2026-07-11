@@ -15,3 +15,7 @@
 3. `PlanValidator` 必须验证工具白名单、实体暴露、实体域、参数范围和验证规则，之后才可交给执行器。
 
 任一道门失败时均不会调用 Home Assistant 服务，调用方可安全回退到原 Home LLM 对话路径。
+
+## 模型后端复用
+
+`LLMTaskPlanner` 复用现有 `LocalLLMClient._generate()`，但强制关闭流式输出、传入 `TaskPlan` JSON Schema，并将 Home Assistant LLM API 设为 `None`。因此这次模型调用没有原有设备控制工具；它只返回文本 JSON。后端异常、空输出、非法 JSON、非法 Schema 或计划校验失败都会返回不可执行结果，不触发服务调用。
