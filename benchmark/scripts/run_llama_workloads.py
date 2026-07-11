@@ -101,7 +101,14 @@ def _run_llm(workload: BenchmarkWorkload, endpoint: str, max_tokens: int, prefix
             decoded = json.loads(response.read().decode("utf-8"))
     except (URLError, TimeoutError, json.JSONDecodeError, OSError) as error:
         recorder.end_stage("model_generation")
-        return recorder.finish(False, error_code=type(error).__name__), {"id": workload.id, "model_called": True, "schema_valid": False, "success": False}
+        return recorder.finish(False, error_code=type(error).__name__), {
+            "id": workload.id,
+            "model_called": True,
+            "schema_valid": False if task_plan_schema else None,
+            "schema_error": type(error).__name__ if task_plan_schema else None,
+            "raw_model_output": None,
+            "success": False,
+        }
     elapsed = (perf_counter() - started) * 1000
     recorder.end_stage("model_generation")
     timings = decoded.get("timings") if isinstance(decoded, dict) else None
@@ -118,8 +125,16 @@ def _run_llm(workload: BenchmarkWorkload, endpoint: str, max_tokens: int, prefix
         tokens_per_second=tokens_per_second,
         error_code=None if content else "EMPTY_MODEL_CONTENT",
     )
-    schema_valid = _is_task_plan(content) if task_plan_schema else None
-    return metric, {"id": workload.id, "model_called": True, "schema_valid": schema_valid, "success": metric.success}
+    schema_valid, schema_error = _task_plan_validation(content) if task_plan_schema else (None, None)
+    return metric, {
+        "id": workload.id,
+        "model_called": True,
+        "schema_valid": schema_valid,
+        # 仅在结构化规划基准中保留模型原文和验证错误，便于审计失败样本；工作负载不包含私人家庭数据。
+        "raw_model_output": content if task_plan_schema else None,
+        "schema_error": schema_error,
+        "success": metric.success,
+    }
 
 
 def _content(response: Any) -> str:
@@ -150,12 +165,13 @@ def _is_json(content: str) -> bool:
     return True
 
 
-def _is_task_plan(content: str) -> bool:
+def _task_plan_validation(content: str) -> tuple[bool, str | None]:
     try:
         TaskPlan.model_validate_json(content)
-    except ValueError:
-        return False
-    return True
+    except ValueError as error:
+        # Pydantic 错误可能换行；结果文件保存单行摘要，完整模型原文仍单独保留。
+        return False, " ".join(str(error).split())
+    return True, None
 
 
 def _summary(metrics: list[Any], outcomes: list[dict[str, Any]]) -> dict[str, Any]:

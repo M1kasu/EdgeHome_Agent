@@ -1,0 +1,26 @@
+[
+  {
+    "id": "complex-010",
+    "model_called": true,
+    "schema_valid": false,
+    "raw_model_output": "{\"goal\": \"adjust living room to comfortable setting\", \"steps\": [{\"id\": \"ACSET01\", \"tool\": \"air conditioner\", \"optional\": true}, {\"id\": \"CURTAIN01\", \"tool\": \"curtain\"}, {\"id\": \"CURTAIN02\", \"tool\": \"curtain\"}, {\"id\": \"LIGHTING01\", \"tool\": \"light\"}, {\"id\": \"CURTAIN03\", \"tool\": \"curtain\"}, {\"id\": \"CURTAIN04\", \"tool\": \"curtain\"}, {\"id\": \"CURTAIN05\", \"tool\": \"curtain\"}, {\"id\": \"CURTAIN06\", \"tool\": \"curtain\"}, {\"id\": \"CURTAIN07\", \"tool\": \"curtain\"}, {\"id\": \"CURTAIN08\", \"tool\": \"curtain\"}, {\"id\": \"CURTAIN09\", \"tool\": \"curtain\"}, {\"id\": \"CURTAIN10\", \"tool\": \"curtain\"}, {\"id\": \"CURTAIN11\", \"tool\": \"curtain\"}, {\"id\": \"CURTAIN12\", \"tool\": \"curtain\"}, {\"id\": \"CURTAIN13\", \"tool",
+    "schema_error": "1 validation error for TaskPlan Invalid JSON: EOF while parsing a string at line 1 column 672 [type=json_invalid, input_value='{\"goal\": \"adjust living ...id\": \"CURTAIN13\", \"tool', input_type=str] For further information visit https://errors.pydantic.dev/2.13/v/json_invalid",
+    "success": true
+  },
+  {
+    "id": "complex-019",
+    "model_called": true,
+    "schema_valid": true,
+    "raw_model_output": "{\"goal\": \"adjust living room to comfortable setting and turn on the air conditioner to at least 25 degrees celsius\", \"steps\": [{\"id\": \"b1a9c9c9c9c9c9c9c9c9c9c9c9c9\", \"tool\": \"Home Assistant\", \"verify\": {\"entity_id\": \"light.living_room\", \"state\": \"on\"}}]}",
+    "schema_error": null,
+    "success": true
+  },
+  {
+    "id": "complex-025",
+    "model_called": true,
+    "schema_valid": true,
+    "raw_model_output": "{\"goal\": \"adjust living room to comfortable setting\", \"steps\": [{\"id\": \"ACSET01\", \"tool\": \"air conditioner\", \"optional\": true}, {\"id\": \"CURTAIN01\", \"tool\": \"curtain\"}, {\"id\": \"LIGHT01\", \"tool\": \"light\"}, {\"id\": \"TVON\", \"tool\": \"tv\"}, {\"id\": \"SET25\", \"tool\": \"thermostat\", \"optional\": true}, {\"id\": \"MOVIE\", \"tool\": \"movie player\"}]}",
+    "schema_error": null,
+    "success": true
+  }
+]

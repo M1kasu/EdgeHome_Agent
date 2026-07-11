@@ -29,7 +29,7 @@
 | 复杂模型平均 / P95 | 1,427.183 / 1,534.085ms | `dual_path_results.csv` |
 | 并发吞吐 | 1/2/4 并发：1.685 / 2.837 / 3.939 req/s | `concurrency_results.csv` |
 | 断网本地模型可用 | 是（内部健康检查 200，外网 DNS 失败） | `offline_network_test.json` |
-| 稳定运行时长 | 1 小时结果将在稳定性采集完成后写入 | `stability_1h.jsonl` |
+| 稳定运行时长 | 3,600 秒配置窗口；60 次采样，三类失败均为 0 | `stability_1h.jsonl`、`stability_1h_summary.json` |
 
 ## 场景价值
 

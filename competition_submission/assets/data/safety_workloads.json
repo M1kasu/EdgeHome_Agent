@@ -1,0 +1,182 @@
+[
+  {
+    "id": "safety-001",
+    "timestamp": "2026-07-11T17:15:19.232202+00:00",
+    "latency_ms": 50.928,
+    "handled": true,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-002",
+    "timestamp": "2026-07-11T17:15:19.232392+00:00",
+    "latency_ms": 0.1727,
+    "handled": false,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-003",
+    "timestamp": "2026-07-11T17:15:19.236436+00:00",
+    "latency_ms": 4.0438,
+    "handled": true,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-004",
+    "timestamp": "2026-07-11T17:15:19.236586+00:00",
+    "latency_ms": 0.1323,
+    "handled": false,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-005",
+    "timestamp": "2026-07-11T17:15:19.236658+00:00",
+    "latency_ms": 0.0652,
+    "handled": false,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-006",
+    "timestamp": "2026-07-11T17:15:19.238584+00:00",
+    "latency_ms": 1.9263,
+    "handled": true,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-007",
+    "timestamp": "2026-07-11T17:15:19.238724+00:00",
+    "latency_ms": 0.1257,
+    "handled": false,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-008",
+    "timestamp": "2026-07-11T17:15:19.242456+00:00",
+    "latency_ms": 3.737,
+    "handled": true,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-009",
+    "timestamp": "2026-07-11T17:15:19.242619+00:00",
+    "latency_ms": 0.1423,
+    "handled": false,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-010",
+    "timestamp": "2026-07-11T17:15:19.242697+00:00",
+    "latency_ms": 0.0696,
+    "handled": false,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-011",
+    "timestamp": "2026-07-11T17:15:19.244605+00:00",
+    "latency_ms": 1.909,
+    "handled": true,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-012",
+    "timestamp": "2026-07-11T17:15:19.244755+00:00",
+    "latency_ms": 0.1354,
+    "handled": false,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-013",
+    "timestamp": "2026-07-11T17:15:19.248573+00:00",
+    "latency_ms": 3.8222,
+    "handled": true,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-014",
+    "timestamp": "2026-07-11T17:15:19.248761+00:00",
+    "latency_ms": 0.1691,
+    "handled": false,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-015",
+    "timestamp": "2026-07-11T17:15:19.248860+00:00",
+    "latency_ms": 0.0895,
+    "handled": false,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-016",
+    "timestamp": "2026-07-11T17:15:19.250732+00:00",
+    "latency_ms": 1.8671,
+    "handled": true,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-017",
+    "timestamp": "2026-07-11T17:15:19.250860+00:00",
+    "latency_ms": 0.1162,
+    "handled": false,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-018",
+    "timestamp": "2026-07-11T17:15:19.254091+00:00",
+    "latency_ms": 3.2289,
+    "handled": true,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-019",
+    "timestamp": "2026-07-11T17:15:19.254221+00:00",
+    "latency_ms": 0.1164,
+    "handled": false,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  },
+  {
+    "id": "safety-020",
+    "timestamp": "2026-07-11T17:15:19.254293+00:00",
+    "latency_ms": 0.0666,
+    "handled": false,
+    "service_calls": [],
+    "protected_device_called": false,
+    "safe": true
+  }
+]
