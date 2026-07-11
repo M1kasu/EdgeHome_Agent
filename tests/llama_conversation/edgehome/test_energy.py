@@ -6,11 +6,35 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from custom_components.llama_conversation.edgehome.energy.conversation import EnergyConversationHandler
 from custom_components.llama_conversation.edgehome.energy.statistics import (
     EnergyAnalyzer,
     EnergySample,
     HomeAssistantEnergyStatistics,
 )
+
+
+@pytest.mark.asyncio
+async def test_energy_conversation_accepts_natural_weekly_increase_question() -> None:
+    class Service:
+        async def analyse_home_energy(self):
+            return type(
+                "Analysis",
+                (),
+                {
+                    "total_kwh": 42.5,
+                    "comparison_delta_kwh": 8.2,
+                    "high_consumption_rank": ["客厅空调"],
+                    "anomalies": [object()],
+                },
+            )()
+
+    handler = EnergyConversationHandler(None, Service())
+
+    result = await handler.async_handle("最近一周为什么用电量增加？", "conversation-1")
+
+    assert result is not None
+    assert result.startswith("最近一周累计用电 42.50 kWh")
 
 
 @pytest.mark.asyncio

@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
-from custom_components.llama_conversation.edgehome.coordinator import EdgeHomeCoordinator
+from custom_components.llama_conversation.edgehome.coordinator import EdgeHomeCoordinator, FastPathResponse
 from custom_components.llama_conversation.edgehome.energy.statistics import HomeAssistantEnergyStatistics
 from custom_components.llama_conversation.edgehome.entity_resolver import EntityNameResolver
 from custom_components.llama_conversation.edgehome.execution.executor import FixedPlanExecutor
 from custom_components.llama_conversation.edgehome.knowledge.associations import DeviceManualAssociation, DeviceManualRegistry
 from custom_components.llama_conversation.edgehome.knowledge.indexer import KnowledgeDocument, LocalKnowledgeIndex
 from custom_components.llama_conversation.edgehome.models import PlanStep, TaskPlan, VerificationRule
+from custom_components.llama_conversation.edgehome.planner.llm_planner import PlanningResult, PlanningStatus
 
 
 def _coordinator(hass) -> EdgeHomeCoordinator:
@@ -62,6 +64,75 @@ async def test_coordinator_does_not_fallback_after_a_direct_execution_failure(ha
     assert result.handled is True
     assert result.speech is not None
     assert result.speech.startswith("未能完成对客厅灯的操作：")
+
+
+@pytest.mark.asyncio
+async def test_coordinator_records_plan_and_verified_state_transition(hass) -> None:
+    hass.states.async_set("light.living", "off", {"friendly_name": "客厅灯"})
+
+    async def turn_on(call) -> None:
+        hass.states.async_set(call.data["entity_id"], "on", context=call.context)
+
+    hass.services.async_register("light", "turn_on", turn_on)
+    coordinator = _coordinator(hass)
+
+    result = await coordinator.async_handle("打开客厅灯")
+    card = coordinator.record_trace(result)
+    trace = hass.states.get("sensor.edgehome_last_execution")
+
+    assert "处理路径：快速规则" in card
+    assert trace is not None
+    assert trace.state == "success"
+    assert trace.attributes["plan_steps"][0]["entity_id"] == "light.living"
+    assert trace.attributes["step_results"][0]["state_before"] == "off"
+    assert trace.attributes["step_results"][0]["state_after"] == "on"
+    assert trace.attributes["step_results"][0]["verified"] is True
+
+
+@pytest.mark.asyncio
+async def test_complex_candidate_rejection_stops_before_generic_model_fallback(hass) -> None:
+    class RejectedPlanner:
+        def is_candidate(self, _text: str) -> bool:
+            return True
+
+        async def async_template_fallback(self, _request, _reason) -> PlanningResult:
+            return PlanningResult(status=PlanningStatus.REJECTED, reason="invalid_plan")
+
+    class TemplateOnlyScheduler:
+        def decide(self, **_kwargs):
+            return SimpleNamespace(decision="template_fallback", reason="resource_limited")
+
+    coordinator = EdgeHomeCoordinator(hass, resource_scheduler=TemplateOnlyScheduler())
+    result = await coordinator.async_handle_complex(
+        "离家后关闭不需要的设备",
+        "conversation-1",
+        "agent-1",
+        {},
+        RejectedPlanner(),
+    )
+
+    assert result.handled is True
+    assert result.speech == "任务规划未通过安全校验，未执行任何设备。"
+
+
+@pytest.mark.asyncio
+async def test_leaving_scene_is_selected_before_router_keyword_matching(monkeypatch, hass) -> None:
+    coordinator = _coordinator(hass)
+    seen: list[tuple[str, str]] = []
+
+    async def handle_leaving(text: str, conversation_id: str) -> FastPathResponse:
+        seen.append((text, conversation_id))
+        return FastPathResponse(handled=True, speech="离家保护已处理。", trace_route="deterministic_leaving_scene")
+
+    monkeypatch.setattr(coordinator, "_async_handle_deterministic_leaving_scene", handle_leaving)
+
+    result = await coordinator.async_handle_with_dialogue(
+        "我要出门一天，把不需要的设备关掉，但冰箱和路由器不要动。",
+        "conversation-1",
+    )
+
+    assert result.speech == "离家保护已处理。"
+    assert seen == [("我要出门一天，把不需要的设备关掉，但冰箱和路由器不要动。", "conversation-1")]
 
 
 @pytest.mark.asyncio

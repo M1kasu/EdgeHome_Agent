@@ -16,8 +16,6 @@ bedroom:
   - sensor.edgehome_bedroom_temperature
   - binary_sensor.edgehome_bedroom_presence
 home:
-  - switch.edgehome_router
-  - switch.edgehome_refrigerator
   - switch.edgehome_test_socket
   - binary_sensor.edgehome_window
   - input_boolean.edgehome_security_mode

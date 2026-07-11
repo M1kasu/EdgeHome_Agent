@@ -18,7 +18,15 @@ class EnergyConversationHandler:
 
     async def async_handle(self, text: str, conversation_id: str) -> str | None:
         normalized = text.strip().rstrip("。！？?!")
-        if normalized in {"最近一周为什么用电量变高了", "分析最近一周能耗", "分析家庭能耗"}:
+        if normalized in {
+            "最近一周为什么用电量变高了",
+            "最近一周为什么用电量变高",
+            "最近一周为什么用电量增加",
+            "最近一周为什么用电量增加了",
+            "最近一周用电量为什么增加",
+            "分析最近一周能耗",
+            "分析家庭能耗",
+        }:
             analysis = await self._service.analyse_home_energy()
             return self._analysis_speech(analysis.total_kwh, analysis.comparison_delta_kwh, analysis.high_consumption_rank, len(analysis.anomalies))
         if normalized.startswith("帮我制定一个节能方案") or normalized == "制定节能方案":

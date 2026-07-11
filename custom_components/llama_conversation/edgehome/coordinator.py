@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import re
+from typing import Any
 
 from homeassistant.core import HomeAssistant
 
@@ -21,13 +22,15 @@ from .energy.statistics import HomeAssistantEnergyStatistics
 from .energy.conversation import EnergyConversationHandler
 from .energy.service import EnergyService
 from .benchmark.input_guard import InputLengthGuard
-from .models import EntitySnapshot, StepExecutionResult, TaskPlan, TaskStatus
+from .models import EntitySnapshot, StepExecutionResult, TaskExecutionReport, TaskPlan, TaskStatus
 from .information import ReadOnlyInformationHandler
 from .knowledge.associations import DeviceManualRegistry
 from .knowledge.indexer import LocalKnowledgeIndex
 from .knowledge.service import KnowledgeService
+from .planner.demo_scenes import DemoScenePlanFactory
 from .planner.llm_planner import LLMTaskPlanner, PlanningRequest, PlanningResult, PlanningStatus
 from .planner.parser import StructuredPlanParser
+from .planner.templates import SceneName, SceneTemplateLibrary
 from .resource.monitor import ResourceMonitor
 from .resource.scheduler import ResourceAwareScheduler
 from .benchmark.resource_monitor import SystemResourceMonitor
@@ -48,6 +51,9 @@ class FastPathResponse:
     speech: str | None = None
     decision: FastRouteDecision | None = None
     completed_plan: TaskPlan | None = None
+    planned_plan: TaskPlan | None = None
+    execution_report: TaskExecutionReport | None = None
+    trace_route: str = "fast_path"
     planning_text: str | None = None
 
 
@@ -67,6 +73,7 @@ class EdgeHomeCoordinator:
         resource_scheduler: ResourceAwareScheduler | None = None,
         input_guard: InputLengthGuard | None = None,
     ) -> None:
+        self._hass = hass
         self._resolver = resolver or EntityNameResolver(hass, registry=build_demo_entity_registry())
         self._router = ChineseFastRouter(self._resolver)
         self._executor = executor or FixedPlanExecutor(hass, resolver=self._resolver)
@@ -83,6 +90,8 @@ class EdgeHomeCoordinator:
         self._reference_resolver = ReferencePlanResolver(self._resolver)
         self._delayed_tasks = DelayedTaskManager(hass, self._executor)
         self._delayed_parser = ChineseDelayedCommandParser()
+        self._scene_templates = SceneTemplateLibrary()
+        self._demo_scene_factory = DemoScenePlanFactory()
         active_knowledge_index = knowledge_index or LocalKnowledgeIndex(hass)
         self._information = ReadOnlyInformationHandler(
             active_knowledge_index,
@@ -111,6 +120,8 @@ class EdgeHomeCoordinator:
                 handled=True,
                 speech="受保护设备不能在无会话确认时关闭，请通过对话入口进行二次确认。",
                 decision=decision,
+                planned_plan=decision.plan,
+                trace_route="protected_confirmation",
             )
         report = await self._executor.async_execute(decision.plan)
         if report.status == TaskStatus.SUCCESS:
@@ -119,11 +130,13 @@ class EdgeHomeCoordinator:
                 speech=self._success_speech(decision, report.step_results[0]),
                 decision=decision,
                 completed_plan=decision.plan,
+                execution_report=report,
             )
         return FastPathResponse(
             handled=True,
             speech=self._failure_speech(decision, report.step_results),
             decision=decision,
+            execution_report=report,
         )
 
     async def async_handle_with_dialogue(self, text: str, conversation_id: str) -> FastPathResponse:
@@ -137,16 +150,29 @@ class EdgeHomeCoordinator:
             report = await self._executor.async_execute(pending.plan, frozenset(pending.entity_ids))
             if report.status == TaskStatus.SUCCESS:
                 await self._dialogue_store.async_remember_plan(conversation_id, pending.plan)
-                return FastPathResponse(handled=True, speech="已按二次确认完成受保护设备操作。", completed_plan=pending.plan)
-            return FastPathResponse(handled=True, speech="受保护设备操作未完成，已停止后续动作。")
+                return FastPathResponse(
+                    handled=True,
+                    speech="已按二次确认完成受保护设备操作。",
+                    completed_plan=pending.plan,
+                    planned_plan=pending.plan,
+                    execution_report=report,
+                    trace_route="protected_confirmation",
+                )
+            return FastPathResponse(
+                handled=True,
+                speech="受保护设备操作未完成，已停止后续动作。",
+                planned_plan=pending.plan,
+                execution_report=report,
+                trace_route="protected_confirmation",
+            )
 
         resumed_text = await self._async_resume_clarification(text, conversation_id)
         energy_conversation = await self._energy_conversation.async_handle(resumed_text, conversation_id)
         if energy_conversation is not None:
-            return FastPathResponse(handled=True, speech=energy_conversation)
+            return FastPathResponse(handled=True, speech=energy_conversation, trace_route="energy_analysis")
         information = await self._information.async_handle(resumed_text)
         if information is not None:
-            return FastPathResponse(handled=True, speech=information)
+            return FastPathResponse(handled=True, speech=information, trace_route="local_information")
 
         state = await self._dialogue_store.async_get(conversation_id)
         if state:
@@ -155,10 +181,23 @@ class EdgeHomeCoordinator:
                 report = await self._executor.async_execute(reference_plan)
                 if report.status == TaskStatus.SUCCESS:
                     await self._dialogue_store.async_remember_plan(conversation_id, reference_plan)
-                    return FastPathResponse(handled=True, speech="已按上一条设置完成操作。", completed_plan=reference_plan)
+                    return FastPathResponse(
+                        handled=True,
+                        speech="已按上一条设置完成操作。",
+                        completed_plan=reference_plan,
+                        planned_plan=reference_plan,
+                        execution_report=report,
+                        trace_route="dialogue_reference",
+                    )
                 failure = report.step_results[-1] if report.step_results else None
                 reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
-                return FastPathResponse(handled=True, speech=f"引用操作未完成：{reason}。")
+                return FastPathResponse(
+                    handled=True,
+                    speech=f"引用操作未完成：{reason}。",
+                    planned_plan=reference_plan,
+                    execution_report=report,
+                    trace_route="dialogue_reference",
+                )
 
         environment = await self._async_handle_environment(resumed_text, conversation_id)
         if environment is not None:
@@ -167,6 +206,10 @@ class EdgeHomeCoordinator:
         delayed = await self._async_handle_delayed(resumed_text, conversation_id)
         if delayed is not None:
             return delayed
+
+        leaving = await self._async_handle_deterministic_leaving_scene(resumed_text, conversation_id)
+        if leaving is not None:
+            return leaving
 
         decision = self._router.route(resumed_text)
         if decision.status == FastRouteStatus.READY and decision.plan is not None:
@@ -177,6 +220,8 @@ class EdgeHomeCoordinator:
                     handled=True,
                     speech="检测到受保护设备。请回复“确认关闭受保护设备”进行二次确认。",
                     decision=decision,
+                    planned_plan=decision.plan,
+                    trace_route="protected_confirmation",
                 )
         result = await self.async_handle(resumed_text)
         if result.completed_plan:
@@ -190,6 +235,9 @@ class EdgeHomeCoordinator:
             speech=result.speech,
             decision=result.decision,
             completed_plan=result.completed_plan,
+            planned_plan=result.planned_plan,
+            execution_report=result.execution_report,
+            trace_route=result.trace_route,
             planning_text=resumed_text,
         )
 
@@ -251,7 +299,11 @@ class EdgeHomeCoordinator:
     ) -> FastPathResponse:
         """执行已通过模型或模板入口产生的同一份受限计划。"""
         if planning.status != PlanningStatus.ACCEPTED or planning.plan is None:
-            return FastPathResponse(handled=False)
+            return FastPathResponse(
+                handled=True,
+                speech="任务规划未通过安全校验，未执行任何设备。",
+                trace_route="complex_planning",
+            )
         if planning.plan.need_clarification:
             await self._dialogue_store.async_set_clarification(
                 conversation_id,
@@ -274,6 +326,8 @@ class EdgeHomeCoordinator:
             return FastPathResponse(
                 handled=True,
                 speech="检测到受保护设备。请回复“确认关闭受保护设备”进行二次确认。",
+                planned_plan=planning.plan,
+                trace_route="protected_confirmation",
             )
         if scenario_name:
             await self._scenarios.async_capture(conversation_id, scenario_name, planning.plan)
@@ -292,13 +346,26 @@ class EdgeHomeCoordinator:
                         handled=True,
                         speech="即时操作已完成，但延时任务未能创建，请重新确认延时时间。",
                         completed_plan=planning.plan,
+                        planned_plan=planning.plan,
+                        execution_report=report,
+                        trace_route="complex_planning",
                     )
                 return FastPathResponse(
                     handled=True,
                     speech=f"已完成任务：{planning.plan.goal}。已安排延时任务 {task.id[:8]}。",
                     completed_plan=planning.plan,
+                    planned_plan=planning.plan,
+                    execution_report=report,
+                    trace_route="complex_planning",
                 )
-            return FastPathResponse(handled=True, speech=f"已完成任务：{planning.plan.goal}。", completed_plan=planning.plan)
+            return FastPathResponse(
+                handled=True,
+                speech=f"已完成任务：{planning.plan.goal}。",
+                completed_plan=planning.plan,
+                planned_plan=planning.plan,
+                execution_report=report,
+                trace_route="complex_planning",
+            )
         replan = self._failure_replanner.decide(text, planning.plan, report)
         if replan.allowed and replan.prompt_goal is not None:
             replacement = await planner.async_plan(
@@ -318,13 +385,116 @@ class EdgeHomeCoordinator:
                             handled=True,
                             speech=f"已通过一次受限重规划完成任务：{replacement.plan.goal}。",
                             completed_plan=replacement.plan,
+                            planned_plan=replacement.plan,
+                            execution_report=replacement_report,
+                            trace_route="complex_replanning",
                         )
                     report = replacement_report
         if scenario_name:
             await self._scenarios.async_clear(conversation_id, scenario_name)
         failure = report.step_results[-1] if report.step_results else None
         reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
-        return FastPathResponse(handled=True, speech=f"任务未完成：{reason}。")
+        return FastPathResponse(
+            handled=True,
+            speech=f"任务未完成：{reason}。",
+            planned_plan=planning.plan,
+            execution_report=report,
+            trace_route="complex_planning",
+        )
+
+    def record_trace(self, result: FastPathResponse) -> str:
+        """Store a compact, non-sensitive execution trace and return its Assist card text."""
+        plan = result.completed_plan or result.planned_plan
+        if plan is None and result.decision is not None:
+            plan = result.decision.plan
+
+        report = result.execution_report
+        decision = None
+        if result.decision is not None:
+            decision = f"{result.decision.status.value}：{result.decision.reason}"
+
+        plan_steps = []
+        if plan is not None:
+            plan_steps = [
+                {
+                    "step_id": step.id,
+                    "tool": step.tool,
+                    "entity_id": str(step.arguments.get("entity_id", "")),
+                }
+                for step in plan.steps
+            ]
+        execution_steps = []
+        if report is not None:
+            execution_steps = [self._trace_step_result(step) for step in report.step_results]
+
+        state = report.status.value if report is not None else "handled"
+        attributes: dict[str, Any] = {
+            "route": result.trace_route,
+            "route_label": self._trace_route_label(result.trace_route),
+            "decision": decision,
+            "goal": plan.goal if plan is not None else None,
+            "plan_steps": plan_steps,
+            "step_results": execution_steps,
+            "speech": result.speech,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._hass.states.async_set("sensor.edgehome_last_execution", state, attributes)
+
+        lines = [f"处理路径：{attributes['route_label']}"]
+        if decision:
+            lines.append(f"决策：{decision}")
+        if plan is not None:
+            lines.append(f"固定计划：{plan.goal}")
+            lines.append("计划步骤：")
+            lines.extend(self._trace_plan_step(step) for step in plan_steps)
+        if execution_steps:
+            lines.append("执行结果：")
+            lines.extend(self._trace_execution_step(step) for step in execution_steps)
+        else:
+            lines.append("执行结果：本次未触发设备控制。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _trace_step_result(step: StepExecutionResult) -> dict[str, str | int | bool | None]:
+        return {
+            "step_id": step.step_id,
+            "tool": step.tool,
+            "status": step.status.value,
+            "attempts": step.attempts,
+            "entity_id": step.state_after.entity_id if step.state_after else (
+                step.state_before.entity_id if step.state_before else None
+            ),
+            "state_before": step.state_before.state if step.state_before else None,
+            "state_after": step.state_after.state if step.state_after else None,
+            "verified": step.verification.passed if step.verification else None,
+            "error": step.error_message,
+        }
+
+    @staticmethod
+    def _trace_route_label(route: str) -> str:
+        return {
+            "fast_path": "快速规则",
+            "complex_planning": "复杂任务规划",
+            "complex_replanning": "受限重规划",
+            "protected_confirmation": "受保护设备二次确认",
+            "dialogue_reference": "多轮引用操作",
+            "deterministic_leaving_scene": "确定性离家保护",
+            "energy_analysis": "本地能耗分析",
+            "local_information": "本地资料检索",
+        }.get(route, "EdgeHome 本地处理")
+
+    @staticmethod
+    def _trace_plan_step(step: dict[str, Any]) -> str:
+        entity_id = step["entity_id"] or "无实体参数"
+        return f"- {step['step_id']}：{step['tool']}（{entity_id}）"
+
+    @staticmethod
+    def _trace_execution_step(step: dict[str, Any]) -> str:
+        before = step["state_before"] or "未知"
+        after = step["state_after"] or "未知"
+        verification = "；校验通过" if step["verified"] is True else "；校验失败" if step["verified"] is False else ""
+        error = f"；错误：{step['error']}" if step["error"] else ""
+        return f"- {step['step_id']}：{step['status']}，状态 {before} → {after}{verification}{error}"
 
     def build_planner(self, client: LocalLLMClient) -> LLMTaskPlanner:
         """Build the model adapter from the same resolver, registry, and validator as execution."""
@@ -363,6 +533,60 @@ class EdgeHomeCoordinator:
         failure = report.step_results[-1] if report.step_results else None
         reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
         return FastPathResponse(handled=True, speech=f"恢复观影前状态失败：{reason}。")
+
+    async def _async_handle_deterministic_leaving_scene(
+        self,
+        text: str,
+        conversation_id: str,
+    ) -> FastPathResponse | None:
+        """Prefer the conservative local leaving template over a single-device keyword match."""
+        scene = self._scene_templates.match(text)
+        if scene is None or scene.name != SceneName.LEAVING:
+            return None
+
+        draft = self._demo_scene_factory.build(text, SceneName.LEAVING)
+        if draft is None:
+            return None
+        plan = draft.plan
+        revalidation = self._environment_guard.revalidate(plan, self._environment_guard.capture(plan))
+        if not revalidation.accepted:
+            return FastPathResponse(
+                handled=True,
+                speech="离家保护计划未通过当前环境校验，未执行任何设备操作。",
+                planned_plan=plan,
+                trace_route="deterministic_leaving_scene",
+            )
+
+        protected = self._executor.validator.safety_guard.protected_shutdowns(plan)
+        if protected:
+            return FastPathResponse(
+                handled=True,
+                speech="离家保护计划包含受保护设备，已拒绝执行。",
+                planned_plan=plan,
+                trace_route="deterministic_leaving_scene",
+            )
+
+        report = await self._executor.async_execute(plan)
+        if report.status == TaskStatus.SUCCESS:
+            await self._dialogue_store.async_remember_plan(conversation_id, plan)
+            return FastPathResponse(
+                handled=True,
+                speech="已完成离家保护：已关闭可关闭设备，冰箱和路由器保持开启，并已启用安防模式。",
+                completed_plan=plan,
+                planned_plan=plan,
+                execution_report=report,
+                trace_route="deterministic_leaving_scene",
+            )
+
+        failure = report.step_results[-1] if report.step_results else None
+        reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
+        return FastPathResponse(
+            handled=True,
+            speech=f"离家保护未完成：{reason}。",
+            planned_plan=plan,
+            execution_report=report,
+            trace_route="deterministic_leaving_scene",
+        )
 
     async def _async_handle_delayed(self, text: str, conversation_id: str) -> FastPathResponse | None:
         if text in {"查询延时任务", "查看延时任务", "查询定时任务", "查看定时任务"}:
