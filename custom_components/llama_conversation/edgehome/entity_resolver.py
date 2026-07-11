@@ -30,9 +30,9 @@ class ResolvedEntity:
 class ExposedEntityResolver:
     """Prevent plans from addressing entities outside the HA exposure boundary."""
 
-    def __init__(self, hass: HomeAssistant, exposure_checker: ExposureChecker = async_should_expose) -> None:
+    def __init__(self, hass: HomeAssistant, exposure_checker: ExposureChecker | None = None) -> None:
         self.hass = hass
-        self._exposure_checker = exposure_checker
+        self._exposure_checker = exposure_checker or async_should_expose
 
     def resolve(
         self,

@@ -17,6 +17,8 @@ from custom_components.llama_conversation.const import (
     CONF_REFRESH_SYSTEM_PROMPT,
     CONF_REMEMBER_NUM_INTERACTIONS,
     CONF_REMEMBER_CONVERSATION,
+    CONF_EDGEHOME_ENABLED,
+    CONF_EDGEHOME_FAST_PATH_ENABLED,
     DEFAULT_PROMPT,
     DOMAIN,
 )
@@ -123,6 +125,48 @@ async def test_async_process_generates_response(monkeypatch, hass):
     # System prompt should be rendered once when message history is empty.
     assert client.generated_prompts == [DEFAULT_PROMPT]
     assert agent.supported_languages == MATCH_ALL
+
+
+@pytest.mark.asyncio
+async def test_async_process_uses_opt_in_edgehome_fast_path_before_model(monkeypatch, hass):
+    client = DummyClient(hass)
+    subentry = DummySubentry()
+    subentry.data.update(
+        {
+            CONF_EDGEHOME_ENABLED: True,
+            CONF_EDGEHOME_FAST_PATH_ENABLED: True,
+        }
+    )
+    entry = DummyEntry(subentry=subentry, runtime_data=client)
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = entry
+    hass.states.async_set("light.living", "off", {"friendly_name": "客厅灯"})
+
+    async def turn_on(call):
+        hass.states.async_set(call.data["entity_id"], "on", context=call.context)
+
+    hass.services.async_register("light", "turn_on", turn_on)
+    monkeypatch.setattr(
+        "custom_components.llama_conversation.edgehome.entity_resolver.async_should_expose",
+        lambda _hass, _domain, _entity_id: True,
+    )
+
+    agent = LocalLLMAgent(hass, entry, subentry, client)
+    result = await agent.async_process(
+        ConversationInput(
+            text="打开客厅灯",
+            context=None,
+            conversation_id="conv-id",
+            device_id=None,
+            satellite_id=None,
+            language="zh-Hans",
+            agent_id="agent-1",
+        )
+    )
+
+    assert result.response.speech["plain"]["speech"] == "已打开客厅灯。"
+    assert hass.states.get("light.living").state == "on"
+    assert client.generated_prompts == []
+    assert client.seen_conversations == []
 
 
 @pytest.mark.asyncio
