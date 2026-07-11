@@ -17,6 +17,7 @@ class EnvironmentContextSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     goal: str = Field(min_length=1, max_length=300)
+    scene: str | None = None
     entities: list[EntitySnapshot] = Field(default_factory=list)
     captured_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     cache_hit: bool = False
@@ -35,9 +36,9 @@ class EnvironmentContextBuilder:
         self._max_entities = max_entities
         self._cache: dict[str, tuple[datetime, EnvironmentContextSnapshot]] = {}
 
-    def build(self, goal: str) -> EnvironmentContextSnapshot:
+    def build(self, goal: str, scene: str | None = None) -> EnvironmentContextSnapshot:
         """Return cached context when still fresh; otherwise select only relevant exposed state."""
-        key = self._normalize(goal)
+        key = f"{self._normalize(goal)}:{scene or ''}"
         cached = self._cache.get(key)
         now = datetime.now(timezone.utc)
         if cached and cached[0] > now:
@@ -60,7 +61,7 @@ class EnvironmentContextBuilder:
             elif include_environment and self._is_environment_relevant(snapshot):
                 selected.setdefault(snapshot.entity_id, snapshot)
 
-        context = EnvironmentContextSnapshot(goal=goal.strip(), entities=list(selected.values()))
+        context = EnvironmentContextSnapshot(goal=goal.strip(), scene=scene, entities=list(selected.values()))
         self._cache[key] = (now + timedelta(seconds=self._cache_seconds), context)
         return context
 

@@ -7,6 +7,7 @@ import pytest
 from custom_components.llama_conversation.edgehome.coordinator import EdgeHomeCoordinator
 from custom_components.llama_conversation.edgehome.entity_resolver import EntityNameResolver
 from custom_components.llama_conversation.edgehome.execution.executor import FixedPlanExecutor
+from custom_components.llama_conversation.edgehome.models import PlanStep, TaskPlan, VerificationRule
 
 
 def _coordinator(hass) -> EdgeHomeCoordinator:
@@ -115,3 +116,38 @@ async def test_coordinator_resumes_pending_clarification_on_next_turn(hass) -> N
     assert clarification.speech.startswith("暂时无法安全执行")
     assert resumed.speech == "已设置亮度客厅灯。"
     assert hass.states.get("light.living").attributes["brightness"] == 128
+
+
+@pytest.mark.asyncio
+async def test_coordinator_reports_away_risk_and_restores_movie_state(hass) -> None:
+    hass.states.async_set("person.alice", "home", {"friendly_name": "Alice"})
+    hass.states.async_set("binary_sensor.front_door", "on", {"friendly_name": "前门", "device_class": "door"})
+    hass.states.async_set("light.living", "off", {"friendly_name": "客厅灯"})
+
+    async def turn_off(call) -> None:
+        hass.states.async_set(call.data["entity_id"], "off", {"friendly_name": "客厅灯"}, context=call.context)
+
+    hass.services.async_register("light", "turn_off", turn_off)
+    coordinator = _coordinator(hass)
+    scenario_plan = TaskPlan(
+        goal="观影模式",
+        steps=[
+            PlanStep(
+                id="movie_1",
+                tool="turn_on_device",
+                arguments={"entity_id": "light.living"},
+                verify=VerificationRule(entity_id="light.living", state="on"),
+            )
+        ],
+    )
+    await coordinator._scenarios.async_capture("conversation-1", "movie", scenario_plan)
+    hass.states.async_set("light.living", "on", {"friendly_name": "客厅灯"})
+
+    report = await coordinator.async_handle_with_dialogue("离家安全检查", "conversation-1")
+    restored = await coordinator.async_handle_with_dialogue("恢复观影前状态", "conversation-1")
+
+    assert report.speech is not None
+    assert "在家人员 Alice" in report.speech
+    assert "打开门窗 前门" in report.speech
+    assert restored.speech == "已恢复观影前状态。"
+    assert hass.states.get("light.living").state == "off"

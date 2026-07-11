@@ -296,6 +296,7 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
         planner = self._edgehome_coordinator.build_planner(self.client)
         planned_result = await self._edgehome_coordinator.async_handle_complex(
             user_input.text,
+            user_input.conversation_id,
             user_input.agent_id,
             self.runtime_options,
             planner,

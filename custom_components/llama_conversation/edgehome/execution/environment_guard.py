@@ -44,6 +44,19 @@ class EnvironmentPlanGuard:
         }
         return PlanEnvironmentBaseline(entities={entity_id: self._resolver.snapshot(entity_id) for entity_id in entity_ids})
 
+    def from_context(self, plan: TaskPlan, context_entities: list[EntitySnapshot]) -> PlanEnvironmentBaseline:
+        """Use planner-time snapshots for known targets and fill only missing targets on demand."""
+        targets = {
+            entity_id
+            for step in plan.steps
+            for entity_id in [step.arguments.get("entity_id")]
+            if isinstance(entity_id, str)
+        }
+        context = {entity.entity_id: entity for entity in context_entities}
+        return PlanEnvironmentBaseline(
+            entities={entity_id: context.get(entity_id) or self._resolver.snapshot(entity_id) for entity_id in targets}
+        )
+
     def revalidate(self, plan: TaskPlan, baseline: PlanEnvironmentBaseline) -> PlanRevalidationResult:
         """Run deterministic validation and reject changed or unavailable plan targets."""
         try:

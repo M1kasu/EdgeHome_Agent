@@ -11,12 +11,15 @@ from homeassistant.core import HomeAssistant
 from ..entity import LocalLLMClient
 from .entity_resolver import EntityNameResolver
 from .execution.executor import FixedPlanExecutor
-from .context.home_state import TaskHomeStateBuilder
+from .execution.environment_guard import EnvironmentPlanGuard
+from .context.environment import EnvironmentContextBuilder
 from .context.store import DialogueStateStore
 from .models import EntitySnapshot, StepExecutionResult, TaskPlan, TaskStatus
 from .planner.llm_planner import LLMTaskPlanner, PlanningRequest, PlanningStatus
 from .planner.parser import StructuredPlanParser
 from .router import ChineseFastRouter
+from .safety.away_report import AwaySecurityReporter
+from .scenarios.state import ScenarioStateManager
 from .tasks.delayed import DelayedTaskManager
 from .tasks.parser import ChineseDelayedCommandParser
 from .understanding.models import FastIntent, FastRouteDecision, FastRouteStatus
@@ -45,6 +48,10 @@ class EdgeHomeCoordinator:
         self._resolver = resolver or EntityNameResolver(hass)
         self._router = ChineseFastRouter(self._resolver)
         self._executor = executor or FixedPlanExecutor(hass, resolver=self._resolver)
+        self._environment = EnvironmentContextBuilder(self._resolver)
+        self._environment_guard = EnvironmentPlanGuard(self._executor.validator, self._resolver)
+        self._away_reporter = AwaySecurityReporter()
+        self._scenarios = ScenarioStateManager(hass, self._resolver)
         self._dialogue_store = DialogueStateStore(hass)
         self._reference_resolver = ReferencePlanResolver(self._resolver)
         self._delayed_tasks = DelayedTaskManager(hass, self._executor)
@@ -88,6 +95,10 @@ class EdgeHomeCoordinator:
                 reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
                 return FastPathResponse(handled=True, speech=f"引用操作未完成：{reason}。")
 
+        environment = await self._async_handle_environment(resumed_text, conversation_id)
+        if environment is not None:
+            return environment
+
         delayed = await self._async_handle_delayed(resumed_text, conversation_id)
         if delayed is not None:
             return delayed
@@ -111,6 +122,7 @@ class EdgeHomeCoordinator:
     async def async_handle_complex(
         self,
         text: str,
+        conversation_id: str,
         agent_id: str,
         runtime_options: dict[str, object],
         planner: LLMTaskPlanner,
@@ -122,9 +134,22 @@ class EdgeHomeCoordinator:
         if planning.status != PlanningStatus.ACCEPTED or planning.plan is None:
             return FastPathResponse(handled=False)
 
+        revalidation = self._environment_guard.revalidate(
+            planning.plan,
+            self._environment_guard.from_context(planning.plan, planning.context_entities),
+        )
+        if not revalidation.accepted:
+            return FastPathResponse(handled=True, speech="环境状态已变化，已取消过时计划，请重新确认需求。")
+
+        scenario_name = planning.scene if planning.scene == "movie" else None
+        if scenario_name:
+            await self._scenarios.async_capture(conversation_id, scenario_name, planning.plan)
+
         report = await self._executor.async_execute(planning.plan)
         if report.status == TaskStatus.SUCCESS:
             return FastPathResponse(handled=True, speech=f"已完成任务：{planning.plan.goal}。", completed_plan=planning.plan)
+        if scenario_name:
+            await self._scenarios.async_clear(conversation_id, scenario_name)
         failure = report.step_results[-1] if report.step_results else None
         reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
         return FastPathResponse(handled=True, speech=f"任务未完成：{reason}。")
@@ -133,7 +158,7 @@ class EdgeHomeCoordinator:
         """Build the model adapter from the same resolver, registry, and validator as execution."""
         return LLMTaskPlanner(
             client,
-            TaskHomeStateBuilder(self._resolver),
+            self._environment,
             StructuredPlanParser(self._executor.validator),
             self._executor.tools,
         )
@@ -143,6 +168,29 @@ class EdgeHomeCoordinator:
         if pending is None:
             return text
         return f"{pending.original_goal} {text}"
+
+    async def _async_handle_environment(self, text: str, conversation_id: str) -> FastPathResponse | None:
+        if text in {"离家安全检查", "离家检查"}:
+            security_report = self._away_reporter.build(self._environment.build(text))
+            people = "、".join(entity.friendly_name or entity.entity_id for entity in security_report.people_home) or "无"
+            opened = "、".join(entity.friendly_name or entity.entity_id for entity in security_report.open_entries) or "无"
+            unavailable = "、".join(entity.friendly_name or entity.entity_id for entity in security_report.unavailable_entries) or "无"
+            if security_report.safe_to_leave:
+                return FastPathResponse(handled=True, speech="离家检查完成：未发现人员、门窗或传感器异常。")
+            return FastPathResponse(handled=True, speech=f"离家检查：在家人员 {people}；打开门窗 {opened}；不可用门窗 {unavailable}。")
+
+        if text not in {"恢复观影前状态", "恢复观影场景"}:
+            return None
+        plan = await self._scenarios.async_restore_plan(conversation_id, "movie")
+        if plan is None:
+            return FastPathResponse(handled=True, speech="没有可恢复的观影场景状态。")
+        report = await self._executor.async_execute(plan)
+        if report.status == TaskStatus.SUCCESS:
+            await self._scenarios.async_clear(conversation_id, "movie")
+            return FastPathResponse(handled=True, speech="已恢复观影前状态。", completed_plan=plan)
+        failure = report.step_results[-1] if report.step_results else None
+        reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
+        return FastPathResponse(handled=True, speech=f"恢复观影前状态失败：{reason}。")
 
     async def _async_handle_delayed(self, text: str, conversation_id: str) -> FastPathResponse | None:
         if text in {"查询延时任务", "查看延时任务", "查询定时任务", "查看定时任务"}:

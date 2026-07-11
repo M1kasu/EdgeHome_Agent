@@ -12,8 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ...const import CONF_ENABLE_STREAMING, CONF_RESPONSE_JSON_SCHEMA
 from ...entity import LocalLLMClient
+from ..context.environment import EnvironmentContextBuilder
 from ..context.home_state import TaskHomeStateBuilder
-from ..models import TaskPlan
+from ..models import EntitySnapshot, TaskPlan
 from ..tools.registry import ToolRegistry
 from .parser import PlanParseStatus, StructuredPlanParser
 from .templates import SceneTemplateLibrary
@@ -45,6 +46,7 @@ class PlanningResult(BaseModel):
     plan: TaskPlan | None = None
     reason: str | None = None
     scene: str | None = None
+    context_entities: list[EntitySnapshot] = Field(default_factory=list)
 
 
 class LLMTaskPlanner:
@@ -53,7 +55,7 @@ class LLMTaskPlanner:
     def __init__(
         self,
         client: LocalLLMClient,
-        state_builder: TaskHomeStateBuilder,
+        state_builder: TaskHomeStateBuilder | EnvironmentContextBuilder,
         parser: StructuredPlanParser,
         tools: ToolRegistry,
         templates: SceneTemplateLibrary | None = None,
@@ -82,14 +84,34 @@ class LLMTaskPlanner:
         try:
             response = await self._client._generate(messages, None, request.agent_id, model_options)
         except Exception as error:
-            return PlanningResult(status=PlanningStatus.UNAVAILABLE, reason=type(error).__name__, scene=scene)
+            return PlanningResult(
+                status=PlanningStatus.UNAVAILABLE,
+                reason=type(error).__name__,
+                scene=scene,
+                context_entities=snapshot.entities,
+            )
         if not response.response:
-            return PlanningResult(status=PlanningStatus.REJECTED, reason="模型没有返回计划 JSON", scene=scene)
+            return PlanningResult(
+                status=PlanningStatus.REJECTED,
+                reason="模型没有返回计划 JSON",
+                scene=scene,
+                context_entities=snapshot.entities,
+            )
 
         parsed = self._parser.parse(response.response)
         if parsed.status != PlanParseStatus.ACCEPTED or parsed.plan is None:
-            return PlanningResult(status=PlanningStatus.REJECTED, reason=parsed.reason or parsed.status.value, scene=scene)
-        return PlanningResult(status=PlanningStatus.ACCEPTED, plan=parsed.plan, scene=scene)
+            return PlanningResult(
+                status=PlanningStatus.REJECTED,
+                reason=parsed.reason or parsed.status.value,
+                scene=scene,
+                context_entities=snapshot.entities,
+            )
+        return PlanningResult(
+            status=PlanningStatus.ACCEPTED,
+            plan=parsed.plan,
+            scene=scene,
+            context_entities=snapshot.entities,
+        )
 
     def is_candidate(self, text: str) -> bool:
         """Avoid sending ordinary chat or already-handled fast commands to the planner."""
