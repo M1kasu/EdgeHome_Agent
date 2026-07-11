@@ -16,6 +16,7 @@ from ..context.environment import EnvironmentContextBuilder
 from ..context.home_state import TaskHomeStateBuilder
 from ..models import EntitySnapshot, TaskPlan
 from ..tools.registry import ToolRegistry
+from .context_budget import PlanningContextBudgeter
 from .parser import PlanParseStatus, StructuredPlanParser
 from .templates import SceneTemplateLibrary
 
@@ -59,19 +60,22 @@ class LLMTaskPlanner:
         parser: StructuredPlanParser,
         tools: ToolRegistry,
         templates: SceneTemplateLibrary | None = None,
+        context_budgeter: PlanningContextBudgeter | None = None,
     ) -> None:
         self._client = client
         self._state_builder = state_builder
         self._parser = parser
         self._tools = tools
         self._templates = templates or SceneTemplateLibrary()
+        self._context_budgeter = context_budgeter or PlanningContextBudgeter()
 
     async def async_plan(self, request: PlanningRequest, runtime_options: dict[str, Any]) -> PlanningResult:
         """Request JSON from the existing backend without exposing its Home Assistant tool API."""
         template = self._templates.match(request.goal)
         scene = template.name.value if template else None
         snapshot = self._state_builder.build(request.goal, scene=scene)
-        prompt = self._build_prompt(request.goal, snapshot.model_dump(mode="json"), template.planning_guidance if template else None)
+        budget = self._context_budgeter.trim(snapshot)
+        prompt = self._build_prompt(request.goal, budget.payload, template.planning_guidance if template else None)
         model_options = {
             **runtime_options,
             CONF_ENABLE_STREAMING: False,
