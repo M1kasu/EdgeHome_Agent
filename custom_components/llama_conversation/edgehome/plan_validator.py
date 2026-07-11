@@ -62,6 +62,9 @@ class PlanValidator:
         if definition is None:
             issues.append(PlanValidationIssue(step.id, "tool_not_registered", f"工具未注册: {step.tool}"))
             return None
+        if not definition.plan_enabled:
+            issues.append(PlanValidationIssue(step.id, "tool_not_allowed_in_plan", f"工具不能直接写入固定计划: {step.tool}"))
+            return None
 
         try:
             arguments_model = definition.validate_arguments(step.arguments)
@@ -71,18 +74,18 @@ class PlanValidator:
 
         normalized_arguments = arguments_model.model_dump()
         entity_id = normalized_arguments.get("entity_id")
-        if not isinstance(entity_id, str):
-            issues.append(PlanValidationIssue(step.id, "entity_id_missing", "工具参数缺少 entity_id"))
-            return None
-
-        try:
-            self._resolver.resolve(entity_id, definition.allowed_domains)
-        except EdgeHomeError as error:
-            issues.append(PlanValidationIssue(step.id, error.code, error.message))
+        if definition.requires_entity:
+            if not isinstance(entity_id, str):
+                issues.append(PlanValidationIssue(step.id, "entity_id_missing", "工具参数缺少 entity_id"))
+                return None
+            try:
+                self._resolver.resolve(entity_id, definition.allowed_domains)
+            except EdgeHomeError as error:
+                issues.append(PlanValidationIssue(step.id, error.code, error.message))
 
         if definition.requires_verification and step.verify is None:
             issues.append(PlanValidationIssue(step.id, "verification_required", "关键设备动作必须提供 verify"))
-        if step.verify and step.verify.entity_id != entity_id:
+        if step.verify and (not isinstance(entity_id, str) or step.verify.entity_id != entity_id):
             issues.append(PlanValidationIssue(step.id, "verification_entity_mismatch", "验证实体必须与操作实体一致"))
 
         for condition in step.preconditions:

@@ -10,6 +10,7 @@ import re
 from homeassistant.core import HomeAssistant
 
 from ..entity import LocalLLMClient
+from .entity_registry import build_demo_entity_registry
 from .entity_resolver import EntityNameResolver
 from .execution.executor import FixedPlanExecutor
 from .execution.environment_guard import EnvironmentPlanGuard
@@ -41,6 +42,7 @@ class FastPathResponse:
     speech: str | None = None
     decision: FastRouteDecision | None = None
     completed_plan: TaskPlan | None = None
+    planning_text: str | None = None
 
 
 class EdgeHomeCoordinator:
@@ -57,7 +59,7 @@ class EdgeHomeCoordinator:
         clock: Callable[[], datetime] | None = None,
         resource_monitor: ResourceMonitor | None = None,
     ) -> None:
-        self._resolver = resolver or EntityNameResolver(hass)
+        self._resolver = resolver or EntityNameResolver(hass, registry=build_demo_entity_registry())
         self._router = ChineseFastRouter(self._resolver)
         self._executor = executor or FixedPlanExecutor(hass, resolver=self._resolver)
         self._environment = EnvironmentContextBuilder(self._resolver)
@@ -159,7 +161,15 @@ class EdgeHomeCoordinator:
             await self._dialogue_store.async_remember_plan(conversation_id, result.completed_plan)
         elif result.handled and result.decision and result.decision.status == FastRouteStatus.CLARIFICATION:
             await self._dialogue_store.async_set_clarification(conversation_id, resumed_text, result.speech or "请补充必要信息")
-        return result
+        # A clarification may turn a short follow-up into a complete scene goal.
+        # Preserve that merged text for the caller's complex-planning handoff.
+        return FastPathResponse(
+            handled=result.handled,
+            speech=result.speech,
+            decision=result.decision,
+            completed_plan=result.completed_plan,
+            planning_text=resumed_text,
+        )
 
     async def async_remember_completed(self, conversation_id: str, plan: TaskPlan | None) -> None:
         """Persist a successful complex plan after the caller has chosen to expose it to a conversation."""
@@ -190,6 +200,13 @@ class EdgeHomeCoordinator:
             await self._resource_monitor.async_release(lease)
         if planning.status != PlanningStatus.ACCEPTED or planning.plan is None:
             return FastPathResponse(handled=False)
+        if planning.plan.need_clarification:
+            await self._dialogue_store.async_set_clarification(
+                conversation_id,
+                text,
+                planning.plan.clarification_question or "请补充完成该场景所需的信息。",
+            )
+            return FastPathResponse(handled=True, speech=planning.plan.clarification_question)
 
         revalidation = self._environment_guard.revalidate(
             planning.plan,
@@ -211,6 +228,24 @@ class EdgeHomeCoordinator:
 
         report = await self._executor.async_execute(planning.plan)
         if report.status == TaskStatus.SUCCESS:
+            if planning.delayed_plan is not None and planning.delay_seconds is not None:
+                try:
+                    task = await self._delayed_tasks.async_create(
+                        conversation_id,
+                        planning.delayed_plan,
+                        datetime.now(timezone.utc) + timedelta(seconds=planning.delay_seconds),
+                    )
+                except ValueError:
+                    return FastPathResponse(
+                        handled=True,
+                        speech="即时操作已完成，但延时任务未能创建，请重新确认延时时间。",
+                        completed_plan=planning.plan,
+                    )
+                return FastPathResponse(
+                    handled=True,
+                    speech=f"已完成任务：{planning.plan.goal}。已安排延时任务 {task.id[:8]}。",
+                    completed_plan=planning.plan,
+                )
             return FastPathResponse(handled=True, speech=f"已完成任务：{planning.plan.goal}。", completed_plan=planning.plan)
         replan = self._failure_replanner.decide(text, planning.plan, report)
         if replan.allowed and replan.prompt_goal is not None:
@@ -332,6 +367,7 @@ class EdgeHomeCoordinator:
             FastIntent.SET_BRIGHTNESS: "已设置亮度",
             FastIntent.SET_TEMPERATURE: "已设置温度",
             FastIntent.CONTROL_CURTAIN: "已设置窗帘位置",
+            FastIntent.ACTIVATE_SECURITY: "已开启",
         }.get(decision.intent, "已完成")
         return f"{action}{entity_name}。"
 

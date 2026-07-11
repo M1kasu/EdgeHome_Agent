@@ -1,0 +1,44 @@
+# 所有 input_boolean 都是模板实体的内部状态，不应暴露给 EdgeHome 对话代理。
+edgehome_living_room_main_power:
+  name: EdgeHome 客厅主灯内部开关
+  initial: true
+edgehome_living_room_ambient_power:
+  name: EdgeHome 客厅氛围灯内部开关
+  initial: false
+edgehome_living_room_tv_power:
+  name: EdgeHome 客厅电视内部开关
+  initial: false
+edgehome_living_room_presence_state:
+  name: EdgeHome 客厅在场内部状态
+  initial: true
+edgehome_bedroom_presence_state:
+  name: EdgeHome 卧室在场内部状态
+  initial: false
+edgehome_bedroom_main_power:
+  name: EdgeHome 卧室主灯内部开关
+  initial: false
+edgehome_living_room_ac_relay:
+  name: EdgeHome 客厅空调内部继电器
+  initial: false
+edgehome_bedroom_ac_relay:
+  name: EdgeHome 卧室空调内部继电器
+  initial: false
+edgehome_router_power:
+  name: EdgeHome 路由器内部开关
+  initial: true
+edgehome_refrigerator_power:
+  name: EdgeHome 冰箱内部开关
+  initial: true
+edgehome_test_socket_power:
+  name: EdgeHome 测试插座内部开关
+  initial: true
+edgehome_window_open_state:
+  name: EdgeHome 窗户内部状态
+  initial: false
+# 仅用于验证“服务调用成功但设备状态未变化”的执行失败路径；绝不暴露给对话代理。
+edgehome_simulate_curtain_failure:
+  name: EdgeHome 窗帘故障注入开关
+  initial: false
+edgehome_security_mode:
+  name: EdgeHome 安防模式
+  initial: false

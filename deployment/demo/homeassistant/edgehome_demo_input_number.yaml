@@ -1,0 +1,43 @@
+# 这些数值 helper 驱动模板灯、传感器和窗帘；不直接暴露给 Agent。
+edgehome_living_room_main_brightness:
+  name: EdgeHome 客厅主灯内部亮度
+  min: 0
+  max: 100
+  step: 1
+  initial: 80
+edgehome_living_room_ambient_brightness:
+  name: EdgeHome 客厅氛围灯内部亮度
+  min: 0
+  max: 100
+  step: 1
+  initial: 30
+edgehome_living_room_curtain_position:
+  name: EdgeHome 客厅窗帘内部位置
+  min: 0
+  max: 100
+  step: 1
+  initial: 100
+edgehome_living_room_temperature_value:
+  name: EdgeHome 客厅温度内部值
+  min: 0
+  max: 50
+  step: 0.1
+  initial: 29
+edgehome_bedroom_temperature_value:
+  name: EdgeHome 卧室温度内部值
+  min: 0
+  max: 50
+  step: 0.1
+  initial: 27
+edgehome_living_room_illuminance_value:
+  name: EdgeHome 客厅光照内部值
+  min: 0
+  max: 10000
+  step: 1
+  initial: 200
+edgehome_bedroom_main_brightness:
+  name: EdgeHome 卧室主灯内部亮度
+  min: 0
+  max: 100
+  step: 1
+  initial: 60

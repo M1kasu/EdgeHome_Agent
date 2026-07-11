@@ -69,6 +69,8 @@ class PlanSafetyGuard:
         return entity_ids
 
     def _is_protected(self, entity_id: str, friendly_name: str | None) -> bool:
+        if self._resolver.is_protected(entity_id):
+            return True
         if entity_id in self._protected_entity_ids:
             return True
         searchable = f"{entity_id} {friendly_name or ''}".lower()

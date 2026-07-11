@@ -19,6 +19,7 @@ class FastIntent(StrEnum):
     SET_BRIGHTNESS = "set_brightness"
     SET_TEMPERATURE = "set_temperature"
     CONTROL_CURTAIN = "control_curtain"
+    ACTIVATE_SECURITY = "activate_security"
 
 
 class FastIntentMatch(BaseModel):

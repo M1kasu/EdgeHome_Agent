@@ -128,6 +128,7 @@ class StepExecutionResult(BaseModel):
     state_before: EntitySnapshot | None = None
     state_after: EntitySnapshot | None = None
     verification: VerificationResult | None = None
+    output: dict[str, Any] = Field(default_factory=dict)
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

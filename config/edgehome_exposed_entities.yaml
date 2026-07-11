@@ -1,0 +1,23 @@
+# EdgeHome 对话代理唯一允许公开的虚拟测试实体。
+# 本清单由 scripts/configure_edgehome_demo_runtime.py 写入 Home Assistant 的
+# homeassistant.exposed_entities 运行时存储；真实设备和内部 helper 不在此处列出。
+living_room:
+  - light.edgehome_living_room_main
+  - light.edgehome_living_room_ambient
+  - switch.edgehome_living_room_tv
+  - climate.edgehome_living_room_ac
+  - cover.edgehome_living_room_curtain
+  - sensor.edgehome_living_room_temperature
+  - sensor.edgehome_living_room_illuminance
+  - binary_sensor.edgehome_living_room_presence
+bedroom:
+  - light.edgehome_bedroom_main
+  - climate.edgehome_bedroom_ac
+  - sensor.edgehome_bedroom_temperature
+  - binary_sensor.edgehome_bedroom_presence
+home:
+  - switch.edgehome_router
+  - switch.edgehome_refrigerator
+  - switch.edgehome_test_socket
+  - binary_sensor.edgehome_window
+  - input_boolean.edgehome_security_mode

@@ -15,7 +15,7 @@ from .understanding.slot_extractor import ChineseSlotExtractor
 class ChineseFastRouter:
     """Convert only high-confidence single-device Chinese requests into fixed plans."""
 
-    _CONTROLLABLE_DOMAINS = frozenset({"light", "switch", "fan", "media_player", "vacuum"})
+    _CONTROLLABLE_DOMAINS = frozenset({"light", "switch", "fan", "media_player", "vacuum", "climate"})
 
     def __init__(
         self,
@@ -71,6 +71,8 @@ class ChineseFastRouter:
             return frozenset({"climate"})
         if intent == FastIntent.CONTROL_CURTAIN:
             return frozenset({"cover"})
+        if intent == FastIntent.ACTIVATE_SECURITY:
+            return frozenset({"input_boolean"})
         return None
 
     @staticmethod
@@ -126,5 +128,12 @@ def _step_for(intent: FastIntent, entity_id: str, value: float | None) -> PlanSt
                 attributes={"current_position": int(value)},
                 tolerance=1.0,
             ),
+        )
+    if intent == FastIntent.ACTIVATE_SECURITY:
+        return PlanStep(
+            id="fast_1",
+            tool="activate_security_mode",
+            arguments={"entity_id": entity_id},
+            verify=VerificationRule(entity_id=entity_id, state="on"),
         )
     raise ValueError(f"无法为快速意图构造固定计划: {intent}")

@@ -294,8 +294,9 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
         if not self.runtime_options.get(CONF_EDGEHOME_PLANNING_ENABLED, DEFAULT_EDGEHOME_PLANNING_ENABLED):
             return None
         planner = self._edgehome_coordinator.build_planner(self.client)
+        planning_text = result.planning_text or user_input.text
         planned_result = await self._edgehome_coordinator.async_handle_complex(
-            user_input.text,
+            planning_text,
             user_input.conversation_id,
             user_input.agent_id,
             self.runtime_options,

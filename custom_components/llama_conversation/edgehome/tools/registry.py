@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from homeassistant.const import ATTR_ENTITY_ID
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -26,6 +26,33 @@ class EntityArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     entity_id: str = Field(pattern=r"^[a-z_]+\.[a-z0-9_]+$")
+
+
+class EmptyArguments(BaseModel):
+    """Arguments for a read of the complete registered virtual home."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RoomArguments(BaseModel):
+    """A named demo room, deliberately not an arbitrary Home Assistant area id."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    room: Literal["living_room", "bedroom", "home"]
+
+
+class SecurityModeArguments(EntityArguments):
+    """Security mode can only be activated for the dedicated virtual helper."""
+
+
+class DelayedTaskArguments(BaseModel):
+    """Arguments accepted by the runtime scheduling facade, never by a raw plan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    delay_seconds: int = Field(ge=1, le=7 * 24 * 60 * 60)
+    command: str = Field(min_length=1, max_length=300)
 
 
 class BrightnessArguments(EntityArguments):
@@ -85,6 +112,8 @@ class ToolDefinition:
     service: str | None = None
     service_data_builder: ServiceDataBuilder | None = None
     requires_verification: bool = False
+    requires_entity: bool = True
+    plan_enabled: bool = True
 
     @property
     def invokes_service(self) -> bool:
@@ -126,7 +155,28 @@ class ToolRegistry:
 def build_default_tool_registry() -> ToolRegistry:
     """Create the small, explicit tool set used before model planning is enabled."""
     registry = ToolRegistry()
-    controllable_domains = frozenset({"light", "switch", "fan", "media_player", "vacuum"})
+    controllable_domains = frozenset({"light", "switch", "fan", "media_player", "vacuum", "climate"})
+
+    registry.register(
+        ToolDefinition(
+            name="get_home_state",
+            description="读取所有已注册 EdgeHome 虚拟设备的当前状态",
+            argument_model=EmptyArguments,
+            allowed_domains=frozenset(),
+            risk=ToolRisk.LOW,
+            requires_entity=False,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="get_room_state",
+            description="读取一个已注册演示房间的设备状态",
+            argument_model=RoomArguments,
+            allowed_domains=frozenset(),
+            risk=ToolRisk.LOW,
+            requires_entity=False,
+        )
+    )
 
     registry.register(
         ToolDefinition(
@@ -200,6 +250,30 @@ def build_default_tool_registry() -> ToolRegistry:
             service="set_cover_position",
             service_data_builder=_curtain_service_data,
             requires_verification=True,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="activate_security_mode",
+            description="开启专用的虚拟安防模式",
+            argument_model=SecurityModeArguments,
+            allowed_domains=frozenset({"input_boolean"}),
+            risk=ToolRisk.MEDIUM,
+            service_domain="input_boolean",
+            service="turn_on",
+            service_data_builder=_entity_service_data,
+            requires_verification=True,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="create_delayed_task",
+            description="创建已验证固定计划的延迟执行任务",
+            argument_model=DelayedTaskArguments,
+            allowed_domains=frozenset(),
+            risk=ToolRisk.LOW,
+            requires_entity=False,
+            plan_enabled=False,
         )
     )
     return registry

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..entity_resolver import EntityNameResolver
+from ..errors import EdgeHomeError
 from ..models import EntitySnapshot
 
 
@@ -30,10 +31,15 @@ class TaskHomeStateBuilder:
         """Create a bounded snapshot; unrelated entities never enter a model prompt."""
         query = self._normalize(goal)
         matches: list[EntitySnapshot] = []
-        for state in self._resolver.hass.states.async_all():
-            if not self._resolver._exposure_checker(self._resolver.hass, "conversation", state.entity_id):
+        registered = self._resolver.registered_entities()
+        candidates = registered or tuple(state.entity_id for state in self._resolver.hass.states.async_all())
+        for entity_id in candidates:
+            if not registered and not self._resolver._exposure_checker(self._resolver.hass, "conversation", entity_id):
                 continue
-            snapshot = self._resolver.snapshot(state.entity_id)
+            try:
+                snapshot = self._resolver.snapshot(entity_id)
+            except EdgeHomeError:
+                continue
             if any(name in query for name in self._names(snapshot) if len(name) >= 2):
                 matches.append(snapshot)
 

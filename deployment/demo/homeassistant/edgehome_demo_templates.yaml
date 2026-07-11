@@ -1,0 +1,196 @@
+# 可控的虚拟家居实体。default_entity_id 让实体 ID 在首次加载时保持稳定。
+- light:
+    - name: 客厅主灯
+      unique_id: edgehome_living_room_main
+      default_entity_id: light.edgehome_living_room_main
+      state: "{{ is_state('input_boolean.edgehome_living_room_main_power', 'on') }}"
+      level: "{{ (states('input_number.edgehome_living_room_main_brightness') | float(0) * 255 / 100) | round(0) }}"
+      turn_on:
+        - action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.edgehome_living_room_main_power
+      turn_off:
+        - action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.edgehome_living_room_main_power
+      set_level:
+        - action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.edgehome_living_room_main_power
+        - action: input_number.set_value
+          target:
+            entity_id: input_number.edgehome_living_room_main_brightness
+          data:
+            value: "{{ (brightness | int(0) * 100 / 255) | round(0) }}"
+    - name: 客厅氛围灯
+      unique_id: edgehome_living_room_ambient
+      default_entity_id: light.edgehome_living_room_ambient
+      state: "{{ is_state('input_boolean.edgehome_living_room_ambient_power', 'on') }}"
+      level: "{{ (states('input_number.edgehome_living_room_ambient_brightness') | float(0) * 255 / 100) | round(0) }}"
+      turn_on:
+        - action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.edgehome_living_room_ambient_power
+      turn_off:
+        - action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.edgehome_living_room_ambient_power
+      set_level:
+        - action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.edgehome_living_room_ambient_power
+        - action: input_number.set_value
+          target:
+            entity_id: input_number.edgehome_living_room_ambient_brightness
+          data:
+            value: "{{ (brightness | int(0) * 100 / 255) | round(0) }}"
+    - name: 卧室主灯
+      unique_id: edgehome_bedroom_main
+      default_entity_id: light.edgehome_bedroom_main
+      state: "{{ is_state('input_boolean.edgehome_bedroom_main_power', 'on') }}"
+      level: "{{ (states('input_number.edgehome_bedroom_main_brightness') | float(0) * 255 / 100) | round(0) }}"
+      turn_on:
+        - action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.edgehome_bedroom_main_power
+      turn_off:
+        - action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.edgehome_bedroom_main_power
+      set_level:
+        - action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.edgehome_bedroom_main_power
+        - action: input_number.set_value
+          target:
+            entity_id: input_number.edgehome_bedroom_main_brightness
+          data:
+            value: "{{ (brightness | int(0) * 100 / 255) | round(0) }}"
+- switch:
+    - name: 客厅电视
+      unique_id: edgehome_living_room_tv
+      default_entity_id: switch.edgehome_living_room_tv
+      state: "{{ is_state('input_boolean.edgehome_living_room_tv_power', 'on') }}"
+      turn_on:
+        - action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.edgehome_living_room_tv_power
+      turn_off:
+        - action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.edgehome_living_room_tv_power
+    - name: 路由器
+      unique_id: edgehome_router
+      default_entity_id: switch.edgehome_router
+      state: "{{ is_state('input_boolean.edgehome_router_power', 'on') }}"
+      turn_on:
+        - action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.edgehome_router_power
+      turn_off:
+        - action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.edgehome_router_power
+    - name: 冰箱
+      unique_id: edgehome_refrigerator
+      default_entity_id: switch.edgehome_refrigerator
+      state: "{{ is_state('input_boolean.edgehome_refrigerator_power', 'on') }}"
+      turn_on:
+        - action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.edgehome_refrigerator_power
+      turn_off:
+        - action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.edgehome_refrigerator_power
+    - name: 测试插座
+      unique_id: edgehome_test_socket
+      default_entity_id: switch.edgehome_test_socket
+      state: "{{ is_state('input_boolean.edgehome_test_socket_power', 'on') }}"
+      turn_on:
+        - action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.edgehome_test_socket_power
+      turn_off:
+        - action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.edgehome_test_socket_power
+- cover:
+    - name: 客厅窗帘
+      unique_id: edgehome_living_room_curtain
+      default_entity_id: cover.edgehome_living_room_curtain
+      device_class: curtain
+      state: "{{ 'open' if states('input_number.edgehome_living_room_curtain_position') | int(0) > 0 else 'closed' }}"
+      position: "{{ states('input_number.edgehome_living_room_curtain_position') | int(0) }}"
+      open_cover:
+        # 故障注入开启时故意不更新位置：HA 服务仍成功返回，供回读校验捕获失败。
+        - choose:
+            - conditions:
+                - condition: state
+                  entity_id: input_boolean.edgehome_simulate_curtain_failure
+                  state: "off"
+              sequence:
+                - action: input_number.set_value
+                  target:
+                    entity_id: input_number.edgehome_living_room_curtain_position
+                  data:
+                    value: 100
+      close_cover:
+        - choose:
+            - conditions:
+                - condition: state
+                  entity_id: input_boolean.edgehome_simulate_curtain_failure
+                  state: "off"
+              sequence:
+                - action: input_number.set_value
+                  target:
+                    entity_id: input_number.edgehome_living_room_curtain_position
+                  data:
+                    value: 0
+      set_cover_position:
+        - choose:
+            - conditions:
+                - condition: state
+                  entity_id: input_boolean.edgehome_simulate_curtain_failure
+                  state: "off"
+              sequence:
+                - action: input_number.set_value
+                  target:
+                    entity_id: input_number.edgehome_living_room_curtain_position
+                  data:
+                    value: "{{ position | int(0) }}"
+- sensor:
+    - name: 客厅温度
+      unique_id: edgehome_living_room_temperature
+      default_entity_id: sensor.edgehome_living_room_temperature
+      device_class: temperature
+      unit_of_measurement: "°C"
+      state: "{{ states('input_number.edgehome_living_room_temperature_value') | float(0) }}"
+    - name: 客厅光照
+      unique_id: edgehome_living_room_illuminance
+      default_entity_id: sensor.edgehome_living_room_illuminance
+      device_class: illuminance
+      unit_of_measurement: lx
+      state: "{{ states('input_number.edgehome_living_room_illuminance_value') | int(0) }}"
+    - name: 卧室温度
+      unique_id: edgehome_bedroom_temperature
+      default_entity_id: sensor.edgehome_bedroom_temperature
+      device_class: temperature
+      unit_of_measurement: "°C"
+      state: "{{ states('input_number.edgehome_bedroom_temperature_value') | float(0) }}"
+- binary_sensor:
+    - name: 客厅有人
+      unique_id: edgehome_living_room_presence
+      default_entity_id: binary_sensor.edgehome_living_room_presence
+      device_class: presence
+      state: "{{ is_state('input_boolean.edgehome_living_room_presence_state', 'on') }}"
+    - name: 卧室有人
+      unique_id: edgehome_bedroom_presence
+      default_entity_id: binary_sensor.edgehome_bedroom_presence
+      device_class: presence
+      state: "{{ is_state('input_boolean.edgehome_bedroom_presence_state', 'on') }}"
+    - name: 窗户
+      unique_id: edgehome_window
+      default_entity_id: binary_sensor.edgehome_window
+      device_class: window
+      state: "{{ is_state('input_boolean.edgehome_window_open_state', 'on') }}"

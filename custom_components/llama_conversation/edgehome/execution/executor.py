@@ -102,7 +102,6 @@ class FixedPlanExecutor:
             return self._failure(step, 0, "tool_not_registered", f"工具未注册: {step.tool}")
 
         arguments = definition.validate_arguments(step.arguments)
-        entity_id = arguments.model_dump()["entity_id"]
         try:
             for condition in step.preconditions:
                 condition_result = await self.verifier.async_verify(condition)
@@ -115,6 +114,10 @@ class FixedPlanExecutor:
                         verification=condition_result,
                     )
 
+            if not definition.requires_entity:
+                return self._execute_scope_read(step, definition.name, arguments.model_dump())
+
+            entity_id = arguments.model_dump()["entity_id"]
             if not definition.invokes_service:
                 snapshot = self.resolver.snapshot(entity_id, definition.allowed_domains)
                 return StepExecutionResult(
@@ -129,6 +132,20 @@ class FixedPlanExecutor:
             return await self._async_execute_service(step, definition, arguments)
         except EdgeHomeError as error:
             return self._failure(step, 0, error.code, error.message)
+
+    def _execute_scope_read(self, step: PlanStep, tool_name: str, arguments: dict[str, object]) -> StepExecutionResult:
+        """Execute structured read-only home and room snapshots without a service call."""
+        room = arguments.get("room") if tool_name == "get_room_state" else None
+        if room is not None and not isinstance(room, str):
+            return self._failure(step, 0, "invalid_room", "房间参数必须是字符串")
+        snapshots = [self.resolver.snapshot(entity_id) for entity_id in self.resolver.registered_entities(room)]
+        return StepExecutionResult(
+            step_id=step.id,
+            tool=tool_name,
+            status=StepStatus.SUCCESS,
+            attempts=1,
+            output={"room": room, "entities": [snapshot.model_dump(mode="json") for snapshot in snapshots]},
+        )
 
     async def _async_execute_service(
         self,
