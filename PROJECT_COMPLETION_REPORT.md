@@ -18,4 +18,4 @@ deployment 目录提供 Docker Compose、.env.example、初始化容器、启动
 
 ## 已知限制
 
-默认受保护设备通过关键词和实体 ID 识别，尚未提供管理界面配置自定义清单。知识资料导入和实体型号关联提供 API 与本地存储，但没有图形化管理页。本机已启动 Home Assistant 容器并得到 HTTP 200；真实设备、Recorder 数据和 llama.cpp 模型容器仍必须在部署环境验收。
+默认受保护设备通过关键词和实体 ID 识别，尚未提供管理界面配置自定义清单。知识资料导入和实体型号关联提供 API 与本地存储，但没有图形化管理页。本机已启动 Home Assistant 与 llama.cpp 容器，健康检查、模型列表和无副作用短推理均通过；真实设备、Recorder 数据和 Home Assistant 会话配置仍必须在部署环境验收。
