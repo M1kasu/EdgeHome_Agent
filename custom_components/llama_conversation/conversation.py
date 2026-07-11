@@ -86,6 +86,8 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
     async def async_will_remove_from_hass(self) -> None:
         """When entity will be removed from Home Assistant."""
         conversation.async_unset_agent(self.hass, self.entry)
+        if self._edgehome_coordinator is not None:
+            await self._edgehome_coordinator.async_shutdown()
         await super().async_will_remove_from_hass()
 
     @property
@@ -283,7 +285,7 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
 
         if self._edgehome_coordinator is None:
             self._edgehome_coordinator = EdgeHomeCoordinator(self.hass)
-        result = await self._edgehome_coordinator.async_handle(user_input.text)
+        result = await self._edgehome_coordinator.async_handle_with_dialogue(user_input.text, user_input.conversation_id)
         if result.handled:
             intent_response = intent.IntentResponse(language=user_input.language)
             intent_response.async_set_speech(result.speech or "请求已由 EdgeHome 处理。")
@@ -300,6 +302,7 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
         )
         if not planned_result.handled:
             return None
+        await self._edgehome_coordinator.async_remember_completed(user_input.conversation_id, planned_result.completed_plan)
 
         intent_response = intent.IntentResponse(language=user_input.language)
         intent_response.async_set_speech(planned_result.speech or "请求已由 EdgeHome 处理。")

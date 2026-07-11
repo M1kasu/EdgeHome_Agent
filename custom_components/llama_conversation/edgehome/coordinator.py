@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+import re
 
 from homeassistant.core import HomeAssistant
 
@@ -10,11 +12,15 @@ from ..entity import LocalLLMClient
 from .entity_resolver import EntityNameResolver
 from .execution.executor import FixedPlanExecutor
 from .context.home_state import TaskHomeStateBuilder
-from .models import EntitySnapshot, StepExecutionResult, TaskStatus
+from .context.store import DialogueStateStore
+from .models import EntitySnapshot, StepExecutionResult, TaskPlan, TaskStatus
 from .planner.llm_planner import LLMTaskPlanner, PlanningRequest, PlanningStatus
 from .planner.parser import StructuredPlanParser
 from .router import ChineseFastRouter
+from .tasks.delayed import DelayedTaskManager
+from .tasks.parser import ChineseDelayedCommandParser
 from .understanding.models import FastIntent, FastRouteDecision, FastRouteStatus
+from .understanding.reference_resolver import ReferencePlanResolver
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +30,7 @@ class FastPathResponse:
     handled: bool
     speech: str | None = None
     decision: FastRouteDecision | None = None
+    completed_plan: TaskPlan | None = None
 
 
 class EdgeHomeCoordinator:
@@ -38,6 +45,10 @@ class EdgeHomeCoordinator:
         self._resolver = resolver or EntityNameResolver(hass)
         self._router = ChineseFastRouter(self._resolver)
         self._executor = executor or FixedPlanExecutor(hass, resolver=self._resolver)
+        self._dialogue_store = DialogueStateStore(hass)
+        self._reference_resolver = ReferencePlanResolver(self._resolver)
+        self._delayed_tasks = DelayedTaskManager(hass, self._executor)
+        self._delayed_parser = ChineseDelayedCommandParser()
 
     async def async_handle(self, text: str) -> FastPathResponse:
         """Handle ready plans; never retry a failed direct action through the legacy model path."""
@@ -54,12 +65,48 @@ class EdgeHomeCoordinator:
                 handled=True,
                 speech=self._success_speech(decision, report.step_results[0]),
                 decision=decision,
+                completed_plan=decision.plan,
             )
         return FastPathResponse(
             handled=True,
             speech=self._failure_speech(decision, report.step_results),
             decision=decision,
         )
+
+    async def async_handle_with_dialogue(self, text: str, conversation_id: str) -> FastPathResponse:
+        """Apply clarification, references, and delayed commands before normal fast-path routing."""
+        resumed_text = await self._async_resume_clarification(text, conversation_id)
+        state = await self._dialogue_store.async_get(conversation_id)
+        if state:
+            reference_plan = self._reference_resolver.resolve(resumed_text, state)
+            if reference_plan:
+                report = await self._executor.async_execute(reference_plan)
+                if report.status == TaskStatus.SUCCESS:
+                    await self._dialogue_store.async_remember_plan(conversation_id, reference_plan)
+                    return FastPathResponse(handled=True, speech="已按上一条设置完成操作。", completed_plan=reference_plan)
+                failure = report.step_results[-1] if report.step_results else None
+                reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
+                return FastPathResponse(handled=True, speech=f"引用操作未完成：{reason}。")
+
+        delayed = await self._async_handle_delayed(resumed_text, conversation_id)
+        if delayed is not None:
+            return delayed
+
+        result = await self.async_handle(resumed_text)
+        if result.completed_plan:
+            await self._dialogue_store.async_remember_plan(conversation_id, result.completed_plan)
+        elif result.handled and result.decision and result.decision.status == FastRouteStatus.CLARIFICATION:
+            await self._dialogue_store.async_set_clarification(conversation_id, resumed_text, result.speech or "请补充必要信息")
+        return result
+
+    async def async_remember_completed(self, conversation_id: str, plan: TaskPlan | None) -> None:
+        """Persist a successful complex plan after the caller has chosen to expose it to a conversation."""
+        if plan:
+            await self._dialogue_store.async_remember_plan(conversation_id, plan)
+
+    async def async_shutdown(self) -> None:
+        """Release delayed task listeners when this coordinator is removed."""
+        await self._delayed_tasks.async_shutdown()
 
     async def async_handle_complex(
         self,
@@ -77,7 +124,7 @@ class EdgeHomeCoordinator:
 
         report = await self._executor.async_execute(planning.plan)
         if report.status == TaskStatus.SUCCESS:
-            return FastPathResponse(handled=True, speech=f"已完成任务：{planning.plan.goal}。")
+            return FastPathResponse(handled=True, speech=f"已完成任务：{planning.plan.goal}。", completed_plan=planning.plan)
         failure = report.step_results[-1] if report.step_results else None
         reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
         return FastPathResponse(handled=True, speech=f"任务未完成：{reason}。")
@@ -90,6 +137,47 @@ class EdgeHomeCoordinator:
             StructuredPlanParser(self._executor.validator),
             self._executor.tools,
         )
+
+    async def _async_resume_clarification(self, text: str, conversation_id: str) -> str:
+        pending = await self._dialogue_store.async_consume_clarification(conversation_id)
+        if pending is None:
+            return text
+        return f"{pending.original_goal} {text}"
+
+    async def _async_handle_delayed(self, text: str, conversation_id: str) -> FastPathResponse | None:
+        if text in {"查询延时任务", "查看延时任务", "查询定时任务", "查看定时任务"}:
+            tasks = await self._delayed_tasks.async_list(conversation_id)
+            pending = [task for task in tasks if task.status.value == "pending"]
+            if not pending:
+                return FastPathResponse(handled=True, speech="当前没有待执行的延时任务。")
+            descriptions = [f"{task.id[:8]}（{task.execute_at.astimezone().strftime('%H:%M')}）" for task in pending[:5]]
+            return FastPathResponse(handled=True, speech=f"待执行任务：{'、'.join(descriptions)}。")
+
+        cancellation = re.fullmatch(r"取消(?:延时|定时)任务\s+([a-zA-Z0-9]+)", text.strip())
+        if cancellation:
+            matches = await self._delayed_tasks.async_list(conversation_id)
+            task = next((item for item in matches if item.id.startswith(cancellation.group(1))), None)
+            cancelled = await self._delayed_tasks.async_cancel(conversation_id, task.id) if task else None
+            return FastPathResponse(
+                handled=True,
+                speech="已取消延时任务。" if cancelled else "没有找到可取消的延时任务。",
+            )
+
+        request = self._delayed_parser.parse(text)
+        if request is None:
+            return None
+        decision = self._router.route(request.command)
+        if decision.status != FastRouteStatus.READY or decision.plan is None:
+            if decision.status == FastRouteStatus.CLARIFICATION:
+                await self._dialogue_store.async_set_clarification(conversation_id, request.command, "请补充延时任务中的设备或参数")
+                return FastPathResponse(handled=True, speech="请补充延时任务中的设备或参数。")
+            return None
+        task = await self._delayed_tasks.async_create(
+            conversation_id,
+            decision.plan,
+            datetime.now(timezone.utc) + timedelta(seconds=request.delay_seconds),
+        )
+        return FastPathResponse(handled=True, speech=f"已安排延时任务 {task.id[:8]}，将在指定时间执行。")
 
     @staticmethod
     def _clarification(decision: FastRouteDecision) -> str:
