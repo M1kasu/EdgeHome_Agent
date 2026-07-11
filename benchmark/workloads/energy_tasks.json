@@ -1,0 +1,137 @@
+[
+  {
+    "id": "energy-001",
+    "task_type": "energy_analysis",
+    "text": "请请解释最近七天耗电增加的原因",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-002",
+    "task_type": "energy_analysis",
+    "text": "麻烦制定一个不影响冰箱路由器的节电方案",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-003",
+    "task_type": "energy_analysis",
+    "text": "现在请电视关闭后测试插座待机异常如何处理",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-004",
+    "task_type": "energy_analysis",
+    "text": "能否请解释最近七天耗电增加的原因",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-005",
+    "task_type": "energy_analysis",
+    "text": "请帮我制定一个不影响冰箱路由器的节电方案",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-006",
+    "task_type": "energy_analysis",
+    "text": "请电视关闭后测试插座待机异常如何处理",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-007",
+    "task_type": "energy_analysis",
+    "text": "麻烦请解释最近七天耗电增加的原因",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-008",
+    "task_type": "energy_analysis",
+    "text": "现在请制定一个不影响冰箱路由器的节电方案",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-009",
+    "task_type": "energy_analysis",
+    "text": "能否电视关闭后测试插座待机异常如何处理",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-010",
+    "task_type": "energy_analysis",
+    "text": "请帮我请解释最近七天耗电增加的原因",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-011",
+    "task_type": "energy_analysis",
+    "text": "请制定一个不影响冰箱路由器的节电方案",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-012",
+    "task_type": "energy_analysis",
+    "text": "麻烦电视关闭后测试插座待机异常如何处理",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-013",
+    "task_type": "energy_analysis",
+    "text": "现在请请解释最近七天耗电增加的原因",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-014",
+    "task_type": "energy_analysis",
+    "text": "能否制定一个不影响冰箱路由器的节电方案",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "energy-015",
+    "task_type": "energy_analysis",
+    "text": "请帮我电视关闭后测试插座待机异常如何处理",
+    "expected_route": "energy_path",
+    "metadata": {
+      "phase": 13
+    }
+  }
+]

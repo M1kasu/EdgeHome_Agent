@@ -1,0 +1,3 @@
+label,requests,successes,success_rate,model_calls,model_call_rate,average_latency_ms,p50_latency_ms,p95_latency_ms,avg_tokens_per_second,quantization,context_tokens,container_peak_memory_mb,load_time_ms
+Q4_K_M ctx1024,20,20,1.0,20,1.0,676.451545,697.62415,765.30753,25.891301,Q4_K_M,1024,1504.256,3330.731
+Q4_K_M ctx2048,20,20,1.0,20,1.0,683.1503,712.33445,762.23264,25.525943,Q4_K_M,2048,4936.704,20637.398

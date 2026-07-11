@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420">
+<rect width="100%" height="100%" fill="white"/>
+<text x="40" y="40" font-size="20" font-family="sans-serif">平均延迟 / Average latency</text>
+<line x1="60" y1="340" x2="860" y2="340" stroke="black"/>
+<rect x="80" y="227.33" width="110" height="112.67" fill="#377eb8"/><text x="135" y="360" text-anchor="middle" font-size="12">A 全量模型简单任务</text><text x="135" y="219.33" text-anchor="middle" font-size="12">643.20 ms</text>
+<rect x="230" y="337.78" width="110" height="2.22" fill="#377eb8"/><text x="285" y="360" text-anchor="middle" font-size="12">B 双路径简单任务</text><text x="285" y="329.78" text-anchor="middle" font-size="12">12.65 ms</text>
+<rect x="380" y="90.00" width="110" height="250.00" fill="#377eb8"/><text x="435" y="360" text-anchor="middle" font-size="12">B 双路径复杂任务</text><text x="435" y="82.00" text-anchor="middle" font-size="12">1427.18 ms</text>
+</svg>

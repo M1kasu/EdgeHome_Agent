@@ -6,3 +6,4 @@
 - Pydantic、Docker 与其他依赖：分别遵循其上游许可证。
 - SQLite FTS5：随 Python/SQLite 运行时提供，用于本地全文检索；项目未新增外部向量数据库或云端检索服务。
 - 第 12 阶段 `knowledge/` 与 `datasets/energy/`：均为本项目原创测试资料和合成数据，不包含第三方完整设备说明书。
+- 第 13 阶段模型元数据：当前 GGUF 指向 acon96/Home-Llama-3.2-3B 的许可证链接；没有下载或重新发布模型权重。llama.cpp server 继续遵循其上游许可证。

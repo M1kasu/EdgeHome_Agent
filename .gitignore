@@ -18,3 +18,4 @@ runpod_bootstrap.sh
 deployment/.env
 deployment/homeassistant/
 deployment/models/
+benchmark/runtime/

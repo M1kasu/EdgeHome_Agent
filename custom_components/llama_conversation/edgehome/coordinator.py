@@ -20,14 +20,17 @@ from .context.store import DialogueStateStore
 from .energy.statistics import HomeAssistantEnergyStatistics
 from .energy.conversation import EnergyConversationHandler
 from .energy.service import EnergyService
+from .benchmark.input_guard import InputLengthGuard
 from .models import EntitySnapshot, StepExecutionResult, TaskPlan, TaskStatus
 from .information import ReadOnlyInformationHandler
 from .knowledge.associations import DeviceManualRegistry
 from .knowledge.indexer import LocalKnowledgeIndex
 from .knowledge.service import KnowledgeService
-from .planner.llm_planner import LLMTaskPlanner, PlanningRequest, PlanningStatus
+from .planner.llm_planner import LLMTaskPlanner, PlanningRequest, PlanningResult, PlanningStatus
 from .planner.parser import StructuredPlanParser
 from .resource.monitor import ResourceMonitor
+from .resource.scheduler import ResourceAwareScheduler
+from .benchmark.resource_monitor import SystemResourceMonitor
 from .router import ChineseFastRouter
 from .safety.away_report import AwaySecurityReporter
 from .scenarios.state import ScenarioStateManager
@@ -61,6 +64,8 @@ class EdgeHomeCoordinator:
         energy_statistics: HomeAssistantEnergyStatistics | None = None,
         clock: Callable[[], datetime] | None = None,
         resource_monitor: ResourceMonitor | None = None,
+        resource_scheduler: ResourceAwareScheduler | None = None,
+        input_guard: InputLengthGuard | None = None,
     ) -> None:
         self._resolver = resolver or EntityNameResolver(hass, registry=build_demo_entity_registry())
         self._router = ChineseFastRouter(self._resolver)
@@ -69,6 +74,9 @@ class EdgeHomeCoordinator:
         self._environment_guard = EnvironmentPlanGuard(self._executor.validator, self._resolver)
         self._failure_replanner = FailureReplanner()
         self._resource_monitor = resource_monitor or ResourceMonitor()
+        self._resource_scheduler = resource_scheduler or ResourceAwareScheduler()
+        self._system_resource_monitor = SystemResourceMonitor()
+        self._input_guard = input_guard or InputLengthGuard()
         self._away_reporter = AwaySecurityReporter()
         self._scenarios = ScenarioStateManager(hass, self._resolver)
         self._dialogue_store = DialogueStateStore(hass)
@@ -88,6 +96,8 @@ class EdgeHomeCoordinator:
 
     async def async_handle(self, text: str) -> FastPathResponse:
         """Handle ready plans; never retry a failed direct action through the legacy model path."""
+        if not self._input_guard.accepts(text):
+            return FastPathResponse(handled=True, speech="输入为空或超过 EdgeHome 允许长度，已拒绝处理。")
         decision = self._router.route(text)
         if decision.status == FastRouteStatus.FALLBACK:
             return FastPathResponse(handled=False, decision=decision)
@@ -118,6 +128,8 @@ class EdgeHomeCoordinator:
 
     async def async_handle_with_dialogue(self, text: str, conversation_id: str) -> FastPathResponse:
         """Apply clarification, references, and delayed commands before normal fast-path routing."""
+        if not self._input_guard.accepts(text):
+            return FastPathResponse(handled=True, speech="输入为空或超过 EdgeHome 允许长度，已拒绝处理。")
         if text.strip() == "确认关闭受保护设备":
             pending = await self._dialogue_store.async_consume_protected_confirmation(conversation_id)
             if pending is None:
@@ -201,13 +213,43 @@ class EdgeHomeCoordinator:
         """Plan and run a complex request only after the model result passes all fixed-plan gates."""
         if not planner.is_candidate(text):
             return FastPathResponse(handled=False)
+        scheduling = self._resource_scheduler.decide(
+            task_is_complex=True,
+            model_available=True,
+            safety_critical=False,
+            resources=self._system_resource_monitor.snapshot(),
+        )
+        request = PlanningRequest(goal=text, agent_id=agent_id)
+        if scheduling.decision == "template_fallback":
+            planning = await planner.async_template_fallback(request, scheduling.reason)
+            if planning.status != PlanningStatus.ACCEPTED or planning.plan is None:
+                return FastPathResponse(
+                    handled=True,
+                    speech="端侧资源或模型不可用，且当前请求没有可用的安全场景模板。",
+                )
+            return await self._async_execute_complex_plan(text, conversation_id, agent_id, runtime_options, planner, planning)
+        queue_wait_ms = await self._resource_scheduler.async_acquire_llm()
         lease = await self._resource_monitor.async_try_acquire("complex_planning")
         if lease is None:
+            self._resource_scheduler.release_llm()
             return FastPathResponse(handled=True, speech="当前端侧资源繁忙，已保留快速控制，请稍后重试复杂任务。")
         try:
-            planning = await planner.async_plan(PlanningRequest(goal=text, agent_id=agent_id), runtime_options)
+            planning = await planner.async_plan(request, {**runtime_options, "edgehome_queue_wait_ms": queue_wait_ms})
         finally:
             await self._resource_monitor.async_release(lease)
+            self._resource_scheduler.release_llm()
+        return await self._async_execute_complex_plan(text, conversation_id, agent_id, runtime_options, planner, planning)
+
+    async def _async_execute_complex_plan(
+        self,
+        text: str,
+        conversation_id: str,
+        agent_id: str,
+        runtime_options: dict[str, object],
+        planner: LLMTaskPlanner,
+        planning: PlanningResult,
+    ) -> FastPathResponse:
+        """执行已通过模型或模板入口产生的同一份受限计划。"""
         if planning.status != PlanningStatus.ACCEPTED or planning.plan is None:
             return FastPathResponse(handled=False)
         if planning.plan.need_clarification:

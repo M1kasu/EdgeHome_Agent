@@ -139,6 +139,19 @@ class LLMTaskPlanner:
             source=PlanningSource.MODEL,
         )
 
+    async def async_template_fallback(self, request: PlanningRequest, reason: str) -> PlanningResult:
+        """资源或模型不可用时仅使用已登记的虚拟场景模板，不再请求模型。"""
+        template = self._templates.match(request.goal)
+        scene = template.name.value if template else None
+        snapshot = self._state_builder.build(request.goal, scene=scene)
+        fallback = self._scene_fallback(request.goal, template.name if template else None, snapshot.entities, reason)
+        return fallback or PlanningResult(
+            status=PlanningStatus.UNAVAILABLE,
+            reason=reason,
+            scene=scene,
+            context_entities=snapshot.entities,
+        )
+
     def _scene_fallback(
         self,
         goal: str,

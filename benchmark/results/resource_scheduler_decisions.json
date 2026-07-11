@@ -1,0 +1,82 @@
+[
+  {
+    "case": "current_complex",
+    "snapshot": {
+      "process_memory_mb": 181.133,
+      "system_memory_mb": 4709.945,
+      "system_memory_percent": 85.5,
+      "cpu_percent": 5.9,
+      "gpu_percent": null,
+      "device_temperature_c": null,
+      "power_w": null
+    },
+    "decision": {
+      "decision": "llm_path",
+      "reason": "resources_available",
+      "memory_percent": 85.5,
+      "cpu_percent": 5.9,
+      "context_tokens": 2048,
+      "max_generation_tokens": 256
+    }
+  },
+  {
+    "case": "memory_warning_probe",
+    "snapshot": {
+      "process_memory_mb": null,
+      "system_memory_mb": null,
+      "system_memory_percent": 95.0,
+      "cpu_percent": null,
+      "gpu_percent": null,
+      "device_temperature_c": null,
+      "power_w": null
+    },
+    "decision": {
+      "decision": "template_fallback",
+      "reason": "memory_warning",
+      "memory_percent": 95.0,
+      "cpu_percent": null,
+      "context_tokens": 512,
+      "max_generation_tokens": 256
+    }
+  },
+  {
+    "case": "model_unavailable_probe",
+    "snapshot": {
+      "process_memory_mb": null,
+      "system_memory_mb": null,
+      "system_memory_percent": null,
+      "cpu_percent": null,
+      "gpu_percent": null,
+      "device_temperature_c": null,
+      "power_w": null
+    },
+    "decision": {
+      "decision": "template_fallback",
+      "reason": "model_unavailable",
+      "memory_percent": null,
+      "cpu_percent": null,
+      "context_tokens": 512,
+      "max_generation_tokens": 256
+    }
+  },
+  {
+    "case": "safety_probe",
+    "snapshot": {
+      "process_memory_mb": null,
+      "system_memory_mb": null,
+      "system_memory_percent": null,
+      "cpu_percent": null,
+      "gpu_percent": null,
+      "device_temperature_c": null,
+      "power_w": null
+    },
+    "decision": {
+      "decision": "deterministic_safety",
+      "reason": "safety_critical",
+      "memory_percent": null,
+      "cpu_percent": null,
+      "context_tokens": 512,
+      "max_generation_tokens": 256
+    }
+  }
+]

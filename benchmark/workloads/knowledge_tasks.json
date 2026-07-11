@@ -1,0 +1,182 @@
+[
+  {
+    "id": "knowledge-001",
+    "task_type": "knowledge_retrieval",
+    "text": "请测试空调报 E3 后应如何处理",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-002",
+    "task_type": "knowledge_retrieval",
+    "text": "麻烦为什么离开家不能关闭冰箱和路由器",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-003",
+    "task_type": "knowledge_retrieval",
+    "text": "现在请测试插座负载过高时先做什么",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-004",
+    "task_type": "knowledge_retrieval",
+    "text": "能否空调开着但窗户打开有什么问题",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-005",
+    "task_type": "knowledge_retrieval",
+    "text": "请帮我测试空调报 E3 后应如何处理",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-006",
+    "task_type": "knowledge_retrieval",
+    "text": "请为什么离开家不能关闭冰箱和路由器",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-007",
+    "task_type": "knowledge_retrieval",
+    "text": "麻烦测试插座负载过高时先做什么",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-008",
+    "task_type": "knowledge_retrieval",
+    "text": "现在请空调开着但窗户打开有什么问题",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-009",
+    "task_type": "knowledge_retrieval",
+    "text": "能否测试空调报 E3 后应如何处理",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-010",
+    "task_type": "knowledge_retrieval",
+    "text": "请帮我为什么离开家不能关闭冰箱和路由器",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-011",
+    "task_type": "knowledge_retrieval",
+    "text": "请测试插座负载过高时先做什么",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-012",
+    "task_type": "knowledge_retrieval",
+    "text": "麻烦空调开着但窗户打开有什么问题",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-013",
+    "task_type": "knowledge_retrieval",
+    "text": "现在请测试空调报 E3 后应如何处理",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-014",
+    "task_type": "knowledge_retrieval",
+    "text": "能否为什么离开家不能关闭冰箱和路由器",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-015",
+    "task_type": "knowledge_retrieval",
+    "text": "请帮我测试插座负载过高时先做什么",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-016",
+    "task_type": "knowledge_retrieval",
+    "text": "请空调开着但窗户打开有什么问题",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-017",
+    "task_type": "knowledge_retrieval",
+    "text": "麻烦测试空调报 E3 后应如何处理",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-018",
+    "task_type": "knowledge_retrieval",
+    "text": "现在请为什么离开家不能关闭冰箱和路由器",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-019",
+    "task_type": "knowledge_retrieval",
+    "text": "能否测试插座负载过高时先做什么",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "knowledge-020",
+    "task_type": "knowledge_retrieval",
+    "text": "请帮我空调开着但窗户打开有什么问题",
+    "expected_route": "retrieval_path",
+    "metadata": {
+      "phase": 13
+    }
+  }
+]

@@ -1,0 +1,3 @@
+label,requests,reported_success_rate,final_task_completion_rate,false_success_rate,average_latency_ms,p95_latency_ms
+edgehome_without_verification,50,1.0,0.9,0.1,0.005416,0.01048499999999998
+edgehome_full_verification,50,1.0,1.0,0.0,0.067096,0.08607999999999999
