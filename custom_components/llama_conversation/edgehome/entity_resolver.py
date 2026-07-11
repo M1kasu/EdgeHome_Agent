@@ -78,3 +78,58 @@ class ExposedEntityResolver:
     def snapshot(self, entity_id: str, allowed_domains: Container[str] | None = None) -> EntitySnapshot:
         """Return only the snapshot after applying the same access boundary."""
         return self.resolve(entity_id, allowed_domains).snapshot
+
+
+class EntityNameResolver(ExposedEntityResolver):
+    """Resolve a Chinese display name or configured alias to one exposed entity."""
+
+    def resolve_name(
+        self,
+        text: str,
+        allowed_domains: Container[str] | None = None,
+    ) -> ResolvedEntity:
+        """Choose a unique longest entity-name match from the exposed state machine."""
+        query = self._normalize(text)
+        candidates: list[tuple[int, str]] = []
+        entity_registry = er.async_get(self.hass)
+
+        for state in self.hass.states.async_all():
+            if allowed_domains and state.domain not in allowed_domains:
+                continue
+            if not self._exposure_checker(self.hass, conversation.DOMAIN, state.entity_id):
+                continue
+            for name in self._names_for_entity(state.entity_id, entity_registry):
+                normalized_name = self._normalize(name)
+                if len(normalized_name) >= 2 and normalized_name in query:
+                    candidates.append((len(normalized_name), state.entity_id))
+
+        if not candidates:
+            raise EntityResolutionError("entity_name_not_found", "未找到匹配且已暴露的设备名称")
+
+        longest_match = max(length for length, _ in candidates)
+        entity_ids = {entity_id for length, entity_id in candidates if length == longest_match}
+        if len(entity_ids) != 1:
+            raise EntityResolutionError("entity_name_ambiguous", "设备名称匹配到多个已暴露实体")
+        return self.resolve(entity_ids.pop(), allowed_domains)
+
+    def _names_for_entity(self, entity_id: str, entity_registry: er.EntityRegistry) -> set[str]:
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            return set()
+
+        names = {entity_id.split(".", maxsplit=1)[1].replace("_", " ")}
+        friendly_name = state.attributes.get(ATTR_FRIENDLY_NAME)
+        if isinstance(friendly_name, str):
+            names.add(friendly_name)
+
+        entry = entity_registry.async_get(entity_id)
+        if entry:
+            names.update(er.async_get_entity_aliases(self.hass, entry))
+        snapshot = self.snapshot(entity_id)
+        if snapshot.area_name and snapshot.friendly_name:
+            names.add(f"{snapshot.area_name}{snapshot.friendly_name}")
+        return names
+
+    @staticmethod
+    def _normalize(value: str) -> str:
+        return "".join(character.lower() for character in value if character.isalnum())
