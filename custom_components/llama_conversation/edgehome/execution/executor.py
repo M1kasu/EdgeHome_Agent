@@ -43,11 +43,15 @@ class FixedPlanExecutor:
         self.validator = PlanValidator(self.tools, self.resolver, max_steps=max_steps)
         self.verifier = StateVerifier(self.resolver)
 
-    async def async_execute(self, plan: TaskPlan) -> TaskExecutionReport:
+    async def async_execute(
+        self,
+        plan: TaskPlan,
+        authorized_protected_entities: frozenset[str] = frozenset(),
+    ) -> TaskExecutionReport:
         """Validate the whole plan before the first service call, then run sequentially."""
         started_at = datetime.now(timezone.utc)
         try:
-            validated_plan = self.validator.validate(plan)
+            validated_plan = self.validator.validate(plan, authorized_protected_entities)
         except PlanValidationError as error:
             failed_steps = [
                 StepExecutionResult(

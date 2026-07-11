@@ -8,7 +8,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .dialogue_state import DialogueState, PendingClarification
+from .dialogue_state import DialogueState, PendingClarification, PendingProtectedAction
 from ..models import TaskPlan
 
 
@@ -89,6 +89,27 @@ class DialogueStateStore:
             return None
         pending = state.pending_clarification
         await self.async_save(state.model_copy(update={"pending_clarification": None}))
+        return pending
+
+    async def async_set_protected_confirmation(
+        self,
+        conversation_id: str,
+        plan: TaskPlan,
+        entity_ids: list[str],
+    ) -> DialogueState:
+        """Persist exactly one requested protected shutdown until the next confirmation turn."""
+        prior = await self.async_get(conversation_id)
+        state = prior or DialogueState(conversation_id=conversation_id)
+        pending = PendingProtectedAction(plan=plan, entity_ids=entity_ids)
+        return await self.async_save(state.model_copy(update={"pending_protected_action": pending}))
+
+    async def async_consume_protected_confirmation(self, conversation_id: str) -> PendingProtectedAction | None:
+        """Return and clear an approval record so it cannot authorize another later action."""
+        state = await self.async_get(conversation_id)
+        if state is None or state.pending_protected_action is None:
+            return None
+        pending = state.pending_protected_action
+        await self.async_save(state.model_copy(update={"pending_protected_action": None}))
         return pending
 
     async def async_clear_expired(self) -> int:

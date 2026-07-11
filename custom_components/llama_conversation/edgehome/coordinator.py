@@ -81,6 +81,13 @@ class EdgeHomeCoordinator:
             return FastPathResponse(handled=True, speech=self._clarification(decision), decision=decision)
 
         assert decision.plan is not None
+        protected = self._executor.validator.safety_guard.protected_shutdowns(decision.plan)
+        if protected:
+            return FastPathResponse(
+                handled=True,
+                speech="受保护设备不能在无会话确认时关闭，请通过对话入口进行二次确认。",
+                decision=decision,
+            )
         report = await self._executor.async_execute(decision.plan)
         if report.status == TaskStatus.SUCCESS:
             return FastPathResponse(
@@ -97,6 +104,16 @@ class EdgeHomeCoordinator:
 
     async def async_handle_with_dialogue(self, text: str, conversation_id: str) -> FastPathResponse:
         """Apply clarification, references, and delayed commands before normal fast-path routing."""
+        if text.strip() == "确认关闭受保护设备":
+            pending = await self._dialogue_store.async_consume_protected_confirmation(conversation_id)
+            if pending is None:
+                return FastPathResponse(handled=True, speech="当前没有待确认的受保护设备关闭操作。")
+            report = await self._executor.async_execute(pending.plan, frozenset(pending.entity_ids))
+            if report.status == TaskStatus.SUCCESS:
+                await self._dialogue_store.async_remember_plan(conversation_id, pending.plan)
+                return FastPathResponse(handled=True, speech="已按二次确认完成受保护设备操作。", completed_plan=pending.plan)
+            return FastPathResponse(handled=True, speech="受保护设备操作未完成，已停止后续动作。")
+
         resumed_text = await self._async_resume_clarification(text, conversation_id)
         information = await self._information.async_handle(resumed_text)
         if information is not None:
@@ -122,6 +139,16 @@ class EdgeHomeCoordinator:
         if delayed is not None:
             return delayed
 
+        decision = self._router.route(resumed_text)
+        if decision.status == FastRouteStatus.READY and decision.plan is not None:
+            protected = self._executor.validator.safety_guard.protected_shutdowns(decision.plan)
+            if protected:
+                await self._dialogue_store.async_set_protected_confirmation(conversation_id, decision.plan, protected)
+                return FastPathResponse(
+                    handled=True,
+                    speech="检测到受保护设备。请回复“确认关闭受保护设备”进行二次确认。",
+                    decision=decision,
+                )
         result = await self.async_handle(resumed_text)
         if result.completed_plan:
             await self._dialogue_store.async_remember_plan(conversation_id, result.completed_plan)
@@ -161,6 +188,13 @@ class EdgeHomeCoordinator:
             return FastPathResponse(handled=True, speech="环境状态已变化，已取消过时计划，请重新确认需求。")
 
         scenario_name = planning.scene if planning.scene == "movie" else None
+        protected = self._executor.validator.safety_guard.protected_shutdowns(planning.plan)
+        if protected:
+            await self._dialogue_store.async_set_protected_confirmation(conversation_id, planning.plan, protected)
+            return FastPathResponse(
+                handled=True,
+                speech="检测到受保护设备。请回复“确认关闭受保护设备”进行二次确认。",
+            )
         if scenario_name:
             await self._scenarios.async_capture(conversation_id, scenario_name, planning.plan)
 

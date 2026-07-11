@@ -49,3 +49,44 @@ def test_validator_rejects_missing_verification_and_unknown_entity(hass) -> None
 
     issue_codes = {issue.code for issue in captured.value.issues}
     assert {"entity_not_found", "verification_required"}.issubset(issue_codes)
+
+
+def test_validator_rejects_protected_shutdown_and_conflicting_actions(hass) -> None:
+    hass.states.async_set("switch.fridge", "on", {"friendly_name": "冰箱"})
+    hass.states.async_set("switch.demo", "off", {"friendly_name": "测试开关"})
+    protected = TaskPlan(
+        goal="关闭冰箱",
+        steps=[
+            PlanStep(
+                id="step_1",
+                tool="turn_off_device",
+                arguments={"entity_id": "switch.fridge"},
+                verify=VerificationRule(entity_id="switch.fridge", state="off"),
+            )
+        ],
+    )
+    conflicting = TaskPlan(
+        goal="矛盾操作",
+        steps=[
+            PlanStep(
+                id="step_1",
+                tool="turn_on_device",
+                arguments={"entity_id": "switch.demo"},
+                verify=VerificationRule(entity_id="switch.demo", state="on"),
+            ),
+            PlanStep(
+                id="step_2",
+                tool="turn_off_device",
+                arguments={"entity_id": "switch.demo"},
+                verify=VerificationRule(entity_id="switch.demo", state="off"),
+            ),
+        ],
+    )
+
+    with pytest.raises(PlanValidationError) as protected_error:
+        _validator(hass).validate(protected)
+    with pytest.raises(PlanValidationError) as conflict_error:
+        _validator(hass).validate(conflicting)
+
+    assert {issue.code for issue in protected_error.value.issues} == {"protected_entity_confirmation_required"}
+    assert {issue.code for issue in conflict_error.value.issues} == {"conflicting_actions"}

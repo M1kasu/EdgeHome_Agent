@@ -20,6 +20,16 @@ class PendingClarification(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class PendingProtectedAction(BaseModel):
+    """A one-turn approval record for a previously requested protected shutdown."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan: TaskPlan
+    entity_ids: list[str] = Field(min_length=1)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class DialogueState(BaseModel):
     """Persisted per-conversation memory used only by EdgeHome orchestration."""
 
@@ -30,6 +40,7 @@ class DialogueState(BaseModel):
     last_entity_id: str | None = None
     last_arguments: dict[str, Any] = Field(default_factory=dict)
     pending_clarification: PendingClarification | None = None
+    pending_protected_action: PendingProtectedAction | None = None
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc) + timedelta(hours=12))
 

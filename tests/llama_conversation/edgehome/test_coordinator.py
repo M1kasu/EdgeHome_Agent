@@ -208,3 +208,23 @@ async def test_coordinator_reads_energy_statistics_without_controlling_devices(h
     assert result.speech is not None
     assert result.speech.startswith("sensor.energy 最近 4 小时累计能耗 6.00 kWh。")
     assert "请检查设备运行时段和待机负载。" in result.speech
+
+
+@pytest.mark.asyncio
+async def test_coordinator_requires_second_confirmation_before_protected_shutdown(hass) -> None:
+    hass.states.async_set("switch.fridge", "on", {"friendly_name": "冰箱"})
+
+    async def turn_off(call) -> None:
+        hass.states.async_set(call.data["entity_id"], "off", {"friendly_name": "冰箱"}, context=call.context)
+
+    hass.services.async_register("switch", "turn_off", turn_off)
+    coordinator = _coordinator(hass)
+
+    first = await coordinator.async_handle_with_dialogue("关闭冰箱", "conversation-1")
+    confirmed = await coordinator.async_handle_with_dialogue("确认关闭受保护设备", "conversation-1")
+    replay = await coordinator.async_handle_with_dialogue("确认关闭受保护设备", "conversation-1")
+
+    assert first.speech == "检测到受保护设备。请回复“确认关闭受保护设备”进行二次确认。"
+    assert confirmed.speech == "已按二次确认完成受保护设备操作。"
+    assert replay.speech == "当前没有待确认的受保护设备关闭操作。"
+    assert hass.states.get("switch.fridge").state == "off"

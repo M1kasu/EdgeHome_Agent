@@ -5,18 +5,30 @@ from __future__ import annotations
 from .entity_resolver import ExposedEntityResolver
 from .errors import EdgeHomeError, PlanValidationError, PlanValidationIssue
 from .models import PlanStep, TaskPlan
+from .safety.plan_guard import PlanSafetyGuard
 from .tools.registry import ToolRegistry
 
 
 class PlanValidator:
     """Validate every tool, entity, argument, precondition, and verifier before execution."""
 
-    def __init__(self, tools: ToolRegistry, resolver: ExposedEntityResolver, max_steps: int = 12) -> None:
+    def __init__(
+        self,
+        tools: ToolRegistry,
+        resolver: ExposedEntityResolver,
+        max_steps: int = 12,
+        safety_guard: PlanSafetyGuard | None = None,
+    ) -> None:
         self._tools = tools
         self._resolver = resolver
         self._max_steps = max_steps
+        self.safety_guard = safety_guard or PlanSafetyGuard(resolver)
 
-    def validate(self, plan: TaskPlan) -> TaskPlan:
+    def validate(
+        self,
+        plan: TaskPlan,
+        authorized_protected_entities: frozenset[str] = frozenset(),
+    ) -> TaskPlan:
         """Return a normalized plan or raise all discovered validation issues."""
         issues: list[PlanValidationIssue] = []
         normalized_steps: list[PlanStep] = []
@@ -40,6 +52,7 @@ class PlanValidator:
             if normalized:
                 normalized_steps.append(normalized)
 
+        issues.extend(self.safety_guard.validate(plan, authorized_protected_entities))
         if issues:
             raise PlanValidationError(issues)
         return plan.model_copy(update={"steps": normalized_steps})
