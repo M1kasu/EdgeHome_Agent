@@ -1,6 +1,6 @@
 # 第 14 阶段最终质量报告
 
-执行日期：2026-07-12（Asia/Shanghai）  
+执行日期：2026-07-12（Asia/Shanghai）
 执行分支：`agent/phase14-competition-package`
 
 | 检查项 | 命令/方式 | 结果 |
