@@ -13,6 +13,7 @@ from ..entity import LocalLLMClient
 from .entity_resolver import EntityNameResolver
 from .execution.executor import FixedPlanExecutor
 from .execution.environment_guard import EnvironmentPlanGuard
+from .execution.replanner import FailureReplanner
 from .context.environment import EnvironmentContextBuilder
 from .context.store import DialogueStateStore
 from .energy.statistics import HomeAssistantEnergyStatistics
@@ -59,6 +60,7 @@ class EdgeHomeCoordinator:
         self._executor = executor or FixedPlanExecutor(hass, resolver=self._resolver)
         self._environment = EnvironmentContextBuilder(self._resolver)
         self._environment_guard = EnvironmentPlanGuard(self._executor.validator, self._resolver)
+        self._failure_replanner = FailureReplanner()
         self._away_reporter = AwaySecurityReporter()
         self._scenarios = ScenarioStateManager(hass, self._resolver)
         self._dialogue_store = DialogueStateStore(hass)
@@ -201,6 +203,27 @@ class EdgeHomeCoordinator:
         report = await self._executor.async_execute(planning.plan)
         if report.status == TaskStatus.SUCCESS:
             return FastPathResponse(handled=True, speech=f"已完成任务：{planning.plan.goal}。", completed_plan=planning.plan)
+        replan = self._failure_replanner.decide(text, planning.plan, report)
+        if replan.allowed and replan.prompt_goal is not None:
+            replacement = await planner.async_plan(
+                PlanningRequest(goal=replan.prompt_goal, agent_id=agent_id),
+                runtime_options,
+            )
+            if replacement.status == PlanningStatus.ACCEPTED and replacement.plan is not None:
+                replacement_guard = self._environment_guard.revalidate(
+                    replacement.plan,
+                    self._environment_guard.from_context(replacement.plan, replacement.context_entities),
+                )
+                replacement_protected = self._executor.validator.safety_guard.protected_shutdowns(replacement.plan)
+                if replacement_guard.accepted and not replacement_protected:
+                    replacement_report = await self._executor.async_execute(replacement.plan)
+                    if replacement_report.status == TaskStatus.SUCCESS:
+                        return FastPathResponse(
+                            handled=True,
+                            speech=f"已通过一次受限重规划完成任务：{replacement.plan.goal}。",
+                            completed_plan=replacement.plan,
+                        )
+                    report = replacement_report
         if scenario_name:
             await self._scenarios.async_clear(conversation_id, scenario_name)
         failure = report.step_results[-1] if report.step_results else None
