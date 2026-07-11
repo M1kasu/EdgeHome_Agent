@@ -10,6 +10,7 @@ import re
 from .energy.statistics import EnergyAnalyzer, HomeAssistantEnergyStatistics
 from .knowledge.associations import DeviceKnowledgeRetriever, DeviceManualRegistry
 from .knowledge.indexer import LocalKnowledgeIndex
+from .knowledge.service import KnowledgeService
 
 
 _KNOWLEDGE_QUERY = re.compile(
@@ -44,9 +45,11 @@ class ReadOnlyInformationHandler:
         manual_registry: DeviceManualRegistry,
         energy_statistics: HomeAssistantEnergyStatistics,
         clock: Callable[[], datetime] | None = None,
+        knowledge_service: KnowledgeService | None = None,
     ) -> None:
         self._knowledge_index = knowledge_index
         self._device_knowledge = DeviceKnowledgeRetriever(knowledge_index, manual_registry)
+        self._knowledge_service = knowledge_service
         self._energy_statistics = energy_statistics
         self._energy_analyzer = EnergyAnalyzer()
         self._clock = clock or _utc_now
@@ -63,7 +66,11 @@ class ReadOnlyInformationHandler:
         return None
 
     async def _async_answer_knowledge(self, request: _KnowledgeRequest) -> str:
-        if request.entity_id:
+        if self._knowledge_service is not None and request.entity_id:
+            result = await self._knowledge_service.query_device_manual(request.entity_id, request.query)
+        elif self._knowledge_service is not None:
+            result = await self._knowledge_service.search_knowledge(request.query)
+        elif request.entity_id:
             result = await self._device_knowledge.async_search(request.entity_id, request.query)
         else:
             result = await self._knowledge_index.async_search(request.query)

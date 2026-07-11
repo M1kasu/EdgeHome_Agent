@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..models import TaskPlan
+from ..energy.schemas import EnergyPlan, EnergyRecommendation
 
 
 class PendingClarification(BaseModel):
@@ -30,6 +31,15 @@ class PendingProtectedAction(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class PendingEnergyPlan(BaseModel):
+    """待确认的节能方案；未确认前绝不创建长期自动化。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan: EnergyPlan
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class DialogueState(BaseModel):
     """Persisted per-conversation memory used only by EdgeHome orchestration."""
 
@@ -41,6 +51,9 @@ class DialogueState(BaseModel):
     last_arguments: dict[str, Any] = Field(default_factory=dict)
     pending_clarification: PendingClarification | None = None
     pending_protected_action: PendingProtectedAction | None = None
+    last_energy_analysis_id: str | None = None
+    last_energy_recommendations: list[EnergyRecommendation] = Field(default_factory=list)
+    pending_energy_plan: PendingEnergyPlan | None = None
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc) + timedelta(hours=12))
 

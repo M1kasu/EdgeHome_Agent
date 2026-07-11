@@ -8,8 +8,9 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .dialogue_state import DialogueState, PendingClarification, PendingProtectedAction
+from .dialogue_state import DialogueState, PendingClarification, PendingEnergyPlan, PendingProtectedAction
 from ..models import TaskPlan
+from ..energy.schemas import EnergyPlan
 
 
 class DialogueStateStore:
@@ -111,6 +112,27 @@ class DialogueStateStore:
         pending = state.pending_protected_action
         await self.async_save(state.model_copy(update={"pending_protected_action": None}))
         return pending
+
+    async def async_set_energy_plan(self, conversation_id: str, plan: EnergyPlan) -> DialogueState:
+        """保存分析 ID 与待确认方案，使后续“第一条”有明确指向。"""
+        prior = await self.async_get(conversation_id)
+        state = prior or DialogueState(conversation_id=conversation_id)
+        return await self.async_save(
+            state.model_copy(
+                update={
+                    "last_energy_analysis_id": plan.analysis_id,
+                    "last_energy_recommendations": plan.recommendations,
+                    "pending_energy_plan": PendingEnergyPlan(plan=plan),
+                }
+            )
+        )
+
+    async def async_get_energy_plan(self, conversation_id: str) -> EnergyPlan | None:
+        state = await self.async_get(conversation_id)
+        return state.pending_energy_plan.plan if state and state.pending_energy_plan else None
+
+    async def async_update_energy_plan(self, conversation_id: str, plan: EnergyPlan) -> DialogueState:
+        return await self.async_set_energy_plan(conversation_id, plan)
 
     async def async_clear_expired(self) -> int:
         """Remove expired sessions and return the count for diagnostics."""

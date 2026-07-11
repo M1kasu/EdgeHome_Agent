@@ -66,5 +66,5 @@ class DeviceKnowledgeRetriever:
     async def async_search(self, entity_id: str, query: str) -> KnowledgeSearchResult:
         association = await self._registry.async_get(entity_id)
         if association is None:
-            return KnowledgeSearchResult(query=query)
+            return KnowledgeSearchResult(success=False, query=query, error_code="NO_DEVICE_ASSOCIATION")
         return await self._index.async_search(query, device_model=association.device_model)

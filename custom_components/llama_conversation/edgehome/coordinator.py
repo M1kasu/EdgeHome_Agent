@@ -18,10 +18,13 @@ from .execution.replanner import FailureReplanner
 from .context.environment import EnvironmentContextBuilder
 from .context.store import DialogueStateStore
 from .energy.statistics import HomeAssistantEnergyStatistics
+from .energy.conversation import EnergyConversationHandler
+from .energy.service import EnergyService
 from .models import EntitySnapshot, StepExecutionResult, TaskPlan, TaskStatus
 from .information import ReadOnlyInformationHandler
 from .knowledge.associations import DeviceManualRegistry
 from .knowledge.indexer import LocalKnowledgeIndex
+from .knowledge.service import KnowledgeService
 from .planner.llm_planner import LLMTaskPlanner, PlanningRequest, PlanningStatus
 from .planner.parser import StructuredPlanParser
 from .resource.monitor import ResourceMonitor
@@ -72,12 +75,16 @@ class EdgeHomeCoordinator:
         self._reference_resolver = ReferencePlanResolver(self._resolver)
         self._delayed_tasks = DelayedTaskManager(hass, self._executor)
         self._delayed_parser = ChineseDelayedCommandParser()
+        active_knowledge_index = knowledge_index or LocalKnowledgeIndex(hass)
         self._information = ReadOnlyInformationHandler(
-            knowledge_index or LocalKnowledgeIndex(hass),
+            active_knowledge_index,
             manual_registry or DeviceManualRegistry(hass),
             energy_statistics or HomeAssistantEnergyStatistics(hass),
             clock,
+            # 注入测试索引时保留第 8 阶段行为；生产默认载入受控本地资料。
+            knowledge_service=KnowledgeService(hass, active_knowledge_index, resolver=self._resolver) if knowledge_index is None else None,
         )
+        self._energy_conversation = EnergyConversationHandler(self._dialogue_store, EnergyService(hass))
 
     async def async_handle(self, text: str) -> FastPathResponse:
         """Handle ready plans; never retry a failed direct action through the legacy model path."""
@@ -122,6 +129,9 @@ class EdgeHomeCoordinator:
             return FastPathResponse(handled=True, speech="受保护设备操作未完成，已停止后续动作。")
 
         resumed_text = await self._async_resume_clarification(text, conversation_id)
+        energy_conversation = await self._energy_conversation.async_handle(resumed_text, conversation_id)
+        if energy_conversation is not None:
+            return FastPathResponse(handled=True, speech=energy_conversation)
         information = await self._information.async_handle(resumed_text)
         if information is not None:
             return FastPathResponse(handled=True, speech=information)
