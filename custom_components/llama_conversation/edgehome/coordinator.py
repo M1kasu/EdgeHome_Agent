@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import re
@@ -14,7 +15,11 @@ from .execution.executor import FixedPlanExecutor
 from .execution.environment_guard import EnvironmentPlanGuard
 from .context.environment import EnvironmentContextBuilder
 from .context.store import DialogueStateStore
+from .energy.statistics import HomeAssistantEnergyStatistics
 from .models import EntitySnapshot, StepExecutionResult, TaskPlan, TaskStatus
+from .information import ReadOnlyInformationHandler
+from .knowledge.associations import DeviceManualRegistry
+from .knowledge.indexer import LocalKnowledgeIndex
 from .planner.llm_planner import LLMTaskPlanner, PlanningRequest, PlanningStatus
 from .planner.parser import StructuredPlanParser
 from .router import ChineseFastRouter
@@ -44,6 +49,10 @@ class EdgeHomeCoordinator:
         hass: HomeAssistant,
         resolver: EntityNameResolver | None = None,
         executor: FixedPlanExecutor | None = None,
+        knowledge_index: LocalKnowledgeIndex | None = None,
+        manual_registry: DeviceManualRegistry | None = None,
+        energy_statistics: HomeAssistantEnergyStatistics | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._resolver = resolver or EntityNameResolver(hass)
         self._router = ChineseFastRouter(self._resolver)
@@ -56,6 +65,12 @@ class EdgeHomeCoordinator:
         self._reference_resolver = ReferencePlanResolver(self._resolver)
         self._delayed_tasks = DelayedTaskManager(hass, self._executor)
         self._delayed_parser = ChineseDelayedCommandParser()
+        self._information = ReadOnlyInformationHandler(
+            knowledge_index or LocalKnowledgeIndex(hass),
+            manual_registry or DeviceManualRegistry(hass),
+            energy_statistics or HomeAssistantEnergyStatistics(hass),
+            clock,
+        )
 
     async def async_handle(self, text: str) -> FastPathResponse:
         """Handle ready plans; never retry a failed direct action through the legacy model path."""
@@ -83,6 +98,10 @@ class EdgeHomeCoordinator:
     async def async_handle_with_dialogue(self, text: str, conversation_id: str) -> FastPathResponse:
         """Apply clarification, references, and delayed commands before normal fast-path routing."""
         resumed_text = await self._async_resume_clarification(text, conversation_id)
+        information = await self._information.async_handle(resumed_text)
+        if information is not None:
+            return FastPathResponse(handled=True, speech=information)
+
         state = await self._dialogue_store.async_get(conversation_id)
         if state:
             reference_plan = self._reference_resolver.resolve(resumed_text, state)

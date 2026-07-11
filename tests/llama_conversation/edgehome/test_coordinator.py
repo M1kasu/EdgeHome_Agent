@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from custom_components.llama_conversation.edgehome.coordinator import EdgeHomeCoordinator
+from custom_components.llama_conversation.edgehome.energy.statistics import HomeAssistantEnergyStatistics
 from custom_components.llama_conversation.edgehome.entity_resolver import EntityNameResolver
 from custom_components.llama_conversation.edgehome.execution.executor import FixedPlanExecutor
+from custom_components.llama_conversation.edgehome.knowledge.associations import DeviceManualAssociation, DeviceManualRegistry
+from custom_components.llama_conversation.edgehome.knowledge.indexer import KnowledgeDocument, LocalKnowledgeIndex
 from custom_components.llama_conversation.edgehome.models import PlanStep, TaskPlan, VerificationRule
 
 
@@ -151,3 +156,55 @@ async def test_coordinator_reports_away_risk_and_restores_movie_state(hass) -> N
     assert "打开门窗 前门" in report.speech
     assert restored.speech == "已恢复观影前状态。"
     assert hass.states.get("light.living").state == "off"
+
+
+@pytest.mark.asyncio
+async def test_coordinator_returns_only_local_manual_evidence_or_an_explicit_no_result(tmp_path, hass) -> None:
+    index = LocalKnowledgeIndex(hass, tmp_path / "knowledge.sqlite")
+    await index.async_upsert(
+        KnowledgeDocument(
+            id="vacuum-filter",
+            title="扫地机滤网说明",
+            content="清理滤网前请关闭设备并完全晾干。",
+            source="manual/vacuum.pdf#filter",
+            device_model="Vacuum V1",
+        )
+    )
+    registry = DeviceManualRegistry(hass)
+    await registry.async_associate(DeviceManualAssociation(entity_id="vacuum.demo", device_model="Vacuum V1"))
+    coordinator = EdgeHomeCoordinator(hass, knowledge_index=index, manual_registry=registry)
+
+    evidence = await coordinator.async_handle_with_dialogue("查询说明书 vacuum.demo 如何清理滤网", "conversation-1")
+    missing = await coordinator.async_handle_with_dialogue("查询说明书 vacuum.demo 不存在的问题", "conversation-1")
+
+    assert evidence.handled is True
+    assert evidence.speech == "依据《扫地机滤网说明》(manual/vacuum.pdf#filter)：清理滤网前请关闭设备并完全晾干。"
+    assert missing.speech == "本地资料未找到可引用内容，无法据此回答。"
+
+
+@pytest.mark.asyncio
+async def test_coordinator_reads_energy_statistics_without_controlling_devices(hass) -> None:
+    end = datetime(2026, 1, 1, 4, tzinfo=timezone.utc)
+
+    def reader(_hass, _start, _end, _statistic_ids):
+        return {
+            "sensor.energy": [
+                {"start": end - timedelta(hours=4), "sum": 0.0},
+                {"start": end - timedelta(hours=3), "sum": 1.0},
+                {"start": end - timedelta(hours=2), "sum": 2.0},
+                {"start": end - timedelta(hours=1), "sum": 6.0},
+            ]
+        }
+
+    coordinator = EdgeHomeCoordinator(
+        hass,
+        energy_statistics=HomeAssistantEnergyStatistics(hass, reader=reader),
+        clock=lambda: end,
+    )
+
+    result = await coordinator.async_handle_with_dialogue("分析 sensor.energy 最近4小时能耗", "conversation-1")
+
+    assert result.handled is True
+    assert result.speech is not None
+    assert result.speech.startswith("sensor.energy 最近 4 小时累计能耗 6.00 kWh。")
+    assert "请检查设备运行时段和待机负载。" in result.speech
