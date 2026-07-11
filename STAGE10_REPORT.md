@@ -14,7 +14,9 @@
     mypy: Success: no issues found in 45 source files
     docker compose config --quiet: passed
     scripts/benchmark_edgehome.py --iterations 10: passed
+    edgehome-agent 初始化容器: passed
+    Home Assistant 容器 HTTP 健康检查: 200
 
 ## 部署边界
 
-Compose 文件已做静态解析，Shell 脚本已做语法检查；本工作区未拉取容器镜像、未启动真实 Home Assistant 或 llama.cpp 服务，也未加载真实 GGUF 模型。部署者必须在目标 Linux Docker 主机填入本机模型路径，完成 Home Assistant 初始配置，并在上线前执行健康检查与真实设备验收。
+Compose 文件已做静态解析，Shell 脚本已做语法检查；本机已成功构建 EdgeHome 初始化镜像、启动 Home Assistant，并验证 HTTP 200。尚未加载真实 GGUF 模型，因此 llama.cpp 服务未启动。部署者必须填入本机模型路径，完成 Home Assistant 初始配置，并在上线前执行真实设备验收。
