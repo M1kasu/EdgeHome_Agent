@@ -23,6 +23,7 @@ from .knowledge.associations import DeviceManualRegistry
 from .knowledge.indexer import LocalKnowledgeIndex
 from .planner.llm_planner import LLMTaskPlanner, PlanningRequest, PlanningStatus
 from .planner.parser import StructuredPlanParser
+from .resource.monitor import ResourceMonitor
 from .router import ChineseFastRouter
 from .safety.away_report import AwaySecurityReporter
 from .scenarios.state import ScenarioStateManager
@@ -54,6 +55,7 @@ class EdgeHomeCoordinator:
         manual_registry: DeviceManualRegistry | None = None,
         energy_statistics: HomeAssistantEnergyStatistics | None = None,
         clock: Callable[[], datetime] | None = None,
+        resource_monitor: ResourceMonitor | None = None,
     ) -> None:
         self._resolver = resolver or EntityNameResolver(hass)
         self._router = ChineseFastRouter(self._resolver)
@@ -61,6 +63,7 @@ class EdgeHomeCoordinator:
         self._environment = EnvironmentContextBuilder(self._resolver)
         self._environment_guard = EnvironmentPlanGuard(self._executor.validator, self._resolver)
         self._failure_replanner = FailureReplanner()
+        self._resource_monitor = resource_monitor or ResourceMonitor()
         self._away_reporter = AwaySecurityReporter()
         self._scenarios = ScenarioStateManager(hass, self._resolver)
         self._dialogue_store = DialogueStateStore(hass)
@@ -178,7 +181,13 @@ class EdgeHomeCoordinator:
         """Plan and run a complex request only after the model result passes all fixed-plan gates."""
         if not planner.is_candidate(text):
             return FastPathResponse(handled=False)
-        planning = await planner.async_plan(PlanningRequest(goal=text, agent_id=agent_id), runtime_options)
+        lease = await self._resource_monitor.async_try_acquire("complex_planning")
+        if lease is None:
+            return FastPathResponse(handled=True, speech="当前端侧资源繁忙，已保留快速控制，请稍后重试复杂任务。")
+        try:
+            planning = await planner.async_plan(PlanningRequest(goal=text, agent_id=agent_id), runtime_options)
+        finally:
+            await self._resource_monitor.async_release(lease)
         if planning.status != PlanningStatus.ACCEPTED or planning.plan is None:
             return FastPathResponse(handled=False)
 
