@@ -51,8 +51,16 @@ class LightDevice:
         return f"edgehome/devices/{self.device_id}/availability"
 
     @property
+    def feedback_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/feedback"
+
+    @property
     def discovery_topic(self) -> str:
         return "homeassistant/light/edgehome_living_room_main/config"
+
+    @property
+    def feedback_discovery_topic(self) -> str:
+        return "homeassistant/sensor/edgehome_living_room_main_feedback/config"
 
 
 class DeviceSimulator:
@@ -105,6 +113,12 @@ class DeviceSimulator:
         self._publish_availability(device, record["online"])
         if record["online"]:
             self._publish_state(device, record["state"], record["last_command_id"])
+        self._publish_feedback(
+            device,
+            "offline" if not record["online"] else "fault_injected" if mode != "none" else "ok",
+            reason=f"fault_mode={mode}" if mode != "none" else None,
+            request_id=record["last_command_id"],
+        )
         return record
 
     def reset_device(self, device_id: str) -> dict[str, Any]:
@@ -112,6 +126,7 @@ class DeviceSimulator:
         record = self._store.reset_device(device_id, device.initial_state)
         self._publish_availability(device, True)
         self._publish_state(device, record["state"], None)
+        self._publish_feedback(device, "ok", request_id=None)
         return record
 
     def _on_connect(
@@ -146,6 +161,7 @@ class DeviceSimulator:
             self._handle_light_command(device, payload)
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
             self._store.append_event(device.device_id, "command_rejected", {"error": str(error)})
+            self._publish_feedback(device, "rejected", reason=f"invalid_command: {error}", request_id=None)
             _LOGGER.warning("Rejected command for %s: %s", device.device_id, error)
 
     def _handle_light_command(self, device: LightDevice, payload: dict[str, Any]) -> None:
@@ -154,6 +170,7 @@ class DeviceSimulator:
         self._store.append_event(device.device_id, "command_received", {"command_id": command_id, "payload": payload})
         if not record["online"]:
             self._store.append_event(device.device_id, "command_ignored_offline", {"command_id": command_id})
+            self._publish_feedback(device, "offline", reason="device_offline", request_id=command_id)
             return
 
         failure_mode = str(record["fault_mode"])
@@ -166,9 +183,11 @@ class DeviceSimulator:
                 "command_rejected",
                 {"command_id": command_id, "fault_mode": failure_mode},
             )
+            self._publish_feedback(device, "rejected", reason=f"fault_mode={failure_mode}", request_id=command_id)
             return
         if failure_mode == "random_failure" and random.random() < device.failure_rate:
             self._store.append_event(device.device_id, "command_rejected", {"command_id": command_id, "fault_mode": failure_mode})
+            self._publish_feedback(device, "rejected", reason="random_failure", request_id=command_id)
             return
         if failure_mode == "ack_without_state_change":
             self._store.append_event(
@@ -177,23 +196,30 @@ class DeviceSimulator:
                 {"command_id": command_id, "state": record["state"]},
             )
             self._publish_state(device, record["state"], command_id)
+            self._publish_feedback(device, "ack_without_state_change", reason="fault_mode=ack_without_state_change", request_id=command_id)
             return
         if failure_mode == "invalid_state":
             self._store.append_event(device.device_id, "invalid_state_published", {"command_id": command_id})
             self._publish_payload(device.state_topic, {"state": "BROKEN", "request_id": command_id})
+            self._publish_feedback(device, "invalid_state", reason="fault_mode=invalid_state", request_id=command_id)
             return
 
         new_state = _light_state(record["state"], payload)
         changed = self._store.update_state(device.device_id, new_state, command_id)
         self._publish_state(device, changed["state"], command_id)
+        self._publish_feedback(device, "ok", request_id=command_id)
 
     def _publish_discovery_and_states(self) -> None:
         for device in self._devices.values():
             record = self._require_record(device.device_id)
             self._publish_payload(device.discovery_topic, _light_discovery(device), retain=True)
+            self._publish_payload(device.feedback_discovery_topic, _feedback_discovery(device), retain=True)
             self._publish_availability(device, record["online"])
             if record["online"]:
                 self._publish_state(device, record["state"], record["last_command_id"])
+                self._publish_feedback(device, "ok", request_id=record["last_command_id"])
+            else:
+                self._publish_feedback(device, "offline", reason="device_offline", request_id=record["last_command_id"])
 
     def _publish_availability(self, device: LightDevice, online: bool) -> None:
         self._client.publish(device.availability_topic, "online" if online else "offline", qos=1, retain=True)
@@ -203,6 +229,22 @@ class DeviceSimulator:
         if request_id is not None:
             payload["request_id"] = request_id
         self._publish_payload(device.state_topic, payload, retain=True)
+
+    def _publish_feedback(
+        self,
+        device: LightDevice,
+        status: str,
+        *,
+        reason: str | None = None,
+        request_id: str | None,
+    ) -> None:
+        """Publish read-only protocol feedback; it never changes device-owned state."""
+        payload: dict[str, Any] = {"status": status, "updated_at": _timestamp()}
+        if reason is not None:
+            payload["reason"] = reason
+        if request_id is not None:
+            payload["request_id"] = request_id
+        self._publish_payload(device.feedback_topic, payload, retain=True)
 
     def _publish_payload(self, topic: str, payload: dict[str, Any], retain: bool = False) -> None:
         self._client.publish(topic, json.dumps(payload, ensure_ascii=False, separators=(",", ":")), qos=1, retain=retain)
@@ -231,6 +273,24 @@ def _light_discovery(device: LightDevice) -> dict[str, Any]:
         "payload_not_available": "offline",
         "brightness": True,
         "brightness_scale": 255,
+        "device": {
+            "identifiers": ["edgehome_device_simulator_living_room"],
+            "name": "EdgeHome 客厅设备组",
+            "manufacturer": "EdgeHome Simulator",
+            "model": "Docker MQTT Device Simulator",
+        },
+    }
+
+
+def _feedback_discovery(device: LightDevice) -> dict[str, Any]:
+    """Expose device protocol outcomes to HA without allowing the Agent to write them."""
+    return {
+        "name": f"{device.name} 协议反馈",
+        "unique_id": "edgehome_mqtt_living_room_main_feedback",
+        "default_entity_id": "sensor.edgehome_living_room_main_feedback",
+        "state_topic": device.feedback_topic,
+        "value_template": "{{ value_json.status }}",
+        "json_attributes_topic": device.feedback_topic,
         "device": {
             "identifiers": ["edgehome_device_simulator_living_room"],
             "name": "EdgeHome 客厅设备组",

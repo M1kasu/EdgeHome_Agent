@@ -6,6 +6,7 @@ import re
 
 from ..context.dialogue_state import DialogueState
 from ..entity_resolver import EntityNameResolver
+from ..light import brightness_verification
 from ..models import PlanStep, TaskPlan, VerificationRule
 
 
@@ -86,12 +87,7 @@ class ReferencePlanResolver:
         entity_id = state.last_entity_id
         if entity_id is None:
             return None
-        verify = VerificationRule(
-            entity_id=entity_id,
-            state="on",
-            attributes={"brightness": round(next_brightness * 255 / 100)},
-            tolerance=1.0,
-        )
+        verify = brightness_verification(entity_id, next_brightness)
         return TaskPlan(
             goal=text,
             scene="dialogue_reference",

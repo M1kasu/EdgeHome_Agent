@@ -105,6 +105,19 @@ class ExposedEntityResolver:
         """Return the explicit protected flag when a production registry is in use."""
         return bool(self._registry and self._registry.is_protected(entity_id))
 
+    def protocol_feedback(self, entity_id: str) -> tuple[str, str | None] | None:
+        """Read a registered device's non-controlling MQTT feedback sensor, if present."""
+        if self._registry is None:
+            return None
+        feedback_entity_id = self._registry.feedback_entity_for(entity_id)
+        if feedback_entity_id is None:
+            return None
+        feedback_state = self.hass.states.get(feedback_entity_id)
+        if feedback_state is None:
+            return None
+        reason = feedback_state.attributes.get("reason")
+        return feedback_state.state, reason if isinstance(reason, str) and reason else None
+
 
 class EntityNameResolver(ExposedEntityResolver):
     """Resolve a Chinese display name or configured alias to one exposed entity."""

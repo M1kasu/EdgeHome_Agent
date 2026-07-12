@@ -7,7 +7,7 @@ from time import perf_counter
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..benchmark.schemas import ResourceSnapshot
+from .snapshot import ResourceSnapshot
 
 
 class ResourceSchedulerConfig(BaseModel):

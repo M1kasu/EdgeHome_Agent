@@ -9,8 +9,9 @@ from .models import FastIntent, FastSlots
 
 _CHINESE_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 _CHINESE_UNITS = {"十": 10, "百": 100}
-_ARABIC_NUMBER = re.compile(r"(?<!\d)(\d{1,3}(?:\.\d+)?)(?:\s*(?:%|％|度|℃|摄氏度))?")
+_ARABIC_NUMBER = re.compile(r"(?<![\d.])([+-]?\d{1,3}(?:\.\d+)?)(?:\s*(?:%|％|度|℃|摄氏度))?")
 _CHINESE_NUMBER = re.compile(r"[零〇一二两三四五六七八九十百点]+")
+_BRIGHTNESS_FRACTION = re.compile(r"([零〇一二两三四五六七八九十\d]+)\s*成")
 
 
 class ChineseSlotExtractor:
@@ -35,6 +36,14 @@ class ChineseSlotExtractor:
     def _value_for_intent(self, text: str, intent: FastIntent) -> float | None:
         if intent not in {FastIntent.SET_BRIGHTNESS, FastIntent.SET_TEMPERATURE, FastIntent.CONTROL_CURTAIN}:
             return None
+        if intent == FastIntent.SET_BRIGHTNESS:
+            if "一半" in text:
+                return 50.0
+            fraction = _BRIGHTNESS_FRACTION.search(text)
+            if fraction is not None:
+                numerator = _parse_brightness_fraction(fraction.group(1))
+                if numerator is not None:
+                    return numerator * 10
         numbers = self._numbers(text)
         return numbers[-1] if numbers else None
 
@@ -96,3 +105,13 @@ def _parse_chinese_integer(value: str) -> int:
             total += (current if current is not None else 1) * unit
             current = None
     return total + (current or 0)
+
+
+def _parse_brightness_fraction(value: str) -> float | None:
+    """Parse a generic Chinese or Arabic number of tenths without tying it to a phrase."""
+    if value.isdigit():
+        return float(value)
+    try:
+        return float(_parse_chinese_integer(value))
+    except (KeyError, ValueError):
+        return None

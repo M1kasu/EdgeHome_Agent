@@ -8,6 +8,13 @@ from dataclasses import dataclass
 from .errors import EntityResolutionError
 
 
+_ROOM_ALIASES: dict[str, tuple[str, ...]] = {
+    "living_room": ("客厅", "大厅"),
+    "bedroom": ("卧室",),
+    "home": ("全屋", "家里"),
+}
+
+
 @dataclass(frozen=True, slots=True)
 class RegisteredEntity:
     """One device that EdgeHome may name, read, or control."""
@@ -18,6 +25,7 @@ class RegisteredEntity:
     device_type: str
     aliases: tuple[str, ...]
     protected: bool = False
+    feedback_entity_id: str | None = None
 
     @property
     def domain(self) -> str:
@@ -50,6 +58,11 @@ class EdgeHomeEntityRegistry:
         record = self.get(entity_id)
         return bool(record and record.protected)
 
+    def feedback_entity_for(self, entity_id: str) -> str | None:
+        """Return the optional read-only protocol-feedback entity for a device."""
+        record = self.get(entity_id)
+        return record.feedback_entity_id if record else None
+
     def resolve_query(self, query: str, allowed_domains: Container[str] | None = None) -> str:
         """Choose a unique longest alias match or return a stable clarification error."""
         normalized_query = _normalize(query)
@@ -60,7 +73,11 @@ class EdgeHomeEntityRegistry:
             for name in record.all_names():
                 normalized_name = _normalize(name)
                 if len(normalized_name) >= 2 and normalized_name in normalized_query:
-                    matches.append((len(normalized_name), record.entity_id))
+                    room_bonus = max(
+                        (len(_normalize(alias)) for alias in _ROOM_ALIASES.get(record.room, ()) if _normalize(alias) in normalized_query),
+                        default=0,
+                    )
+                    matches.append((len(normalized_name) + room_bonus, record.entity_id))
 
         if not matches:
             raise EntityResolutionError("entity_name_not_found", "未找到已注册的 EdgeHome 测试设备")
@@ -75,7 +92,14 @@ def build_demo_entity_registry() -> EdgeHomeEntityRegistry:
     """Return the only entities enabled during the virtual-device validation phase."""
     return EdgeHomeEntityRegistry(
         (
-            RegisteredEntity("客厅主灯", "light.edgehome_living_room_main", "living_room", "light", ("客厅灯", "大厅主灯", "主灯")),
+            RegisteredEntity(
+                "客厅主灯",
+                "light.edgehome_living_room_main",
+                "living_room",
+                "light",
+                ("客厅灯", "大厅主灯", "大厅灯", "客厅主照明", "客厅大灯", "大灯", "主灯"),
+                feedback_entity_id="sensor.edgehome_living_room_main_feedback",
+            ),
             RegisteredEntity("客厅氛围灯", "light.edgehome_living_room_ambient", "living_room", "light", ("氛围灯", "客厅灯带")),
             RegisteredEntity("客厅电视", "switch.edgehome_living_room_tv", "living_room", "switch", ("电视", "客厅 TV")),
             RegisteredEntity("客厅空调", "climate.edgehome_living_room_ac", "living_room", "climate", ("客厅 AC", "客厅冷气")),

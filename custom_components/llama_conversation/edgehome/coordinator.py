@@ -23,7 +23,7 @@ from .context.service import ConversationContextService
 from .energy.statistics import HomeAssistantEnergyStatistics
 from .energy.conversation import EnergyConversationHandler
 from .energy.service import EnergyService
-from .benchmark.input_guard import InputLengthGuard
+from .understanding.input_guard import InputLengthGuard
 from .models import EntitySnapshot, StepExecutionResult, TaskExecutionReport, TaskPlan, TaskStatus
 from .information import ReadOnlyInformationHandler
 from .knowledge.associations import DeviceManualRegistry
@@ -35,7 +35,7 @@ from .planner.parser import StructuredPlanParser
 from .planner.templates import SceneName, SceneTemplateLibrary
 from .resource.monitor import ResourceMonitor
 from .resource.scheduler import ResourceAwareScheduler
-from .benchmark.resource_monitor import SystemResourceMonitor
+from .resource.system_monitor import SystemResourceMonitor
 from .router import ChineseFastRouter
 from .safety.away_report import AwaySecurityReporter
 from .scenarios.state import ScenarioStateManager

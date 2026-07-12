@@ -112,6 +112,7 @@ class VerificationResult(BaseModel):
     passed: bool
     reason: str | None = None
     snapshot: EntitySnapshot | None = None
+    timed_out: bool = False
 
 
 class StepExecutionResult(BaseModel):

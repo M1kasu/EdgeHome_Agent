@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..entity_resolver import EntityNameResolver
 from ..errors import EdgeHomeError
 from ..execution.executor import FixedPlanExecutor
+from ..light import brightness_verification
 from ..models import PlanStep, TaskPlan, TaskStatus, VerificationRule
 from ..tasks.delayed import DelayedTaskManager
 
@@ -86,12 +87,11 @@ class EdgeHomeToolRuntime:
         )
 
     async def set_light_brightness(self, entity_id: str, brightness: int) -> ToolResult:
-        expected = round(brightness * 255 / 100)
         return await self._execute_entity_tool(
             "set_light_brightness",
             entity_id,
             {"brightness": brightness},
-            VerificationRule(entity_id=entity_id, state="on", attributes={"brightness": expected}, tolerance=2.0),
+            brightness_verification(entity_id, brightness, tolerance=2.0),
             f"{entity_id} 亮度已设置为 {brightness}%",
         )
 

@@ -9,7 +9,7 @@
 |里程碑|状态|说明|
 |---|---|---|
 |M0 硬编码/虚假完成/根因审计|READY_FOR_EXTERNAL_ACCEPTANCE|本次报告已生成；发现阻断项，尚未进行业务代码整改。|
-|M1 MQTT 主灯|IMPLEMENTED_NOT_VERIFIED|已有独立模拟器闭环，但缺少隐藏表达、重启矩阵、全部故障和证据链的外部黑盒验收。|
+|M1 MQTT 主灯|READY_FOR_EXTERNAL_ACCEPTANCE|31 条正式 API 黑盒用例通过；已保存 MQTT、SQLite、HA、会话和重启证据，等待独立外部验收。|
 |M1.5 结构化会话记忆|IMPLEMENTED_NOT_VERIFIED|SQLite 与部分引用已实现；M0 已复现历史查询和显式相对亮度失败。|
 |M2 MQTT 窗帘|NOT_STARTED|不得使用现有模板窗帘作为最终来源。|
 |M3 MQTT 空调|NOT_STARTED|不得使用 Generic Thermostat/Helper 作为最终来源。|

@@ -29,7 +29,7 @@
 
 ## 反规避要求
 
-整改后增加 `scripts/audit_hardcoding.py`，至少检查以下规则并在命中时以非零退出：
+已在 M1 新增并运行 `scripts/audit_hardcoding.py`。它在 `reports/acceptance/m1_mqtt_light/hardcoding_audit.json` 中输出了 0 个 error 与 6 个待整改 warning；至少检查以下规则并在命中时以非零退出：
 
 - 生产目录中出现验收输入的完整句子或与其高度相似的长中文文本分支；
 - 生产模块导入 `tests`、`benchmark`、`acceptance`、`fixtures` 或 `expected_results`；
