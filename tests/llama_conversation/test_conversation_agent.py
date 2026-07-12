@@ -141,7 +141,7 @@ async def test_async_process_uses_opt_in_edgehome_fast_path_before_model(monkeyp
     )
     entry = DummyEntry(subentry=subentry, runtime_data=client)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = entry
-    hass.states.async_set("light.living", "off", {"friendly_name": "客厅灯"})
+    hass.states.async_set("light.edgehome_living_room_main", "off", {"friendly_name": "客厅灯"})
 
     async def turn_on(call):
         hass.states.async_set(call.data["entity_id"], "on", context=call.context)
@@ -166,7 +166,7 @@ async def test_async_process_uses_opt_in_edgehome_fast_path_before_model(monkeyp
     )
 
     assert result.response.speech["plain"]["speech"] == "已打开客厅灯。"
-    assert hass.states.get("light.living").state == "on"
+    assert hass.states.get("light.edgehome_living_room_main").state == "on"
     assert client.generated_prompts == []
     assert client.seen_conversations == []
 
@@ -215,7 +215,7 @@ async def test_async_process_executes_valid_complex_edgehome_plan_before_legacy_
     class PlanningClient(DummyClient):
         async def _generate(self, _messages, _llm_api, _agent_id, _options):
             return TextGenerationResult(
-                response='{"goal":"打开客厅灯然后关闭卧室灯","steps":[{"id":"one","tool":"turn_on_device","arguments":{"entity_id":"light.living"},"verify":{"entity_id":"light.living","state":"on"}},{"id":"two","tool":"turn_off_device","arguments":{"entity_id":"switch.bedroom"},"verify":{"entity_id":"switch.bedroom","state":"off"}}]}'
+                response='{"goal":"打开客厅灯然后关闭测试插座","steps":[{"id":"one","tool":"turn_on_device","arguments":{"entity_id":"light.edgehome_living_room_main"},"verify":{"entity_id":"light.edgehome_living_room_main","state":"on"}},{"id":"two","tool":"turn_off_device","arguments":{"entity_id":"switch.edgehome_test_socket"},"verify":{"entity_id":"switch.edgehome_test_socket","state":"off"}}]}'
             )
 
     client = PlanningClient(hass)
@@ -229,8 +229,8 @@ async def test_async_process_executes_valid_complex_edgehome_plan_before_legacy_
     )
     entry = DummyEntry(subentry=subentry, runtime_data=client)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = entry
-    hass.states.async_set("light.living", "off", {"friendly_name": "客厅灯"})
-    hass.states.async_set("switch.bedroom", "on", {"friendly_name": "卧室灯"})
+    hass.states.async_set("light.edgehome_living_room_main", "off", {"friendly_name": "客厅灯"})
+    hass.states.async_set("switch.edgehome_test_socket", "on", {"friendly_name": "测试插座"})
 
     async def turn_on(call):
         hass.states.async_set(call.data["entity_id"], "on", context=call.context)
@@ -248,7 +248,7 @@ async def test_async_process_executes_valid_complex_edgehome_plan_before_legacy_
     agent = LocalLLMAgent(hass, entry, subentry, client)
     result = await agent.async_process(
         ConversationInput(
-            text="打开客厅灯然后关闭卧室灯",
+                text="打开客厅灯然后关闭测试插座",
             context=None,
             conversation_id="conv-id",
             device_id=None,
@@ -258,9 +258,9 @@ async def test_async_process_executes_valid_complex_edgehome_plan_before_legacy_
         )
     )
 
-    assert result.response.speech["plain"]["speech"] == "已完成任务：打开客厅灯然后关闭卧室灯。"
-    assert hass.states.get("light.living").state == "on"
-    assert hass.states.get("switch.bedroom").state == "off"
+    assert result.response.speech["plain"]["speech"] == "已完成任务：打开客厅灯然后关闭测试插座。"
+    assert hass.states.get("light.edgehome_living_room_main").state == "on"
+    assert hass.states.get("switch.edgehome_test_socket").state == "off"
     assert client.generated_prompts == []
 
 

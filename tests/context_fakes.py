@@ -38,3 +38,12 @@ class FakeResolver:
         return SimpleNamespace(
             snapshot=EntitySnapshot(entity_id="light.bedroom", domain="light", state="off", attributes={})
         )
+
+    def snapshot(self, entity_id: str):
+        return EntitySnapshot(
+            entity_id=entity_id,
+            domain=entity_id.split(".", maxsplit=1)[0],
+            state="on",
+            attributes={"brightness": self.hass.states.get(entity_id).attributes["brightness"]},
+            friendly_name="客厅主灯",
+        )

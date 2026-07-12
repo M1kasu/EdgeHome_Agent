@@ -59,6 +59,9 @@ class ConversationContextService:
                     "last_device_type": entity_id.split(".", maxsplit=1)[0] if entity_id else None,
                     "last_action": step.tool,
                     "last_parameters": _safe_mapping(step.arguments),
+                    "last_successful_action": step.tool,
+                    "last_requested_parameters": _safe_mapping(step.arguments),
+                    "last_actual_state": _safe_mapping(result.actual),
                 }
             )
         return await self._store.async_save(state.model_copy(update=updates))

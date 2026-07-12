@@ -73,6 +73,9 @@ def test_failed_action_appends_audit_but_preserves_last_success(tmp_path) -> Non
         assert state is not None
         assert state.last_entity_id == "light.living"
         assert state.last_parameters["brightness"] == 50
+        assert state.last_successful_action == "set_light_brightness"
+        assert state.last_requested_parameters["brightness"] == 50
+        assert state.last_actual_state["brightness"] == 128
         assert state.recent_results[-1].success is False
 
     asyncio.run(exercise())

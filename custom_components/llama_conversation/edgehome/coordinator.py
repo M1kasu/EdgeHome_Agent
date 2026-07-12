@@ -152,7 +152,13 @@ class EdgeHomeCoordinator:
         assistant_id: str | None = None,
     ) -> FastPathResponse:
         """Apply clarification, references, and delayed commands before normal fast-path routing."""
-        context_identity = {"user_id": user_id, "assistant_id": assistant_id}
+        # Omit absent identity fields so optional integration hooks keep their
+        # two-argument compatibility, while authenticated calls remain scoped.
+        context_identity = {
+            key: value
+            for key, value in {"user_id": user_id, "assistant_id": assistant_id}.items()
+            if value is not None
+        }
         if not self._input_guard.accepts(text):
             return FastPathResponse(handled=True, speech="输入为空或超过 EdgeHome 允许长度，已拒绝处理。")
         if text.strip() == "确认关闭受保护设备":
@@ -193,7 +199,11 @@ class EdgeHomeCoordinator:
         if isinstance(resumed, FastPathResponse):
             return resumed
         resumed_text = resumed
-        energy_conversation = await self._energy_conversation.async_handle(resumed_text, conversation_id)
+        energy_conversation = await self._energy_conversation.async_handle(
+            resumed_text,
+            conversation_id,
+            **context_identity,
+        )
         if energy_conversation is not None:
             return FastPathResponse(handled=True, speech=energy_conversation, trace_route="energy_analysis")
         information = await self._information.async_handle(resumed_text)
@@ -201,7 +211,7 @@ class EdgeHomeCoordinator:
             return FastPathResponse(handled=True, speech=information, trace_route="local_information")
 
         state = await self._dialogue_store.async_get(conversation_id, **context_identity)
-        if state is None and _requires_prior_context(resumed_text):
+        if state is None and self._reference_resolver.requires_prior_context(resumed_text):
             question = "\u8bf7\u8bf4\u660e\u8981\u64cd\u4f5c\u54ea\u4e2a\u8bbe\u5907\u3002"
             await self._dialogue_store.async_set_clarification(
                 conversation_id,
@@ -213,6 +223,9 @@ class EdgeHomeCoordinator:
             )
             return FastPathResponse(handled=True, speech=question, trace_route="clarification")
         if state:
+            query_speech = self._reference_resolver.query_speech(resumed_text, state)
+            if query_speech is not None:
+                return FastPathResponse(handled=True, speech=query_speech, trace_route="dialogue_query")
             reference_plan = self._reference_resolver.resolve(resumed_text, state)
             if reference_plan:
                 report = await self._executor.async_execute(reference_plan)
@@ -251,7 +264,7 @@ class EdgeHomeCoordinator:
         if environment is not None:
             return environment
 
-        delayed = await self._async_handle_delayed(resumed_text, conversation_id)
+        delayed = await self._async_handle_delayed(resumed_text, conversation_id, **context_identity)
         if delayed is not None:
             return delayed
 
@@ -295,8 +308,6 @@ class EdgeHomeCoordinator:
                 result.execution_report,
                 **context_identity,
             )
-        elif result.handled and result.decision and result.decision.status == FastRouteStatus.CLARIFICATION:
-            await self._dialogue_store.async_set_clarification(conversation_id, resumed_text, result.speech or "请补充必要信息")
         if result.handled and result.decision and result.decision.status == FastRouteStatus.CLARIFICATION:
             await self._dialogue_store.async_set_clarification(
                 conversation_id,
@@ -363,11 +374,6 @@ class EdgeHomeCoordinator:
         request = PlanningRequest(goal=text, agent_id=agent_id)
         if scheduling.decision == "template_fallback":
             planning = await planner.async_template_fallback(request, scheduling.reason)
-            if planning.status != PlanningStatus.ACCEPTED or planning.plan is None:
-                return FastPathResponse(
-                    handled=True,
-                    speech="端侧资源或模型不可用，且当前请求没有可用的安全场景模板。",
-                )
             return await self._async_execute_complex_plan(
                 text,
                 conversation_id,
@@ -420,6 +426,8 @@ class EdgeHomeCoordinator:
                 conversation_id,
                 text,
                 planning.plan.clarification_question or "请补充完成该场景所需的信息。",
+                user_id=user_id,
+                assistant_id=agent_id,
             )
             return FastPathResponse(handled=True, speech=planning.plan.clarification_question)
 
@@ -595,6 +603,7 @@ class EdgeHomeCoordinator:
             "complex_replanning": "受限重规划",
             "protected_confirmation": "受保护设备二次确认",
             "dialogue_reference": "多轮引用操作",
+            "dialogue_query": "多轮状态查询",
             "deterministic_leaving_scene": "确定性离家保护",
             "energy_analysis": "本地能耗分析",
             "local_information": "本地资料检索",
@@ -738,7 +747,14 @@ class EdgeHomeCoordinator:
             trace_route="deterministic_leaving_scene",
         )
 
-    async def _async_handle_delayed(self, text: str, conversation_id: str) -> FastPathResponse | None:
+    async def _async_handle_delayed(
+        self,
+        text: str,
+        conversation_id: str,
+        *,
+        user_id: str | None = None,
+        assistant_id: str | None = None,
+    ) -> FastPathResponse | None:
         if text in {"查询延时任务", "查看延时任务", "查询定时任务", "查看定时任务"}:
             tasks = await self._delayed_tasks.async_list(conversation_id)
             pending = [task for task in tasks if task.status.value == "pending"]
@@ -763,7 +779,13 @@ class EdgeHomeCoordinator:
         decision = self._router.route(request.command)
         if decision.status != FastRouteStatus.READY or decision.plan is None:
             if decision.status == FastRouteStatus.CLARIFICATION:
-                await self._dialogue_store.async_set_clarification(conversation_id, request.command, "请补充延时任务中的设备或参数")
+                await self._dialogue_store.async_set_clarification(
+                    conversation_id,
+                    request.command,
+                    "请补充延时任务中的设备或参数",
+                    user_id=user_id,
+                    assistant_id=assistant_id,
+                )
                 return FastPathResponse(handled=True, speech="请补充延时任务中的设备或参数。")
             return None
         task = await self._delayed_tasks.async_create(
@@ -803,21 +825,6 @@ class EdgeHomeCoordinator:
         failure = results[-1] if results else None
         reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
         return f"未能完成对{entity_name}的操作：{reason}。"
-
-
-def _requires_prior_context(text: str) -> bool:
-    """Recognize references that are unsafe when a session has no verified target."""
-    phrases = (
-        "\u5b83",
-        "\u8fd9\u4e2a",
-        "\u90a3\u4e2a",
-        "\u521a\u624d\u7684",
-        "\u518d\u4eae\u4e00\u70b9",
-        "\u518d\u6697\u4e00\u70b9",
-        "\u5173\u6389\u5427",
-        "\u4e5f\u4e00\u6837",
-    )
-    return any(phrase in text for phrase in phrases)
 
 
 def _state_speech(snapshot: EntitySnapshot) -> str:

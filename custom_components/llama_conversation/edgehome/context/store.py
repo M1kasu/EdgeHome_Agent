@@ -61,7 +61,7 @@ class ConversationStateStore:
         configured_path = os.getenv("EDGEHOME_CONTEXT_DB_PATH")
         default_path = Path(hass.config.path("edgehome_context.db"))
         self._database_path = Path(database_path or configured_path or default_path)
-        self._ttl = ttl
+        self._ttl = _configured_ttl(ttl)
         self._lock = asyncio.Lock()
         self._initialized = False
 
@@ -315,6 +315,20 @@ class ConversationStateStore:
             user_id=session.user_id,
             assistant_id=session.assistant_id,
         )
+
+
+def _configured_ttl(default: timedelta) -> timedelta:
+    """Allow deployment configuration to shorten TTL for controlled acceptance runs."""
+    raw = os.getenv("EDGEHOME_CONTEXT_TTL_SECONDS")
+    if raw is None:
+        return default
+    try:
+        seconds = int(raw)
+    except ValueError as error:
+        raise ValueError("EDGEHOME_CONTEXT_TTL_SECONDS must be an integer") from error
+    if not 1 <= seconds <= 24 * 60 * 60:
+        raise ValueError("EDGEHOME_CONTEXT_TTL_SECONDS must be between 1 and 86400")
+    return timedelta(seconds=seconds)
 
 
 # Kept for external integrations that imported the pre-M1.5 class name.

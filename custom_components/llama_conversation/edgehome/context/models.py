@@ -76,6 +76,9 @@ class ConversationState(BaseModel):
     last_device_type: str | None = Field(default=None, max_length=64)
     last_action: str | None = Field(default=None, max_length=96)
     last_parameters: dict[str, Any] = Field(default_factory=dict)
+    last_successful_action: str | None = Field(default=None, max_length=96)
+    last_requested_parameters: dict[str, Any] = Field(default_factory=dict)
+    last_actual_state: dict[str, Any] = Field(default_factory=dict)
     current_goal: str | None = Field(default=None, max_length=300)
     pending_clarification: PendingClarification | None = None
     pending_plan: TaskPlan | None = None

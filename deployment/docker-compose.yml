@@ -53,6 +53,8 @@ services:
       TZ: ${TZ}
       # M1.5：结构化会话状态持久化到宿主机 runtime，容器重启后可恢复。
       EDGEHOME_CONTEXT_DB_PATH: /runtime/edgehome_context.db
+      # 默认 30 分钟；验收可通过环境变量临时缩短，不改变会话核心逻辑。
+      EDGEHOME_CONTEXT_TTL_SECONDS: ${EDGEHOME_CONTEXT_TTL_SECONDS:-1800}
     volumes:
       - ./homeassistant:/config
       - ./runtime:/runtime
