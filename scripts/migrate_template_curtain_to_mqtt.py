@@ -41,16 +41,25 @@ def migrate(config_dir: Path, *, dry_run: bool = False) -> dict[str, Any]:
     matching = [record for record in records if isinstance(record, dict) and record.get("entity_id") == ENTITY_ID]
     if any(record.get("platform") not in {"template", "mqtt"} for record in matching):
         raise ValueError("curtain entity id is owned by an unrelated platform")
+    template_records = [record for record in matching if record.get("platform") == "template"]
+    mqtt_records = [record for record in matching if record.get("platform") == "mqtt"]
 
-    summary = {"entity_id": ENTITY_ID, "template_blocks_removed": len(template_document) - len(retained), "registry_records_removed": len(matching)}
+    summary = {
+        "entity_id": ENTITY_ID,
+        "template_blocks_removed": len(template_document) - len(retained),
+        "registry_records_removed": len(template_records),
+        "action": "already_migrated" if mqtt_records and retained == template_document and not template_records else "migrate",
+    }
     if dry_run:
+        return summary
+    if summary["action"] == "already_migrated":
         return summary
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     for path in (template_path, registry_path):
         path.with_name(f"{path.name}.edgehome-curtain-backup-{stamp}").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     template_path.write_text(yaml.safe_dump(retained, allow_unicode=True, sort_keys=False), encoding="utf-8", newline="\n")
-    registry_document["data"]["entities"] = [record for record in records if record not in matching]
+    registry_document["data"]["entities"] = [record for record in records if record not in template_records]
     registry_path.write_text(json.dumps(registry_document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     return summary
 

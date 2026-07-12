@@ -10,6 +10,7 @@ import logging
 import os
 from pathlib import Path
 import random
+import signal
 import threading
 import time
 from typing import Any
@@ -144,7 +145,47 @@ class ClimateDevice:
         return "homeassistant/sensor/edgehome_living_room_ac_feedback/config"
 
 
-SimulatedDevice = LightDevice | CurtainDevice | ClimateDevice
+@dataclass(frozen=True, slots=True)
+class SwitchDevice:
+    """A switchable MQTT appliance with device-owned instantaneous power."""
+
+    device_id: str
+    name: str
+    room: str
+    initial_state: dict[str, Any]
+    command_delay_ms: int
+    failure_rate: float
+
+    @property
+    def command_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/command"
+
+    @property
+    def state_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/state"
+
+    @property
+    def availability_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/availability"
+
+    @property
+    def feedback_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/feedback"
+
+    @property
+    def discovery_topic(self) -> str:
+        return "homeassistant/switch/edgehome_living_room_tv/config"
+
+    @property
+    def feedback_discovery_topic(self) -> str:
+        return "homeassistant/sensor/edgehome_living_room_tv_feedback/config"
+
+    @property
+    def power_discovery_topic(self) -> str:
+        return "homeassistant/sensor/edgehome_living_room_tv_power/config"
+
+
+SimulatedDevice = LightDevice | CurtainDevice | ClimateDevice | SwitchDevice
 
 
 class DeviceSimulator:
@@ -163,6 +204,8 @@ class DeviceSimulator:
         first_device = next(iter(devices.values()))
         self._client.will_set(first_device.availability_topic, "offline", qos=1, retain=True)
         self._server: ThreadingHTTPServer | None = None
+        self._availability_announced_offline = False
+        self._shutdown_requested = False
 
         for device in devices.values():
             self._store.ensure_device(device.device_id, device.initial_state)
@@ -173,13 +216,47 @@ class DeviceSimulator:
         threading.Thread(target=self._server.serve_forever, name="simulator-admin", daemon=True).start()
         _LOGGER.info("Admin API listening on %s:%s", admin_host, admin_port)
         self._client.connect_async(self._mqtt_host, self._mqtt_port, keepalive=30)
-        self._client.loop_forever(retry_first_connection=True)
+        # Docker Compose sends SIGTERM on `stop`. MQTT only supports one Last
+        # Will topic, so explicitly publish every device offline before exit.
+        # 这样 HA 不会把仍保留的在线状态误判为可控设备。
+        self._install_shutdown_handlers()
+        try:
+            self._client.loop_forever(retry_first_connection=True)
+        finally:
+            self._announce_all_offline()
 
     def stop(self) -> None:
+        self._announce_all_offline()
         if self._server is not None:
             self._server.shutdown()
             self._server.server_close()
         self._client.disconnect()
+
+    def _install_shutdown_handlers(self) -> None:
+        """Publish all availability topics before Docker terminates the process."""
+        def handle_shutdown(_signum: int, _frame: Any) -> None:
+            if self._shutdown_requested:
+                return
+            self._shutdown_requested = True
+            self._announce_all_offline()
+            if self._server is not None:
+                self._server.shutdown()
+                self._server.server_close()
+            # The handler runs inside Paho's network-loop thread.  Give that
+            # loop one short turn to flush retained offline messages before a
+            # different thread disconnects the client.
+            threading.Timer(0.25, self._client.disconnect).start()
+
+        signal.signal(signal.SIGTERM, handle_shutdown)
+        signal.signal(signal.SIGINT, handle_shutdown)
+
+    def _announce_all_offline(self) -> None:
+        if self._availability_announced_offline:
+            return
+        self._availability_announced_offline = True
+        for device in self._devices.values():
+            self._client.publish(device.availability_topic, "offline", qos=1, retain=True)
+        _LOGGER.info("Published retained offline availability for %d simulated devices", len(self._devices))
 
     def device_records(self) -> list[dict[str, Any]]:
         return [self._require_record(device_id) for device_id in self._devices]
@@ -225,6 +302,7 @@ class DeviceSimulator:
             _LOGGER.error("MQTT connection failed: %s", reason_code)
             return
         _LOGGER.info("Connected to MQTT broker at %s:%s", self._mqtt_host, self._mqtt_port)
+        self._availability_announced_offline = False
         self._client.subscribe(_HA_BIRTH_TOPIC, qos=1)
         for device in self._devices.values():
             self._client.subscribe(device.command_topic, qos=1)
@@ -260,8 +338,10 @@ class DeviceSimulator:
                 self._handle_light_command(device, payload)
             elif isinstance(device, CurtainDevice):
                 self._handle_curtain_command(device, raw, message.topic)
-            else:
+            elif isinstance(device, ClimateDevice):
                 self._handle_climate_command(device, raw, message.topic)
+            else:
+                self._handle_switch_command(device, raw)
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
             self._store.append_event(device.device_id, "command_rejected", {"error": str(error)})
             self._publish_feedback(device, "rejected", reason=f"invalid_command: {error}", request_id=None)
@@ -397,6 +477,36 @@ class DeviceSimulator:
         self._publish_state(device, changed["state"], command_id)
         self._publish_feedback(device, "ok", request_id=command_id)
 
+    def _handle_switch_command(self, device: SwitchDevice, raw: str) -> None:
+        record = self._require_record(device.device_id)
+        command_id = f"req-{uuid4().hex}"
+        self._store.append_event(device.device_id, "command_received", {"command_id": command_id, "raw": raw})
+        if not record["online"]:
+            self._publish_feedback(device, "offline", reason="device_offline", request_id=command_id)
+            return
+        mode = str(record["fault_mode"])
+        delay_ms = _command_delay(device, record)
+        if delay_ms:
+            time.sleep(delay_ms / 1000)
+        if mode in {"reject", "random_failure"}:
+            self._publish_feedback(device, "rejected", reason=f"fault_mode={mode}", request_id=command_id)
+            return
+        if mode == "ack_without_state_change":
+            self._publish_state(device, record["state"], command_id)
+            self._publish_feedback(device, "ack_without_state_change", reason="fault_mode=ack_without_state_change", request_id=command_id)
+            return
+        if mode == "invalid_state":
+            self._publish_payload(device.state_topic, {"state": "BROKEN", "power_w": "invalid"}, retain=True)
+            self._publish_feedback(device, "invalid_state", reason="fault_mode=invalid_state", request_id=command_id)
+            return
+        requested = raw.upper()
+        if requested not in {"ON", "OFF"}:
+            raise ValueError("switch command must be ON or OFF")
+        state = {"power": requested, "power_w": 95.0 if requested == "ON" else 1.5}
+        changed = self._store.update_state(device.device_id, state, command_id)
+        self._publish_state(device, changed["state"], command_id)
+        self._publish_feedback(device, "ok", request_id=command_id)
+
     def _publish_discovery_and_states(self) -> None:
         for device in self._devices.values():
             record = self._require_record(device.device_id)
@@ -406,9 +516,13 @@ class DeviceSimulator:
                 else _curtain_discovery(device)
                 if isinstance(device, CurtainDevice)
                 else _climate_discovery(device)
+                if isinstance(device, ClimateDevice)
+                else _switch_discovery(device)
             )
             self._publish_payload(device.discovery_topic, discovery, retain=True)
             self._publish_payload(device.feedback_discovery_topic, _feedback_discovery(device), retain=True)
+            if isinstance(device, SwitchDevice):
+                self._publish_payload(device.power_discovery_topic, _power_discovery(device), retain=True)
             self._publish_availability(device, record["online"])
             if record["online"]:
                 self._publish_state(device, record["state"], record["last_command_id"])
@@ -430,8 +544,10 @@ class DeviceSimulator:
             elif mqtt_status == "stuck":
                 mqtt_status = "stopped"
             payload = {**normalized, "status": mqtt_status, "updated_at": _timestamp()}
-        else:
+        elif isinstance(device, ClimateDevice):
             payload = {**_climate_state(state), "updated_at": _timestamp()}
+        else:
+            payload = {"state": _switch_state(state)["power"], "power_w": _switch_state(state)["power_w"], "updated_at": _timestamp()}
         if request_id is not None:
             payload["request_id"] = request_id
         self._publish_payload(device.state_topic, payload, retain=True)
@@ -496,6 +612,8 @@ def _feedback_discovery(device: SimulatedDevice) -> dict[str, Any]:
         else "living_room_curtain"
         if isinstance(device, CurtainDevice)
         else "living_room_ac"
+        if isinstance(device, ClimateDevice)
+        else "living_room_tv"
     )
     return {
         "name": f"{device.name} 协议反馈",
@@ -575,6 +693,41 @@ def _climate_discovery(device: ClimateDevice) -> dict[str, Any]:
     }
 
 
+def _switch_discovery(device: SwitchDevice) -> dict[str, Any]:
+    return {
+        "name": device.name,
+        "unique_id": "edgehome_mqtt_living_room_tv",
+        "default_entity_id": "switch.edgehome_living_room_tv",
+        "command_topic": device.command_topic,
+        "state_topic": device.state_topic,
+        "value_template": "{{ value_json.state }}",
+        "payload_on": "ON",
+        "payload_off": "OFF",
+        "availability_topic": device.availability_topic,
+        "payload_available": "online",
+        "payload_not_available": "offline",
+        "json_attributes_topic": device.state_topic,
+        "device": {"identifiers": ["edgehome_device_simulator_living_room"], "name": "EdgeHome 客厅设备组", "manufacturer": "EdgeHome Simulator", "model": "Docker MQTT Device Simulator"},
+    }
+
+
+def _power_discovery(device: SwitchDevice) -> dict[str, Any]:
+    return {
+        "name": f"{device.name} 功耗",
+        "unique_id": "edgehome_mqtt_living_room_tv_power",
+        "default_entity_id": "sensor.edgehome_living_room_tv_power",
+        "state_topic": device.state_topic,
+        "value_template": "{{ value_json.power_w }}",
+        "unit_of_measurement": "W",
+        "device_class": "power",
+        "state_class": "measurement",
+        "availability_topic": device.availability_topic,
+        "payload_available": "online",
+        "payload_not_available": "offline",
+        "device": {"identifiers": ["edgehome_device_simulator_living_room"], "name": "EdgeHome 客厅设备组", "manufacturer": "EdgeHome Simulator", "model": "Docker MQTT Device Simulator"},
+    }
+
+
 def _light_state(previous: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     state = {"power": str(previous.get("power", "OFF")).upper(), "brightness": int(previous.get("brightness", 0))}
     if "state" in payload:
@@ -614,6 +767,14 @@ def _climate_state(value: dict[str, Any]) -> dict[str, Any]:
     return {"mode": mode, "temperature": temperature, "current_temperature": current}
 
 
+def _switch_state(value: dict[str, Any]) -> dict[str, Any]:
+    power = str(value.get("power", "OFF")).upper()
+    watts = float(value.get("power_w", 1.5 if power == "OFF" else 95.0))
+    if power not in {"ON", "OFF"} or not 0 <= watts <= 5000:
+        raise ValueError("invalid switch state")
+    return {"power": power, "power_w": watts}
+
+
 def _curtain_target(raw: str, is_position_command: bool) -> int:
     if is_position_command:
         target = int(raw)
@@ -651,8 +812,8 @@ def _load_devices(path: Path) -> dict[str, SimulatedDevice]:
         raise ValueError("devices.yaml must contain a devices mapping")
     devices: dict[str, SimulatedDevice] = {}
     for device_id, raw in loaded["devices"].items():
-        if not isinstance(device_id, str) or not isinstance(raw, dict) or raw.get("type") not in {"light", "curtain", "climate"}:
-            raise ValueError("device type must be light, curtain, or climate")
+        if not isinstance(device_id, str) or not isinstance(raw, dict) or raw.get("type") not in {"light", "curtain", "climate", "switch"}:
+            raise ValueError("device type must be light, curtain, climate, or switch")
         initial_state = raw.get("initial_state")
         behavior = raw.get("behavior", {})
         if not isinstance(initial_state, dict) or not isinstance(behavior, dict):
@@ -666,9 +827,12 @@ def _load_devices(path: Path) -> dict[str, SimulatedDevice]:
         elif raw["type"] == "curtain":
             state = _curtain_state(initial_state)
             devices[device_id] = CurtainDevice(device_id, str(raw.get("name", device_id)), str(raw.get("room", "home")), state, int(behavior.get("command_delay_ms", 0)), float(behavior.get("failure_rate", 0)), int(behavior.get("move_duration_ms", 800)))
-        else:
+        elif raw["type"] == "climate":
             state = _climate_state(initial_state)
             devices[device_id] = ClimateDevice(device_id, str(raw.get("name", device_id)), str(raw.get("room", "home")), state, int(behavior.get("command_delay_ms", 0)), float(behavior.get("failure_rate", 0)))
+        else:
+            state = _switch_state(initial_state)
+            devices[device_id] = SwitchDevice(device_id, str(raw.get("name", device_id)), str(raw.get("room", "home")), state, int(behavior.get("command_delay_ms", 0)), float(behavior.get("failure_rate", 0)))
     return devices
 
 

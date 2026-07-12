@@ -34,3 +34,13 @@ devices:
     behavior:
       command_delay_ms: 200
       failure_rate: 0
+  living_room_tv:
+    type: switch
+    name: 客厅电视
+    room: living_room
+    initial_state:
+      power: "OFF"
+      power_w: 1.5
+    behavior:
+      command_delay_ms: 150
+      failure_rate: 0

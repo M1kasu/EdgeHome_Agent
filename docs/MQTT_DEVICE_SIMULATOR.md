@@ -1,8 +1,15 @@
-# MQTT 独立设备仿真（M1）
+# MQTT 独立设备仿真（M1–M4）
 
 ## 范围与真实性边界
 
-M1 只迁移 `light.edgehome_living_room_main`（客厅主灯）。它不是 Home Assistant Helper，也不是物理家电；它是一个运行在 Docker 中、带 MQTT 协议、独立 SQLite 状态和故障行为的数字设备仿真器。
+M1–M4 迁移的实体不是 Home Assistant Helper，也不是物理家电；它们是运行在 Docker 中、带 MQTT 协议、独立 SQLite 状态和故障行为的数字设备仿真器。
+
+| 里程碑 | MQTT 实体 | 设备标识 | 独立状态 |
+| --- | --- | --- | --- |
+| M1 | `light.edgehome_living_room_main` | `living_room_main_light` | 电源、亮度 |
+| M2 | `cover.edgehome_living_room_curtain` | `living_room_curtain` | 位置、目标位置、移动状态 |
+| M3 | `climate.edgehome_living_room_ac` | `living_room_ac` | 模式、目标温度、当前温度 |
+| M4 | `switch.edgehome_living_room_tv` | `living_room_tv` | 电源、瞬时功耗 |
 
 其正常控制路径固定为：
 
@@ -19,7 +26,7 @@ Agent 没有设备管理 API 权限，也不会直接写入模拟器数据库。
 - `device-simulator`：Python 容器，监听本机 `127.0.0.1:8090`；状态位于 `deployment/runtime/device-simulator/device_state.db`。
 - `home-assistant`：通过 MQTT 配置条目连接 `mqtt`，由 retained Discovery 消息创建同名灯实体。
 
-首次迁移时，`scripts/migrate_template_light_to_mqtt.py` 仅在 Home Assistant 停止时删除旧模板灯的注册记录。Discovery 使用 `default_entity_id` 保持 `light.edgehome_living_room_main` 不变。
+首次迁移时，`scripts/migrate_template_light_to_mqtt.py`、`scripts/migrate_template_curtain_to_mqtt.py`、`scripts/migrate_generic_thermostat_to_mqtt.py` 与 `scripts/migrate_template_tv_to_mqtt.py` 仅在 Home Assistant 停止时删除对应旧实体的归属。Discovery 使用 `default_entity_id` 保持实体 ID 不变；迁移脚本重复执行会报告 `already_migrated`，不会删除现有 MQTT 注册记录。
 
 ## 启动与配置
 
@@ -33,14 +40,14 @@ python scripts/configure_mqtt_integration.py --url http://127.0.0.1:8123 --broke
 
 ## MQTT 主题与状态
 
-设备标识为 `living_room_main_light`：
+每台设备都使用 `edgehome/devices/{device_id}` 命名空间。例如电视为 `living_room_tv`：
 
-- command：`edgehome/devices/living_room_main_light/command`
-- state：`edgehome/devices/living_room_main_light/state`
-- availability：`edgehome/devices/living_room_main_light/availability`
-- discovery：`homeassistant/light/edgehome_living_room_main/config`
+- command：`edgehome/devices/living_room_tv/command`
+- state：`edgehome/devices/living_room_tv/state`
+- availability：`edgehome/devices/living_room_tv/availability`
+- discovery：`homeassistant/switch/edgehome_living_room_tv/config`
 
-Discovery 与状态消息均为 retained 消息。设备也监听 `homeassistant/status`，当 Home Assistant 上线时重新发布 Discovery、availability 与当前状态。
+Discovery 与状态消息均为 retained 消息。设备也监听 `homeassistant/status`，当 Home Assistant 上线时重新发布 Discovery、availability 与当前状态。容器收到 `SIGTERM` 时会为**所有**模拟设备发布 retained `offline` availability；重新启动后再从 SQLite 恢复并发布状态。
 
 ## 故障注入与验收
 

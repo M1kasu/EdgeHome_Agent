@@ -33,7 +33,15 @@ def call(method: str, url: str, body: dict | None = None, auth: bool = False) ->
 def main() -> int:
     REPORT.mkdir(parents=True, exist_ok=True)
     results = []
-    for test_id, mode, expected_success in (("set_25", "none", True), ("reject", "reject", False), ("ack_without_change", "ack_without_state_change", False), ("delay", "delay", False), ("offline", "offline", False)):
+    cases = (
+        ("set_25", "none", True),
+        ("reject", "reject", False),
+        ("ack_without_change", "ack_without_state_change", False),
+        ("invalid_state", "invalid_state", False),
+        ("delay", "delay", False),
+        ("offline", "offline", False),
+    )
+    for test_id, mode, expected_success in cases:
         call("POST", f"{SIM}/admin/devices/{DEVICE}/reset", {})
         call("POST", f"{SIM}/admin/devices/{DEVICE}/fault", {"mode": mode, "delay_ms": 0})
         response = call("POST", f"{HA}/api/conversation/process", {"text": "把客厅空调调到25度", "language": "zh-Hans", "agent_id": AGENT, "conversation_id": f"m3-{uuid4().hex}"}, True)
@@ -56,8 +64,8 @@ def main() -> int:
     (REPORT / "results.jsonl").write_text("".join(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in results), encoding="utf-8")
     passed = sum(item["passed"] for item in results)
     (REPORT / "summary.md").write_text(f"# M3 MQTT 空调验收\n\n- 用例：{len(results)}\n- 通过：{passed}\n- 失败：{len(results)-passed}\n", encoding="utf-8")
-    print(f"M3 climate: {passed}/5")
-    return 0 if passed == 5 else 1
+    print(f"M3 climate: {passed}/{len(cases)}")
+    return 0 if passed == len(cases) else 1
 
 
 if __name__ == "__main__":

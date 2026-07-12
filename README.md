@@ -10,7 +10,9 @@ EdgeHome Agent 是一个运行在本机 Docker 环境中的 Home Assistant 边�
 | --- | --- | --- |
 | M1：MQTT 客厅主灯 | 待外部黑盒验收 | 已完成 Agent → HA → MQTT → 独立模拟器 → 状态回读闭环。 |
 | M1.5：结构化会话记忆 | `READY_FOR_EXTERNAL_CONTEXT_ACCEPTANCE` | SQLite 持久化、30 分钟 TTL、会话隔离、失败不污染上下文和重启恢复已验证。 |
-| M2：MQTT 窗帘 | 未开始 | 仅在 M1/M1.5 外部验收后启动。 |
+| M2：MQTT 窗帘 | 待外部黑盒验收 | 支持位置、移动过程、卡住、拒绝、延迟、离线与 SQLite 状态恢复。 |
+| M3：MQTT 空调 | 待外部黑盒验收 | 支持 16–30°C 目标温度、状态回读、6 项故障矩阵和三容器恢复。 |
+| M4：MQTT 客厅电视 | 待外部黑盒验收 | 支持开关、95 W／1.5 W 功耗回读、5 类故障和三容器恢复。 |
 | 物理设备接入 | 未声明 | 当前仅使用 Docker 数字设备仿真器。 |
 
 > PR #12 保持 Draft，M1 尚未合并；请勿把脚本通过或仓库中的模拟实体表述为物理设备验收通过。
@@ -78,6 +80,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify_context
 
 # 加入仅重启 Home Assistant 后的 SQLite 恢复验证
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify_context_memory.ps1 -RestartHomeAssistant
+
+# M2–M4 正式 MQTT 黑盒验收（要求当前终端已设置 HA_TOKEN）
+python .\scripts\accept_m2_mqtt_curtain.py
+python .\scripts\accept_m3_mqtt_climate.py
+python .\scripts\verify_m3_climate_restart_matrix.py
+python .\scripts\accept_m4_mqtt_tv.py
 ```
 
 普通 Assist 对话会自动回传 `conversation_id`。开发者工具或一次性 REST 请求若未回传上一轮 ID，会被安全地视为新会话，并要求澄清设备，绝不会使用全局“上一设备”猜测。
@@ -87,7 +95,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify_context
 | 路径 | 内容 |
 | --- | --- |
 | `custom_components/llama_conversation/edgehome/` | EdgeHome 决策、校验、执行、安全、知识、能耗与会话记忆代码。 |
-| `device_simulator/` | MQTT 数字设备模拟器；目前包含客厅主灯。 |
+| `device_simulator/` | MQTT 数字设备模拟器；包含客厅主灯、窗帘、空调与电视，状态由 SQLite 独立维护。 |
 | `deployment/` | Docker Compose、Mosquitto 配置、Home Assistant 运行配置模板。 |
 | `scripts/` | 启动、重置、健康检查、MQTT 配置和端到端验证脚本。 |
 | `tests/` | 单元测试与会话状态、隔离、过期、失败恢复测试。 |
@@ -98,6 +106,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify_context
 ## 关键文档
 
 - [M1 MQTT 独立设备仿真](docs/MQTT_DEVICE_SIMULATOR.md)
+- [M2 窗帘验收](reports/M2_CURTAIN_ACCEPTANCE.md)
+- [M3 空调验收](reports/M3_CLIMATE_ACCEPTANCE.md)
+- [M4 电视与功耗验收](reports/M4_TV_ACCEPTANCE.md)
 - [M1.5 会话记忆设计](docs/EdgeHome%20Dialogue%20State.md)
 - [会话链路审计](reports/CONTEXT_MEMORY_AUDIT.md)
 - [M1.5 实施说明](reports/CONTEXT_MEMORY_IMPLEMENTATION.md)
