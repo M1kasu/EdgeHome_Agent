@@ -1,30 +1,12 @@
-# EdgeHome Agent
+# EdgeHome Agent：历史入口
 
-EdgeHome 是基于 acon96/home-llm 的增量 Home Assistant 自定义组件扩展。它保留原有 Conversation、模型后端和工具调用能力，并增加中文快速路径、受控复杂规划、多轮状态、环境快照、本地知识检索、能耗分析、安全确认、失败重规划与端侧资源调度。
+项目主入口已统一到根目录 [README](README.md)。
 
-快速开始请阅读 docs/deployment.md；架构和安全边界见 docs/architecture.md 与 docs/safety_design.md。
+请从以下文档开始：
 
-第 12 阶段新增离线 FTS5 本地知识库、合成能耗分析、可确认的 EdgeHome Demo 节能自动化和多轮方案选择。详见 docs/KNOWLEDGE_BASE_DESIGN.md、docs/ENERGY_ANALYSIS_DESIGN.md、docs/ENERGY_AUTOMATION_SAFETY.md 与 docs/PHASE12_USER_GUIDE.md。
+- [部署与启动](docs/deployment.md)
+- [MQTT 独立设备仿真（M1）](docs/MQTT_DEVICE_SIMULATOR.md)
+- [结构化会话状态（M1.5）](docs/EdgeHome%20Dialogue%20State.md)
+- [报告与验收证据](reports/README.md)
 
-第 13 阶段新增端侧请求指标、资源感知调度、版本控制工作负载、真实 llama.cpp 配置对比、并发/断网/稳定性采样及 SVG 图表。详见 docs/BENCHMARK_METHODOLOGY.md 与 docs/PHASE13_USER_GUIDE.md。
-
-## 比赛材料与演示入口
-
-第 14 阶段的可提交材料、视频脚本、答辩大纲、问答、现场流程、应急预案及可复核图表位于 `competition_submission/`。所有数字先经过 `reports/FINAL_EVIDENCE_AUDIT.md` 审计；复杂规划失败归因见 `reports/SCHEMA_FAILURE_ANALYSIS.md`。
-
-Windows 演示常用命令：
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_demo.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\healthcheck.ps1
-# 设置仅当前会话有效的 HA_TOKEN 后，才可调用本地重置服务：
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\reset_demo.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_demo_tests.ps1 -SmokeOnly
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\generate_submission_figures.ps1
-```
-
-对应 POSIX shell 脚本使用同名 `.sh` 文件。重置脚本不会写入 Token；演示不得把 CPU/Q4 结果说成 GPU/NPU 或把 Schema 合法率说成设备执行成功率。
-
-## MQTT 设备仿真（M1）
-
-客厅主灯已迁移为 Docker 与 MQTT 驱动的独立设备仿真器：Agent 只能调用 Home Assistant 服务，设备容器才是状态唯一来源。它支持持久化状态、命令延迟、离线和“确认但不改状态”故障，用于验证真实的跨进程反馈闭环。部署和验收说明见 `docs/MQTT_DEVICE_SIMULATOR.md`；不要把该环境表述为连接了物理家电。
+本文件保留为旧链接兼容入口，不再维护重复的项目说明。

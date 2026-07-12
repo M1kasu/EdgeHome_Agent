@@ -13,6 +13,9 @@ notes.txt
 runpod_bootstrap.sh
 *.code-workspace
 .coverage
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 .vscode/
 .python-version
 deployment/.env

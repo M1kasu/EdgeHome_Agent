@@ -1,165 +1,115 @@
-# Home LLM
+# EdgeHome Agent
 
-Control your Home Assistant smart home with a **completely local** Large Language Model. No cloud services and no subscriptions needed. Just privacy-focused AI running entirely on your own hardware.
+EdgeHome Agent 是一个运行在本机 Docker 环境中的 Home Assistant 边缘智能项目。它以本地量化大模型为对话入口，以 Home Assistant 为唯一控制边界，并用 MQTT 驱动独立设备仿真器，验证“理解 → 决策 → 执行 → 状态回读”的闭环。
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?category=Integration&repository=home-llm&owner=acon96)
+项目基于 [acon96/home-llm](https://github.com/acon96/home-llm) 扩展；本仓库新增的 EdgeHome 模块聚焦中文家庭控制、安全约束、端侧部署、可观测执行链路和独立 MQTT 设备仿真。
 
-## What is Home LLM?
+## 当前状态
 
-Home LLM is a complete solution for adding AI-powered voice and chat control to Home Assistant. It consists of two parts:
+| 模块 | 状态 | 说明 |
+| --- | --- | --- |
+| M1：MQTT 客厅主灯 | 待外部黑盒验收 | 已完成 Agent → HA → MQTT → 独立模拟器 → 状态回读闭环。 |
+| M1.5：结构化会话记忆 | `READY_FOR_EXTERNAL_CONTEXT_ACCEPTANCE` | SQLite 持久化、30 分钟 TTL、会话隔离、失败不污染上下文和重启恢复已验证。 |
+| M2：MQTT 窗帘 | 未开始 | 仅在 M1/M1.5 外部验收后启动。 |
+| 物理设备接入 | 未声明 | 当前仅使用 Docker 数字设备仿真器。 |
 
-1. **Local LLM Integration** – A Home Assistant custom component that connects local language models to your smart home
-2. **Home Models** – Small, efficient AI models fine-tuned specifically for smart home control
+> PR #12 保持 Draft，M1 尚未合并；请勿把脚本通过或仓库中的模拟实体表述为物理设备验收通过。
 
-### Key Features
+## 架构
 
-- 🏠 **Fully Local** – Everything runs on your hardware. Your data never leaves your control (unless you want to!)
-- 🗣️ **Voice & Chat Control** – Use as a conversation agent with voice assistants or chat interfaces
-- 🤖 **AI Task Automation** – Generate dynamic content and structured data for automations
-- 🌍 **Multi-Language Support** – Built-in support for English, German, French, Spanish, and Polish (better translations are welcome!)
-- ⚡ **Runs on Low-Power Devices** – Models work on Raspberry Pi and other modest hardware -- no GPU required!
-- 🔌 **Flexible Backends** – Run models locally as part of Home Assistant **or** connect to external model providers
+```mermaid
+flowchart LR
+    U["Assist / 语音 / REST"] --> HA["Home Assistant\nConversation Agent"]
+    HA --> CTX["M1.5 会话状态\nSQLite / 30 分钟 TTL"]
+    HA --> EH["EdgeHome 固定计划\n校验与安全规则"]
+    EH --> SVC["Home Assistant 服务"]
+    SVC --> MQTT["Mosquitto MQTT"]
+    MQTT --> SIM["device-simulator\n独立进程 + SQLite"]
+    SIM --> MQTT
+    MQTT --> HA
+    HA --> EH
+```
 
-## Quick Start
+控制成功的标准不是服务调用返回，而是 Home Assistant 回读到由 MQTT 模拟器上报的目标状态。任何验证失败都会报告失败，不写入“最近成功操作”。
 
-See the [Setup Guide](./docs/Setup.md) for detailed installation instructions.
+## 快速开始（Windows + Docker Desktop）
 
-**Requirements:** Home Assistant 2026.5.0 or newer
+1. 准备模型与配置。
 
----
+```powershell
+Copy-Item .\deployment\.env.example .\deployment\.env
+```
 
-## Local LLM Integration
+编辑 `deployment/.env`，至少设置本机 GGUF 模型的 `MODEL_PATH`。不要把 Home Assistant 长期访问令牌写入 `.env` 或提交到 Git。
 
-The integration connects language models to Home Assistant, enabling them to understand your requests and control your smart devices.
+2. 启动服务。
 
-### Supported Backends
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_demo.ps1
+```
 
-Choose how and where you want to run your models:
+打开 `http://127.0.0.1:8123` 完成 Home Assistant 初始化，并在 Local LLM 集成中使用：
 
-| Backend                                                                                             | Best For                                                                      |
-| --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| **Llama.cpp** (built-in)                                                                            | Running models directly in Home Assistant                                     |
-| **[Ollama](https://ollama.com/)**                                                                   | Easy setup on a separate GPU machine                                          |
-| **[Generic OpenAI API](https://platform.openai.com/docs/api-reference/conversations/create)**       | LM Studio, LocalAI, vLLM, and other OpenAI-compatible servers                 |
-| **[llama.cpp server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server)**              | Heterogeneous (non-uniform) GPU compute setups, including CPU + GPU inference |
-| **[OpenAI 'Responses' Style API](https://platform.openai.com/docs/api-reference/responses/create)** | Cloud services supporting the 'responses' style API                           |
-| **[Anthropic 'Messages' Style API](https://platform.claude.com/docs/en/api/messages)**              | Cloud services supporting the 'messages' style API                            |
-| **[text-generation-webui](https://github.com/oobabooga/text-generation-webui)**                     | Advanced users with existing setups                                           |
+```text
+http://llama-server:8080/v1
+```
 
-> NOTE: When utilizing **external** APIs or model providers, your data will be transmitted over the internet and shared with the respective service providers. Ensure you understand the privacy implications of using these third-party services, since they will be able to see the status of all exposed entities in your Home Assistant instance, which can potentially include your current location.
+3. 完成 MQTT 集成后，设置仅当前终端有效的令牌并运行检查。
 
-### Supported Device Types
+```powershell
+$env:HA_TOKEN = '<本机长期访问令牌>'
+python .\scripts\configure_mqtt_integration.py --url http://127.0.0.1:8123 --broker mqtt --port 1883
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\healthcheck.ps1
+```
 
-The integration can control: **lights, switches, fans, covers, locks, climate, media players, vacuums, buttons, timers, todo lists, and scripts**
+详细部署步骤见 [部署说明](docs/deployment.md) 与 [MQTT 设备仿真说明](docs/MQTT_DEVICE_SIMULATOR.md)。
 
-### Using the Integration
+## 演示与验证
 
-**As a Conversation Agent:**
-- Chat with your assistant through the Home Assistant UI
-- Connect to voice pipelines with Speech-to-Text and Text-to-Speech
-- Supports voice streaming for faster responses
+```powershell
+# 重置虚拟家庭和独立 MQTT 主灯
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\reset_demo.ps1
 
-**As an AI Task Handler:**
-- Create automations that use AI to process data and generate structured responses
-- Perfect for dynamic content generation, data extraction, and intelligent decision making
-- See [AI Tasks documentation](./docs/AI%20Tasks.md) for examples
+# M1 闭环基础验证：成功控制 + ack_without_state_change
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify_mqtt_light.ps1
 
----
+# M1.5 正式 Assist 入口验证：50% → 再暗一点 → 关掉吧 → 会话隔离
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify_context_memory.ps1
 
-## Home LLM Models
+# 加入仅重启 Home Assistant 后的 SQLite 恢复验证
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify_context_memory.ps1 -RestartHomeAssistant
+```
 
-The "Home" models are small language models (under 5B parameters) fine-tuned specifically for smart home control. They understand natural language commands and translate them into Home Assistant service calls.
+普通 Assist 对话会自动回传 `conversation_id`。开发者工具或一次性 REST 请求若未回传上一轮 ID，会被安全地视为新会话，并要求澄清设备，绝不会使用全局“上一设备”猜测。
 
-### Latest Models
+## 仓库导航
 
-| Model Family  | Size | Link                                                                                    |
-| ------------- | ---- | --------------------------------------------------------------------------------------- |
-| **Llama 3.2** | 3B   | [acon96/Home-Llama-3.2-3B](https://huggingface.co/acon96/Home-Llama-3.2-3B)             |
-| **Gemma**     | 270M | [acon96/Home-FunctionGemma-270m](https://huggingface.co/acon96/Home-FunctionGemma-270m) |
+| 路径 | 内容 |
+| --- | --- |
+| `custom_components/llama_conversation/edgehome/` | EdgeHome 决策、校验、执行、安全、知识、能耗与会话记忆代码。 |
+| `device_simulator/` | MQTT 数字设备模拟器；目前包含客厅主灯。 |
+| `deployment/` | Docker Compose、Mosquitto 配置、Home Assistant 运行配置模板。 |
+| `scripts/` | 启动、重置、健康检查、MQTT 配置和端到端验证脚本。 |
+| `tests/` | 单元测试与会话状态、隔离、过期、失败恢复测试。 |
+| `docs/` | 技术设计、部署、性能与用户指南；见 [文档索引](docs/README.md)。 |
+| `reports/` | 代码审计、执行证据与验收边界；见 [报告索引](reports/README.md)。 |
+| `competition_submission/` | 比赛材料、演示脚本、图表和可复核数据。 |
 
-<details>
-<summary>Previous Model Versions</summary>
+## 关键文档
 
-**Stable Models:**
-- 3B v3 (StableLM-Zephyr-3B): [acon96/Home-3B-v3-GGUF](https://huggingface.co/acon96/Home-3B-v3-GGUF)
-- 1B v3 (TinyLlama-1.1B): [acon96/Home-1B-v3-GGUF](https://huggingface.co/acon96/Home-1B-v3-GGUF)
-- 3B v2 (Phi-2): [acon96/Home-3B-v2-GGUF](https://huggingface.co/acon96/Home-3B-v2-GGUF)
-- 1B v2 (Phi-1.5): [acon96/Home-1B-v2-GGUF](https://huggingface.co/acon96/Home-1B-v2-GGUF)
-- 1B v1 (Phi-1.5): [acon96/Home-1B-v1-GGUF](https://huggingface.co/acon96/Home-1B-v1-GGUF)
+- [M1 MQTT 独立设备仿真](docs/MQTT_DEVICE_SIMULATOR.md)
+- [M1.5 会话记忆设计](docs/EdgeHome%20Dialogue%20State.md)
+- [会话链路审计](reports/CONTEXT_MEMORY_AUDIT.md)
+- [M1.5 实施说明](reports/CONTEXT_MEMORY_IMPLEMENTATION.md)
+- [M1.5 真实执行记录](reports/CONTEXT_MEMORY_REAL_EXECUTION.md)
+- [M1.5 未验证边界](reports/CONTEXT_MEMORY_UNVERIFIED.md)
+- [比赛材料入口](competition_submission/01_作品简介.md)
 
-**Multilingual Experiments:**
-- German, French, & Spanish (3B): [acon96/stablehome-multilingual-experimental](https://huggingface.co/acon96/stablehome-multilingual-experimental)
-- Polish (1B): [acon96/tinyhome-polish-experimental](https://huggingface.co/acon96/tinyhome-polish-experimental)
+## 安全与仓库边界
 
-> **Note:** Models v1 (3B) and earlier are only compatible with integration version 0.2.17 and older.
+- 不提交 `deployment/.env`、`deployment/homeassistant/`、`deployment/runtime/`、本地模型和数据库；
+- 不提交 Home Assistant Token、密码、API Key、浏览器会话或账户数据；
+- 可提交的真实验证材料只包含不含凭据的请求文本、会话 ID、设备状态、执行结果和脱敏日志；
+- 受保护设备、计划校验与执行回读不能因演示或性能测试被绕过。
 
-</details>
-
-### Using Other Models
-
-Don't have dedicated hardware? You can use any instruction-tuned model with **in-context learning (ICL)**. The integration provides examples that teach general-purpose models (like Qwen3, Llama 3, Mistral) how to control your smart home. See the [Setup Guide](./docs/Setup.md) for configuration details.
-
-### Training Your Own
-
-The fine-tuning dataset and training scripts are included in this repository:
-- **Dataset:** [Home-Assistant-Requests-V2](https://huggingface.co/datasets/acon96/Home-Assistant-Requests-V2) on HuggingFace
-- **Source:** [data/](./data) directory
-- **Training:** See [train/README.md](./train/README.md)
-
----
-
-## Documentation
-
-- [Setup Guide](./docs/Setup.md) – Installation and configuration
-- [Backend Configuration](./docs/Backend%20Configuration.md) – Detailed backend options
-- [Model Prompting](./docs/Model%20Prompting.md) – Customize system prompts
-- [AI Tasks](./docs/AI%20Tasks.md) – Using AI in automations
-
----
-
-## Version History
-
-| Version    | Highlights                                                                                                                                                                                                                                                                                                          |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **v0.4.10** | Bug fixes and manual parsing improvements for tool calls and thinking blocks                                                                                                                                                                                                                                       |
-| **v0.4.9**  | Relax dependency requirements to avoid conflicting with internal HA lib versions                                                                                                                                                                                                                                   |
-| **v0.4.8**  | OpenAI backends rewritten using the official openai Python library for better reliability and compatibility. New "Use server sampling defaults" to let your backend set the sampling parameters. More robust tool call parsing with auto-repair for malformed JSON, ability to disable streaming for all backends. |
-| **v0.4.7**  | Bug fixes, update default llama_cpp_python version to support new models, and support python 3.14 for new Home Assistant versions                                                                                                                                                                                  |
-| **v0.4.6**  | Anthropic API support, on-disk caching for Llama.cpp, new tool calling dataset                                                                                                                                                                                                                                     |
-| **v0.4.5**  | AI Task entities, multiple LLM APIs at once, official Ollama package                                                                                                                                                                                                                                               |
-| **v0.4**    | Tool calling rewrite, voice streaming, agentic tool use loop, multiple configs per backend                                                                                                                                                                                                                         |
-| **v0.3**    | Home Assistant LLM API support, improved prompting, HuggingFace GGUF auto-detection                                                                                                                                                                                                                                |
-
-<details>
-<summary>Full Version History</summary>
-
-| Version | Description                                                                                                                                                                                                                                                                                                        |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| v0.4.10 | Bug fixes and manual parsing improvements for tool calls and thinking blocks                                                                                                                                                                                                                                       |
-| v0.4.9  | Relax dependency requirements to avoid conflicting with internal HA lib versions                                                                                                                                                                                                                                   |
-| v0.4.8  | OpenAI backends rewritten using the official openai Python library for better reliability and compatibility. New "Use server sampling defaults" to let your backend set the sampling parameters. More robust tool call parsing with auto-repair for malformed JSON, ability to disable streaming for all backends. |
-| v0.4.7  | Bug fixes, update default llama_cpp_python version to support new models, and support python 3.14 for new Home Assistant versions                                                                                                                                                                                  |
-| v0.4.6  | New dataset supporting proper tool calling, Add Anthropic "messages" style API support, Add on-disk caching for Llama.cpp backend                                                                                                                                                                                  |
-| v0.4.5  | Add support for AI Task entities, Replace custom Ollama API implementation with the official `ollama-python` package, Support multiple LLM APIs at once                                                                                                                                                            |
-| v0.4.4  | Fix issue with OpenAI backends appending `/v1` to all URLs                                                                                                                                                                                                                                                         |
-| v0.4.3  | Fix model config creation during setup                                                                                                                                                                                                                                                                             |
-| v0.4.2  | Fix default model settings, numeric config fields, finish_reason handling                                                                                                                                                                                                                                          |
-| v0.4.1  | Fix Llama.cpp models downloaded from HuggingFace                                                                                                                                                                                                                                                                   |
-| v0.4    | Rewrite for tool calling models, agentic tool use loop, voice streaming, multiple config sub-entries                                                                                                                                                                                                               |
-| v0.3.11 | Bug-fixes and llama.cpp version update                                                                                                                                                                                                                                                                             |
-| v0.3.10 | OpenAI "Responses" API support, HA 2025.7.0 compatibility                                                                                                                                                                                                                                                          |
-| v0.3.9  | Fix conversation history                                                                                                                                                                                                                                                                                           |
-| v0.3.8  | Thinking model support, HA 2025.4 compatibility                                                                                                                                                                                                                                                                    |
-| v0.3.7  | German ICL examples, multi-turn fixes                                                                                                                                                                                                                                                                              |
-| v0.3.6  | Small llama.cpp backend fixes                                                                                                                                                                                                                                                                                      |
-| v0.3.5  | Polish ICL examples                                                                                                                                                                                                                                                                                                |
-| v0.3.4  | Full Polish translation, improved language support                                                                                                                                                                                                                                                                 |
-| v0.3.3  | Generic OpenAI improvements, area handling                                                                                                                                                                                                                                                                         |
-| v0.3.2  | Script entity fixes                                                                                                                                                                                                                                                                                                |
-| v0.3.1  | Basic area support in prompting                                                                                                                                                                                                                                                                                    |
-| v0.3    | Home Assistant LLM API support, improved prompting                                                                                                                                                                                                                                                                 |
-| v0.2.x  | Ollama support, in-context learning, flash attention, prompt caching                                                                                                                                                                                                                                               |
-| v0.1    | Initial Release                                                                                                                                                                                                                                                                                                    |
-
-</details>
-
+更多上游 Home LLM 能力、模型训练和第三方后端说明保留在 `docs/Setup.md`、`docs/Backend Configuration.md`、`data/` 与 `train/` 中。
