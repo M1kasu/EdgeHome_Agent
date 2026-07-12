@@ -1,6 +1,6 @@
 # EdgeHome 实施整改计划
 
-**计划版本：M4 完成后，2026-07-12**
+**计划版本：M5 完成后，2026-07-12**
 **当前分支：** `agent/phase14-competition-package`
 
 每个里程碑均须先实现、再通过正式 Home Assistant Conversation API 做黑盒验收、保存原始证据、独立提交并推送。PR 始终保持 Draft，只有独立验收方可以标记 `EXTERNALLY_ACCEPTED`。
@@ -15,7 +15,7 @@
 |M2 MQTT 窗帘|READY_FOR_EXTERNAL_ACCEPTANCE|Docker MQTT 窗帘与 SQLite 状态闭环已验收，覆盖移动、卡住、故障和独立重启；等待外部验收。|
 |M3 MQTT 空调|READY_FOR_EXTERNAL_ACCEPTANCE|Docker MQTT Climate、SQLite 状态、扩展故障矩阵 6/6 与 HA／模拟器／Broker 重启矩阵 5/5 已通过本地验收。|
 |M4 MQTT 电视/智能插座|READY_FOR_EXTERNAL_ACCEPTANCE|客厅电视已迁移为 Docker MQTT Switch；开关、功耗、故障与三容器重启矩阵 12/12 通过本地验收。路由器和冰箱仍受保护。|
-|M5 动态观影场景|NOT_STARTED|等待 M1 至 M4 协议闭环验收。|
+|M5 动态观影场景|READY_FOR_EXTERNAL_ACCEPTANCE|仅编排主灯、窗帘、空调、电视四个 MQTT 设备；动态参数、幂等、部分失败与拒绝场景 6/6 通过本地验收。|
 |M6 离家保护|NOT_STARTED|等待真实设备和保护设备策略可验证。|
 |M7 故障恢复|NOT_STARTED|依赖 M1 至 M6 的真实协议设备。|
 |M8 离线、重启与稳定性|NOT_STARTED|跨设备最终验收。|

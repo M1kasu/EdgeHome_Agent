@@ -11,6 +11,7 @@
 - [M2 窗帘验收](M2_CURTAIN_ACCEPTANCE.md)
 - [M3 空调验收](M3_CLIMATE_ACCEPTANCE.md)
 - [M4 电视与功耗验收](M4_TV_ACCEPTANCE.md)
+- [M5 动态 MQTT 观影验收](M5_MOVIE_ACCEPTANCE.md)
 
 ## 核心质量与比赛报告
 
@@ -20,4 +21,4 @@
 - `EDGE_RUNTIME_BENCHMARK.md`、`BASELINE_COMPARISON.md`、`MODEL_QUANTIZATION_COMPARISON.md`：端侧性能与模型对比。
 - `SAFETY_ROBUSTNESS_TEST.md`、`FAILURE_RECOVERY_TEST_REPORT.md`、`LEAVE_HOME_TEST_REPORT.md`：安全与失败恢复。
 
-报告中的“已验证”仅代表对应报告写明的本地场景。M1 至 M4 都等待独立外部验收，不能由其他历史报告替代。
+报告中的“已验证”仅代表对应报告写明的本地场景。M1 至 M5 都等待独立外部验收，不能由其他历史报告替代。

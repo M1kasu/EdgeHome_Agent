@@ -26,6 +26,8 @@ class RegisteredEntity:
     aliases: tuple[str, ...]
     protected: bool = False
     feedback_entity_id: str | None = None
+    protocol: str = "template"
+    scene_names: frozenset[str] = frozenset()
 
     @property
     def domain(self) -> str:
@@ -63,6 +65,14 @@ class EdgeHomeEntityRegistry:
         record = self.get(entity_id)
         return record.feedback_entity_id if record else None
 
+    def for_scene(self, scene_name: str, *, protocol: str | None = None) -> tuple[RegisteredEntity, ...]:
+        """Return the explicitly assigned devices for one named scene."""
+        return tuple(
+            record
+            for record in self._by_id.values()
+            if scene_name in record.scene_names and (protocol is None or record.protocol == protocol)
+        )
+
     def resolve_query(self, query: str, allowed_domains: Container[str] | None = None) -> str:
         """Choose a unique longest alias match or return a stable clarification error."""
         normalized_query = _normalize(query)
@@ -99,6 +109,8 @@ def build_demo_entity_registry() -> EdgeHomeEntityRegistry:
                 "light",
                 ("客厅灯", "大厅主灯", "大厅灯", "客厅主照明", "客厅大灯", "大灯", "主灯"),
                 feedback_entity_id="sensor.edgehome_living_room_main_feedback",
+                protocol="mqtt",
+                scene_names=frozenset({"movie"}),
             ),
             RegisteredEntity("客厅氛围灯", "light.edgehome_living_room_ambient", "living_room", "light", ("氛围灯", "客厅灯带")),
             RegisteredEntity(
@@ -108,6 +120,8 @@ def build_demo_entity_registry() -> EdgeHomeEntityRegistry:
                 "switch",
                 ("电视", "客厅 TV"),
                 feedback_entity_id="sensor.edgehome_living_room_tv_feedback",
+                protocol="mqtt",
+                scene_names=frozenset({"movie"}),
             ),
             RegisteredEntity(
                 "客厅空调",
@@ -116,6 +130,8 @@ def build_demo_entity_registry() -> EdgeHomeEntityRegistry:
                 "climate",
                 ("客厅 AC", "客厅冷气"),
                 feedback_entity_id="sensor.edgehome_living_room_ac_feedback",
+                protocol="mqtt",
+                scene_names=frozenset({"movie"}),
             ),
             RegisteredEntity(
                 "客厅窗帘",
@@ -124,6 +140,8 @@ def build_demo_entity_registry() -> EdgeHomeEntityRegistry:
                 "cover",
                 ("窗帘", "客厅帘子"),
                 feedback_entity_id="sensor.edgehome_living_room_curtain_feedback",
+                protocol="mqtt",
+                scene_names=frozenset({"movie"}),
             ),
             RegisteredEntity("客厅温度", "sensor.edgehome_living_room_temperature", "living_room", "sensor", ("客厅室温",)),
             RegisteredEntity("客厅光照", "sensor.edgehome_living_room_illuminance", "living_room", "sensor", ("客厅亮度", "客厅照度")),

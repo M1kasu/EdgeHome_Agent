@@ -67,6 +67,12 @@ class TemperatureArguments(EntityArguments):
     temperature: float = Field(ge=16.0, le=30.0)
 
 
+class HvacModeArguments(EntityArguments):
+    """Allow only the MQTT climate modes declared by the simulator."""
+
+    hvac_mode: Literal["off", "cool", "heat"]
+
+
 class CurtainArguments(EntityArguments):
     """Curtain position follows Home Assistant's 0–100 percent convention."""
 
@@ -89,6 +95,11 @@ def _brightness_service_data(arguments: BaseModel) -> dict[str, Any]:
 def _temperature_service_data(arguments: BaseModel) -> dict[str, Any]:
     values = arguments.model_dump()
     return {ATTR_ENTITY_ID: values["entity_id"], "temperature": values["temperature"]}
+
+
+def _hvac_mode_service_data(arguments: BaseModel) -> dict[str, Any]:
+    values = arguments.model_dump()
+    return {ATTR_ENTITY_ID: values["entity_id"], "hvac_mode": values["hvac_mode"]}
 
 
 def _curtain_service_data(arguments: BaseModel) -> dict[str, Any]:
@@ -165,6 +176,19 @@ def build_default_tool_registry() -> ToolRegistry:
             allowed_domains=frozenset(),
             risk=ToolRisk.LOW,
             requires_entity=False,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="set_hvac_mode",
+            description="设置 MQTT 空调模式",
+            argument_model=HvacModeArguments,
+            allowed_domains=frozenset({"climate"}),
+            risk=ToolRisk.MEDIUM,
+            service_domain="climate",
+            service="set_hvac_mode",
+            service_data_builder=_hvac_mode_service_data,
+            requires_verification=True,
         )
     )
     registry.register(

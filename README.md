@@ -13,6 +13,7 @@ EdgeHome Agent 是一个运行在本机 Docker 环境中的 Home Assistant 边�
 | M2：MQTT 窗帘 | 待外部黑盒验收 | 支持位置、移动过程、卡住、拒绝、延迟、离线与 SQLite 状态恢复。 |
 | M3：MQTT 空调 | 待外部黑盒验收 | 支持 16–30°C 目标温度、状态回读、6 项故障矩阵和三容器恢复。 |
 | M4：MQTT 客厅电视 | 待外部黑盒验收 | 支持开关、95 W／1.5 W 功耗回读、5 类故障和三容器恢复。 |
+| M5：动态 MQTT 观影 | 待外部黑盒验收 | 只编排四个 MQTT 设备，支持动态参数、幂等与部分失败回读。 |
 | 物理设备接入 | 未声明 | 当前仅使用 Docker 数字设备仿真器。 |
 
 > PR #12 保持 Draft，M1 尚未合并；请勿把脚本通过或仓库中的模拟实体表述为物理设备验收通过。
@@ -86,6 +87,7 @@ python .\scripts\accept_m2_mqtt_curtain.py
 python .\scripts\accept_m3_mqtt_climate.py
 python .\scripts\verify_m3_climate_restart_matrix.py
 python .\scripts\accept_m4_mqtt_tv.py
+python .\scripts\accept_m5_mqtt_movie.py
 ```
 
 普通 Assist 对话会自动回传 `conversation_id`。开发者工具或一次性 REST 请求若未回传上一轮 ID，会被安全地视为新会话，并要求澄清设备，绝不会使用全局“上一设备”猜测。
@@ -109,6 +111,7 @@ python .\scripts\accept_m4_mqtt_tv.py
 - [M2 窗帘验收](reports/M2_CURTAIN_ACCEPTANCE.md)
 - [M3 空调验收](reports/M3_CLIMATE_ACCEPTANCE.md)
 - [M4 电视与功耗验收](reports/M4_TV_ACCEPTANCE.md)
+- [M5 动态 MQTT 观影验收](reports/M5_MOVIE_ACCEPTANCE.md)
 - [M1.5 会话记忆设计](docs/EdgeHome%20Dialogue%20State.md)
 - [会话链路审计](reports/CONTEXT_MEMORY_AUDIT.md)
 - [M1.5 实施说明](reports/CONTEXT_MEMORY_IMPLEMENTATION.md)

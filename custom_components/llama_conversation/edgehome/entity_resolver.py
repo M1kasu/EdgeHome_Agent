@@ -101,6 +101,12 @@ class ExposedEntityResolver:
         records = self._registry.for_room(room) if room is not None else self._registry.all()
         return tuple(record.entity_id for record in records)
 
+    def scene_entities(self, scene_name: str, *, protocol: str | None = None) -> tuple[str, ...]:
+        """Return only the registry-backed entities declared for one scene."""
+        if self._registry is None:
+            return ()
+        return tuple(record.entity_id for record in self._registry.for_scene(scene_name, protocol=protocol))
+
     def is_protected(self, entity_id: str) -> bool:
         """Return the explicit protected flag when a production registry is in use."""
         return bool(self._registry and self._registry.is_protected(entity_id))

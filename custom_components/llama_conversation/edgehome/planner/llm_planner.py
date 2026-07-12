@@ -162,7 +162,7 @@ class LLMTaskPlanner:
         """Use a versioned virtual-demo template only after the model output was rejected."""
         if scene is None:
             return None
-        draft = self._demo_scene_factory.build(goal, scene)
+        draft = self._demo_scene_factory.build(goal, scene, context_entities)
         if draft is None:
             return None
         parsed = self._parser.parse(draft.plan.model_dump(mode="json"))

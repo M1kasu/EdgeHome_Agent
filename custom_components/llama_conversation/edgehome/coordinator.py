@@ -24,7 +24,7 @@ from .energy.statistics import HomeAssistantEnergyStatistics
 from .energy.conversation import EnergyConversationHandler
 from .energy.service import EnergyService
 from .understanding.input_guard import InputLengthGuard
-from .models import EntitySnapshot, StepExecutionResult, TaskExecutionReport, TaskPlan, TaskStatus
+from .models import EntitySnapshot, StepExecutionResult, StepStatus, TaskExecutionReport, TaskPlan, TaskStatus
 from .information import ReadOnlyInformationHandler
 from .knowledge.associations import DeviceManualRegistry
 from .knowledge.indexer import LocalKnowledgeIndex
@@ -267,6 +267,14 @@ class EdgeHomeCoordinator:
         delayed = await self._async_handle_delayed(resumed_text, conversation_id, **context_identity)
         if delayed is not None:
             return delayed
+
+        movie = await self._async_handle_mqtt_movie_scene(
+            resumed_text,
+            conversation_id,
+            **context_identity,
+        )
+        if movie is not None:
+            return movie
 
         leaving = await self._async_handle_deterministic_leaving_scene(
             resumed_text,
@@ -604,6 +612,7 @@ class EdgeHomeCoordinator:
             "protected_confirmation": "受保护设备二次确认",
             "dialogue_reference": "多轮引用操作",
             "dialogue_query": "多轮状态查询",
+            "mqtt_movie_scene": "动态 MQTT 观影场景",
             "deterministic_leaving_scene": "确定性离家保护",
             "energy_analysis": "本地能耗分析",
             "local_information": "本地资料检索",
@@ -683,6 +692,78 @@ class EdgeHomeCoordinator:
         failure = report.step_results[-1] if report.step_results else None
         reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
         return FastPathResponse(handled=True, speech=f"恢复观影前状态失败：{reason}。")
+
+    async def _async_handle_mqtt_movie_scene(
+        self,
+        text: str,
+        conversation_id: str,
+        *,
+        user_id: str | None = None,
+        assistant_id: str | None = None,
+    ) -> FastPathResponse | None:
+        """Run M5 through the four independently verified MQTT device boundaries only."""
+        scene = self._scene_templates.match(text)
+        if scene is None or scene.name != SceneName.MOVIE:
+            return None
+        snapshots = [
+            self._resolver.snapshot(entity_id)
+            for entity_id in self._resolver.scene_entities(SceneName.MOVIE.value, protocol="mqtt")
+        ]
+        draft = self._demo_scene_factory.build(text, SceneName.MOVIE, snapshots)
+        if draft is None:
+            return FastPathResponse(handled=True, speech="观影场景未找到可验证的 MQTT 设备。", trace_route="mqtt_movie_scene")
+        plan = draft.plan
+        if plan.need_clarification:
+            return FastPathResponse(
+                handled=True,
+                speech=plan.clarification_question,
+                planned_plan=plan,
+                trace_route="mqtt_movie_scene",
+            )
+        revalidation = self._environment_guard.revalidate(plan, self._environment_guard.capture(plan))
+        if not revalidation.accepted:
+            return FastPathResponse(
+                handled=True,
+                speech="观影场景的设备状态已变化或不可用，未执行任何操作。",
+                planned_plan=plan,
+                trace_route="mqtt_movie_scene",
+            )
+        await self._scenarios.async_capture(conversation_id, "movie", plan)
+        report = await self._executor.async_execute(plan)
+        if report.status == TaskStatus.SUCCESS:
+            await self._context_service.async_record_success(
+                conversation_id,
+                plan,
+                report,
+                user_id=user_id,
+                assistant_id=assistant_id,
+            )
+            return FastPathResponse(
+                handled=True,
+                speech="观影场景已完成，所有需要调整的 MQTT 设备均已回读确认。",
+                completed_plan=plan,
+                planned_plan=plan,
+                execution_report=report,
+                trace_route="mqtt_movie_scene",
+            )
+        await self._context_service.async_record_failure(
+            conversation_id,
+            plan,
+            report,
+            user_id=user_id,
+            assistant_id=assistant_id,
+        )
+        await self._scenarios.async_clear(conversation_id, "movie")
+        failure = next((step for step in report.step_results if step.status == StepStatus.FAILED), None)
+        reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
+        prefix = "观影场景部分完成" if report.status == TaskStatus.PARTIAL_SUCCESS else "观影场景未完成"
+        return FastPathResponse(
+            handled=True,
+            speech=f"{prefix}：{reason}。",
+            planned_plan=plan,
+            execution_report=report,
+            trace_route="mqtt_movie_scene",
+        )
 
     async def _async_handle_deterministic_leaving_scene(
         self,
