@@ -27,7 +27,12 @@ class AwaySecurityReporter:
 
     def build(self, context: EnvironmentContextSnapshot) -> AwaySecurityReport:
         """Classify people and entry sensors from a task-scoped environment snapshot."""
-        people_home = [entity for entity in context.entities if entity.domain in {"person", "device_tracker"} and entity.state == "home"]
+        people_home = [
+            entity
+            for entity in context.entities
+            if (entity.domain in {"person", "device_tracker"} and entity.state == "home")
+            or (entity.domain == "binary_sensor" and entity.attributes.get("device_class") == "presence" and entity.state == "on")
+        ]
         entry_sensors = [
             entity
             for entity in context.entities

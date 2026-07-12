@@ -52,7 +52,7 @@ class DemoScenePlanFactory:
         if scene == SceneName.MOVIE:
             return DemoSceneDraft(plan=self._movie(goal, snapshots or []))
         if scene == SceneName.LEAVING:
-            return DemoSceneDraft(plan=self._leaving(goal))
+            return DemoSceneDraft(plan=self._leaving(goal, snapshots or []))
         if scene == SceneName.SLEEPING:
             return self._sleeping(goal)
         return None
@@ -89,32 +89,46 @@ class DemoScenePlanFactory:
             steps=steps,
         )
 
-    def _leaving(self, goal: str) -> TaskPlan:
+    def _leaving(self, goal: str, snapshots: list[EntitySnapshot]) -> TaskPlan:
+        """Turn off only verified MQTT devices after M6 safety prechecks pass."""
+        devices = {record.device_type: record.entity_id for record in self._registry.for_scene("leaving", protocol="mqtt")}
+        expected_domains = {"light", "cover", "switch", "climate"}
+        if set(devices) != expected_domains:
+            return TaskPlan(
+                goal=goal,
+                scene=SceneName.LEAVING.value,
+                need_clarification=True,
+                clarification_question="离家保护所需 MQTT 设备尚未全部就绪，请先检查客厅设备连接。",
+                steps=[PlanStep(id="leave_read_home", tool="get_home_state", arguments={})],
+            )
+        current = {snapshot.entity_id: snapshot for snapshot in snapshots}
+        light_id, curtain_id, tv_id, climate_id = (devices["light"], devices["cover"], devices["switch"], devices["climate"])
+        safety_sensors = self._registry.for_scene("leaving", protocol="safety_sensor")
+        policies = self._registry.for_scene("leaving", protocol="safety_policy")
+        steps = [PlanStep(id="leave_read_home", tool="get_home_state", arguments={}), PlanStep(id="leave_read_living", tool="get_room_state", arguments={"room": "living_room"})]
+        steps.extend(PlanStep(id=f"leave_read_{index}", tool="get_device_state", arguments={"entity_id": record.entity_id}) for index, record in enumerate(safety_sensors, start=1))
+        if _state(current.get(light_id)) != "off":
+            steps.append(self._off_step("leave_main_light", light_id))
+        if _state(current.get(tv_id)) != "off":
+            steps.append(self._off_step("leave_tv", tv_id))
+        if _state(current.get(climate_id)) != "off":
+            steps.append(self._off_step("leave_living_ac", climate_id))
+        if _current_position(current.get(curtain_id)) != 0:
+            steps.append(self._curtain_step("leave_close_curtain", curtain_id, 0, on_failure=OnFailurePolicy.STOP))
+        for policy in policies:
+            if _state(current.get(policy.entity_id)) != "on":
+                steps.append(
+                    PlanStep(
+                        id="leave_enable_security",
+                        tool="activate_security_mode",
+                        arguments={"entity_id": policy.entity_id},
+                        verify=VerificationRule(entity_id=policy.entity_id, state="on"),
+                    )
+                )
         return TaskPlan(
             goal=goal,
             scene=SceneName.LEAVING.value,
-            steps=[
-                PlanStep(id="leave_read_home", tool="get_home_state", arguments={}),
-                PlanStep(id="leave_read_living", tool="get_room_state", arguments={"room": "living_room"}),
-                self._off_step("leave_main_light", self._LIVING_MAIN),
-                self._off_step("leave_ambient_light", self._LIVING_AMBIENT),
-                self._off_step("leave_tv", self._LIVING_TV),
-                self._off_step("leave_living_ac", self._LIVING_AC),
-                self._off_step("leave_bedroom_light", self._BEDROOM_MAIN),
-                self._off_step("leave_bedroom_ac", self._BEDROOM_AC),
-                self._off_step("leave_test_socket", self._TEST_SOCKET),
-                PlanStep(
-                    id="leave_read_window",
-                    tool="get_device_state",
-                    arguments={"entity_id": "binary_sensor.edgehome_window"},
-                ),
-                PlanStep(
-                    id="leave_enable_security",
-                    tool="activate_security_mode",
-                    arguments={"entity_id": self._SECURITY},
-                    verify=VerificationRule(entity_id=self._SECURITY, state="on"),
-                ),
-            ],
+            steps=steps,
         )
 
     def _sleeping(self, goal: str) -> DemoSceneDraft:

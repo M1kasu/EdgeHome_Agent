@@ -778,10 +778,30 @@ class EdgeHomeCoordinator:
         if scene is None or scene.name != SceneName.LEAVING:
             return None
 
-        draft = self._demo_scene_factory.build(text, SceneName.LEAVING)
+        self._environment.invalidate()
+        safety_report = self._away_reporter.build(self._environment.build(text, scene=SceneName.LEAVING.value))
+        if not safety_report.safe_to_leave:
+            people = "、".join(entity.friendly_name or entity.entity_id for entity in safety_report.people_home) or "无"
+            opened = "、".join(entity.friendly_name or entity.entity_id for entity in safety_report.open_entries) or "无"
+            unavailable = "、".join(entity.friendly_name or entity.entity_id for entity in safety_report.unavailable_entries) or "无"
+            return FastPathResponse(
+                handled=True,
+                speech=f"离家保护已阻断：在家人员 {people}；打开门窗 {opened}；不可用门窗 {unavailable}。",
+                trace_route="deterministic_leaving_scene",
+            )
+
+        snapshots = [self._resolver.snapshot(entity_id) for entity_id in self._resolver.scene_entities(SceneName.LEAVING.value)]
+        draft = self._demo_scene_factory.build(text, SceneName.LEAVING, snapshots)
         if draft is None:
             return None
         plan = draft.plan
+        if plan.need_clarification:
+            return FastPathResponse(
+                handled=True,
+                speech=plan.clarification_question,
+                planned_plan=plan,
+                trace_route="deterministic_leaving_scene",
+            )
         revalidation = self._environment_guard.revalidate(plan, self._environment_guard.capture(plan))
         if not revalidation.accepted:
             return FastPathResponse(
@@ -811,7 +831,7 @@ class EdgeHomeCoordinator:
             )
             return FastPathResponse(
                 handled=True,
-                speech="已完成离家保护：已关闭可关闭设备，冰箱和路由器保持开启，并已启用安防模式。",
+                speech="已完成离家保护：已关闭需要关闭的 MQTT 设备，冰箱和路由器未被纳入控制，并已启用安防模式。",
                 completed_plan=plan,
                 planned_plan=plan,
                 execution_report=report,

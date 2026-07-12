@@ -110,7 +110,7 @@ def build_demo_entity_registry() -> EdgeHomeEntityRegistry:
                 ("客厅灯", "大厅主灯", "大厅灯", "客厅主照明", "客厅大灯", "大灯", "主灯"),
                 feedback_entity_id="sensor.edgehome_living_room_main_feedback",
                 protocol="mqtt",
-                scene_names=frozenset({"movie"}),
+                scene_names=frozenset({"movie", "leaving"}),
             ),
             RegisteredEntity("客厅氛围灯", "light.edgehome_living_room_ambient", "living_room", "light", ("氛围灯", "客厅灯带")),
             RegisteredEntity(
@@ -121,7 +121,7 @@ def build_demo_entity_registry() -> EdgeHomeEntityRegistry:
                 ("电视", "客厅 TV"),
                 feedback_entity_id="sensor.edgehome_living_room_tv_feedback",
                 protocol="mqtt",
-                scene_names=frozenset({"movie"}),
+                scene_names=frozenset({"movie", "leaving"}),
             ),
             RegisteredEntity(
                 "客厅空调",
@@ -131,7 +131,7 @@ def build_demo_entity_registry() -> EdgeHomeEntityRegistry:
                 ("客厅 AC", "客厅冷气"),
                 feedback_entity_id="sensor.edgehome_living_room_ac_feedback",
                 protocol="mqtt",
-                scene_names=frozenset({"movie"}),
+                scene_names=frozenset({"movie", "leaving"}),
             ),
             RegisteredEntity(
                 "客厅窗帘",
@@ -141,7 +141,7 @@ def build_demo_entity_registry() -> EdgeHomeEntityRegistry:
                 ("窗帘", "客厅帘子"),
                 feedback_entity_id="sensor.edgehome_living_room_curtain_feedback",
                 protocol="mqtt",
-                scene_names=frozenset({"movie"}),
+                scene_names=frozenset({"movie", "leaving"}),
             ),
             RegisteredEntity("客厅温度", "sensor.edgehome_living_room_temperature", "living_room", "sensor", ("客厅室温",)),
             RegisteredEntity("客厅光照", "sensor.edgehome_living_room_illuminance", "living_room", "sensor", ("客厅亮度", "客厅照度")),
@@ -153,8 +153,24 @@ def build_demo_entity_registry() -> EdgeHomeEntityRegistry:
             RegisteredEntity("路由器", "switch.edgehome_router", "home", "switch", ("网络", "网络设备"), protected=True),
             RegisteredEntity("冰箱", "switch.edgehome_refrigerator", "home", "switch", ("电冰箱",), protected=True),
             RegisteredEntity("测试插座", "switch.edgehome_test_socket", "home", "switch", ("插座", "测试电源")),
-            RegisteredEntity("窗户", "binary_sensor.edgehome_window", "home", "binary_sensor", ("窗",)),
-            RegisteredEntity("安防模式", "input_boolean.edgehome_security_mode", "home", "input_boolean", ("安防", "安全模式")),
+            RegisteredEntity(
+                "窗户",
+                "binary_sensor.edgehome_window",
+                "home",
+                "binary_sensor",
+                ("窗",),
+                protocol="safety_sensor",
+                scene_names=frozenset({"leaving"}),
+            ),
+            RegisteredEntity(
+                "安防模式",
+                "input_boolean.edgehome_security_mode",
+                "home",
+                "input_boolean",
+                ("安防", "安全模式"),
+                protocol="safety_policy",
+                scene_names=frozenset({"leaving"}),
+            ),
         )
     )
 

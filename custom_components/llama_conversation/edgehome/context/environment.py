@@ -79,7 +79,7 @@ class EnvironmentContextBuilder:
         if snapshot.domain in {"person", "device_tracker"}:
             return True
         if snapshot.domain == "binary_sensor":
-            return snapshot.attributes.get("device_class") in {"door", "window", "garage_door"}
+            return snapshot.attributes.get("device_class") in {"door", "window", "garage_door", "presence"}
         return False
 
     @staticmethod
