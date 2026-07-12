@@ -6,7 +6,6 @@ edgehome_reset_demo_environment:
     - action: input_boolean.turn_on
       target:
         entity_id:
-          - input_boolean.edgehome_living_room_main_power
           - input_boolean.edgehome_living_room_presence_state
           - input_boolean.edgehome_router_power
           - input_boolean.edgehome_refrigerator_power
@@ -23,11 +22,6 @@ edgehome_reset_demo_environment:
           - input_boolean.edgehome_window_open_state
           - input_boolean.edgehome_simulate_curtain_failure
           - input_boolean.edgehome_security_mode
-    - action: input_number.set_value
-      target:
-        entity_id: input_number.edgehome_living_room_main_brightness
-      data:
-        value: 80
     - action: input_number.set_value
       target:
         entity_id: input_number.edgehome_living_room_ambient_brightness

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 from pathlib import Path
 
@@ -35,7 +36,7 @@ def install(config_dir: Path) -> None:
 
 
 def _ensure_includes(path: Path) -> None:
-    content = path.read_text(encoding="utf-8")
+    content = _remove_legacy_mqtt_include(path.read_text(encoding="utf-8"))
     additions = [
         f"{key}: !include {filename}"
         for key, filename in _CONFIG_INCLUDES.items()
@@ -44,6 +45,13 @@ def _ensure_includes(path: Path) -> None:
     if additions:
         suffix = "" if content.endswith("\n") else "\n"
         path.write_text(f"{content}{suffix}\n# EdgeHome 虚拟家居测试环境\n{'\n'.join(additions)}\n", encoding="utf-8")
+    elif content != path.read_text(encoding="utf-8"):
+        path.write_text(content, encoding="utf-8")
+
+
+def _remove_legacy_mqtt_include(content: str) -> str:
+    """MQTT broker setup moved to Home Assistant's config-entry flow in recent releases."""
+    return re.sub(r"(?m)^mqtt:\s*!include\s+edgehome_demo_mqtt\.yaml\s*\r?\n?", "", content)
 
 
 def _install_script(path: Path, source: Path) -> None:

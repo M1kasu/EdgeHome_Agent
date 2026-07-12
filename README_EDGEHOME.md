@@ -24,3 +24,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\generate_submi
 ```
 
 对应 POSIX shell 脚本使用同名 `.sh` 文件。重置脚本不会写入 Token；演示不得把 CPU/Q4 结果说成 GPU/NPU 或把 Schema 合法率说成设备执行成功率。
+
+## MQTT 设备仿真（M1）
+
+客厅主灯已迁移为 Docker 与 MQTT 驱动的独立设备仿真器：Agent 只能调用 Home Assistant 服务，设备容器才是状态唯一来源。它支持持久化状态、命令延迟、离线和“确认但不改状态”故障，用于验证真实的跨进程反馈闭环。部署和验收说明见 `docs/MQTT_DEVICE_SIMULATOR.md`；不要把该环境表述为连接了物理家电。

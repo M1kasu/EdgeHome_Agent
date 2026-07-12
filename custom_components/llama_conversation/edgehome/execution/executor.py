@@ -30,6 +30,11 @@ from .verifier import StateVerifier
 class FixedPlanExecutor:
     """Run one validated plan in order, with bounded retries and fresh state reads."""
 
+    # The Docker MQTT light owns its state and publishes feedback after a bounded
+    # device delay. Wait for that feedback instead of retrying an otherwise valid
+    # Home Assistant service call before the state topic has propagated.
+    _DEVICE_FEEDBACK_SETTLE_SECONDS = {"light.edgehome_living_room_main": 1.0}
+
     def __init__(
         self,
         hass: HomeAssistant,
@@ -218,7 +223,12 @@ class FixedPlanExecutor:
     async def _verify_step(self, step: PlanStep) -> VerificationResult:
         if step.verify is None:
             return VerificationResult(passed=False, reason="关键步骤缺少验证规则")
-        return await self.verifier.async_verify(step.verify)
+        rule = step.verify
+        if rule.settle_seconds == 0:
+            settle_seconds = self._DEVICE_FEEDBACK_SETTLE_SECONDS.get(rule.entity_id)
+            if settle_seconds is not None:
+                rule = rule.model_copy(update={"settle_seconds": settle_seconds})
+        return await self.verifier.async_verify(rule)
 
     @staticmethod
     def _task_status(results: list[StepExecutionResult], needs_replan: bool) -> TaskStatus:

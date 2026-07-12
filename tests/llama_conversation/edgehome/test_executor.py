@@ -90,6 +90,37 @@ async def test_executor_retries_when_service_returns_without_state_change(hass) 
 
 
 @pytest.mark.asyncio
+async def test_executor_waits_for_mqtt_device_feedback_before_retrying(hass) -> None:
+    entity_id = "light.edgehome_living_room_main"
+    hass.states.async_set(entity_id, "off", {"brightness": 0})
+
+    async def turn_on(call) -> None:
+        async def publish_feedback() -> None:
+            await asyncio.sleep(0.05)
+            hass.states.async_set(call.data["entity_id"], "on", {"brightness": 128}, context=call.context)
+
+        hass.async_create_task(publish_feedback())
+
+    hass.services.async_register("light", "turn_on", turn_on)
+    plan = TaskPlan(
+        goal="等待 MQTT 灯反馈",
+        steps=[
+            PlanStep(
+                id="step_1",
+                tool="set_light_brightness",
+                arguments={"entity_id": entity_id, "brightness": 50},
+                verify=VerificationRule(entity_id=entity_id, state="on", attributes={"brightness": 128}),
+            )
+        ],
+    )
+
+    report = await _executor(hass).async_execute(plan)
+
+    assert report.status == TaskStatus.SUCCESS
+    assert report.step_results[0].attempts == 1
+
+
+@pytest.mark.asyncio
 async def test_executor_times_out_a_slow_service(hass) -> None:
     entity_id = "light.slow"
     hass.states.async_set(entity_id, "off")
