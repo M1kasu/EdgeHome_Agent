@@ -51,8 +51,11 @@ services:
         condition: service_started
     environment:
       TZ: ${TZ}
+      # M1.5：结构化会话状态持久化到宿主机 runtime，容器重启后可恢复。
+      EDGEHOME_CONTEXT_DB_PATH: /runtime/edgehome_context.db
     volumes:
       - ./homeassistant:/config
+      - ./runtime:/runtime
     ports:
       - "${HA_PORT:-8123}:8123"
     restart: unless-stopped

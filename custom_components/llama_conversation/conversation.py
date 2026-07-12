@@ -290,7 +290,13 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
         # EdgeHome a fresh local id so clarification and protected-device state
         # never receive None or leak into another one-shot request.
         conversation_id = user_input.conversation_id or f"edgehome-{uuid4().hex}"
-        result = await self._edgehome_coordinator.async_handle_with_dialogue(user_input.text, conversation_id)
+        user_id = getattr(user_input.context, "user_id", None) if user_input.context is not None else None
+        result = await self._edgehome_coordinator.async_handle_with_dialogue(
+            user_input.text,
+            conversation_id,
+            user_id=user_id,
+            assistant_id=user_input.agent_id,
+        )
         if result.handled:
             intent_response = intent.IntentResponse(language=user_input.language)
             intent_response.async_set_speech(result.speech or "请求已由 EdgeHome 处理。")
@@ -310,10 +316,17 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
             user_input.agent_id,
             self.runtime_options,
             planner,
+            user_id=user_id,
         )
         if not planned_result.handled:
             return None
-        await self._edgehome_coordinator.async_remember_completed(conversation_id, planned_result.completed_plan)
+        await self._edgehome_coordinator.async_remember_completed(
+            conversation_id,
+            planned_result.completed_plan or planned_result.planned_plan,
+            planned_result.execution_report,
+            user_id=user_id,
+            assistant_id=user_input.agent_id,
+        )
 
         intent_response = intent.IntentResponse(language=user_input.language)
         intent_response.async_set_speech(planned_result.speech or "请求已由 EdgeHome 处理。")

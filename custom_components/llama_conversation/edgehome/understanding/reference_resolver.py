@@ -20,6 +20,12 @@ class ReferencePlanResolver:
         if state.last_plan is None or not state.last_plan.steps or state.last_entity_id is None:
             return None
         last_step = state.last_plan.steps[0]
+        if self._contains_any(text, ("\u5173\u6389\u5427", "\u628a\u5b83\u5173\u6389", "\u628a\u8fd9\u4e2a\u5173\u6389")):
+            return self._turn_off_last(text, state.last_entity_id)
+        if self._contains_any(text, ("\u518d\u4eae\u4e00\u70b9", "\u518d\u8c03\u4eae\u4e00\u70b9", "\u8c03\u4eae\u4e00\u70b9", "\u8c03\u4eae\u4e00\u4e9b")):
+            return self._relative_brightness(text, state, last_step, increase=True)
+        if self._contains_any(text, ("\u518d\u6697\u4e00\u70b9", "\u518d\u8c03\u6697\u4e00\u70b9", "\u8c03\u6697\u4e00\u70b9", "\u964d\u4f4e\u4e00\u4e9b")):
+            return self._relative_brightness(text, state, last_step, increase=False)
         if "再调亮一点" in text or "再亮一点" in text:
             return self._relative_brightness(text, state, last_step, increase=True)
         if "再调暗一点" in text or "再暗一点" in text:
@@ -70,8 +76,11 @@ class ReferencePlanResolver:
     def _relative_brightness(self, text: str, state: DialogueState, step: PlanStep, increase: bool) -> TaskPlan | None:
         if step.tool != "set_light_brightness":
             return None
-        brightness = step.arguments.get("brightness")
-        if not isinstance(brightness, int):
+        brightness = self._current_brightness(state.last_entity_id)
+        if brightness is None:
+            requested_brightness = step.arguments.get("brightness")
+            brightness = requested_brightness if isinstance(requested_brightness, int) else None
+        if brightness is None:
             return None
         next_brightness = max(0, min(100, brightness + (10 if increase else -10)))
         entity_id = state.last_entity_id
@@ -87,6 +96,36 @@ class ReferencePlanResolver:
             goal=text,
             scene="dialogue_reference",
             steps=[PlanStep(id="reference_1", tool="set_light_brightness", arguments={"entity_id": entity_id, "brightness": next_brightness}, verify=verify)],
+        )
+
+    def _current_brightness(self, entity_id: str | None) -> int | None:
+        if entity_id is None:
+            return None
+        state = self._entity_resolver.hass.states.get(entity_id)
+        if state is None or state.domain != "light":
+            return None
+        brightness = state.attributes.get("brightness")
+        if not isinstance(brightness, (int, float)):
+            return None
+        return round(float(brightness) * 100 / 255)
+
+    @staticmethod
+    def _contains_any(text: str, phrases: tuple[str, ...]) -> bool:
+        return any(phrase in text for phrase in phrases)
+
+    @staticmethod
+    def _turn_off_last(text: str, entity_id: str) -> TaskPlan:
+        return TaskPlan(
+            goal=text,
+            scene="dialogue_reference",
+            steps=[
+                PlanStep(
+                    id="reference_1",
+                    tool="turn_off_device",
+                    arguments={"entity_id": entity_id},
+                    verify=VerificationRule(entity_id=entity_id, state="off"),
+                )
+            ],
         )
 
     def _relative_temperature(self, text: str, state: DialogueState, step: PlanStep, increase: bool) -> TaskPlan | None:
