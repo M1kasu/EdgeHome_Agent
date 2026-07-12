@@ -7,7 +7,7 @@
 |M1 MQTT 主灯|READY_FOR_EXTERNAL_ACCEPTANCE|31 条正式 Conversation API 黑盒用例通过；设备是 Docker 模拟器，仍等待独立外部验收。|
 |M1.5 结构化上下文|READY_FOR_EXTERNAL_ACCEPTANCE|20 条正式 Conversation API 黑盒用例通过，含 HA 重启、会话隔离、TTL 过期和失败动作不污染；仍等待独立外部验收。|
 |M2 MQTT 窗帘|READY_FOR_EXTERNAL_ACCEPTANCE|Docker MQTT 窗帘已通过开合、定位、移动、卡住、拒绝、超时、离线及三项重启验证；等待独立外部验收。|
-|M3 MQTT 空调|NOT_STARTED|当前 Generic Thermostat/Helper 不是最终状态来源。|
+|M3 MQTT 空调|READY_FOR_EXTERNAL_ACCEPTANCE|已迁出 Generic Thermostat；Docker MQTT Climate 的温度、模式、故障和重启闭环通过，等待独立外部验收。|
 |M4 MQTT 电视或插座|NOT_STARTED|当前模板开关不是最终状态来源。|
 |M5 动态观影|NOT_STARTED|现有静态 Demo 不满足动态计划与多设备真实协议验收。|
 |M6 离家保护|NOT_STARTED|规则已有部分实现，但尚未在真实多 MQTT 设备上验收。|

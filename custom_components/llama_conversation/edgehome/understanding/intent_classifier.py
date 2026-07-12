@@ -19,6 +19,7 @@ class ChineseIntentClassifier:
         r"(?:灯|灯光|照明|光).*(?:调到|调至|设为|设置|改成|调成|降到|升到|提高|降低|调高|调低|亮度).*(?:%|％|百分之|成|一半)"
     )
     _TEMPERATURE_WORDS = re.compile(r"温度|几度|制冷|制热")
+    _AC_TEMPERATURE_COMMAND = re.compile(r"(?:空调|ac).*(?:\d{1,3}(?:\.\d+)?\s*度|调到|调为|设为)", re.IGNORECASE)
     _CURTAIN_WORDS = re.compile(r"窗帘|帘子|遮阳帘")
     _SECURITY_WORDS = re.compile(r"安防|安全模式")
     _OFF_WORDS = re.compile(r"关闭|关掉|关上|熄灭|停止|停掉")
@@ -35,7 +36,7 @@ class ChineseIntentClassifier:
             return FastIntentMatch(intent=FastIntent.QUERY_STATE, confidence=0.98, reason="匹配状态查询词")
         if self._BRIGHTNESS_WORDS.search(normalized) or self._LIGHT_PERCENT_COMMAND.search(normalized):
             return FastIntentMatch(intent=FastIntent.SET_BRIGHTNESS, confidence=0.98, reason="匹配亮度控制词")
-        if self._TEMPERATURE_WORDS.search(normalized):
+        if self._TEMPERATURE_WORDS.search(normalized) or self._AC_TEMPERATURE_COMMAND.search(normalized):
             return FastIntentMatch(intent=FastIntent.SET_TEMPERATURE, confidence=0.98, reason="匹配温度控制词")
         if self._SECURITY_WORDS.search(normalized) and self._ON_WORDS.search(normalized):
             return FastIntentMatch(intent=FastIntent.ACTIVATE_SECURITY, confidence=0.98, reason="匹配安防模式开启词")

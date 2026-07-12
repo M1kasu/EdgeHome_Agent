@@ -23,3 +23,14 @@ devices:
       command_delay_ms: 100
       move_duration_ms: 800
       failure_rate: 0
+  living_room_ac:
+    type: climate
+    name: 客厅空调
+    room: living_room
+    initial_state:
+      mode: cool
+      temperature: 24
+      current_temperature: 27
+    behavior:
+      command_delay_ms: 200
+      failure_rate: 0

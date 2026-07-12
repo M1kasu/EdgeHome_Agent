@@ -36,10 +36,12 @@ class FixedPlanExecutor:
     _DEVICE_FEEDBACK_SETTLE_SECONDS = {
         "light.edgehome_living_room_main": 1.0,
         "cover.edgehome_living_room_curtain": 0.2,
+        "climate.edgehome_living_room_ac": 0.5,
     }
     _DEVICE_FEEDBACK_TIMEOUT_SECONDS = {
         "light.edgehome_living_room_main": 3.0,
         "cover.edgehome_living_room_curtain": 5.0,
+        "climate.edgehome_living_room_ac": 3.0,
     }
 
     def __init__(

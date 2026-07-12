@@ -102,7 +102,14 @@ def build_demo_entity_registry() -> EdgeHomeEntityRegistry:
             ),
             RegisteredEntity("客厅氛围灯", "light.edgehome_living_room_ambient", "living_room", "light", ("氛围灯", "客厅灯带")),
             RegisteredEntity("客厅电视", "switch.edgehome_living_room_tv", "living_room", "switch", ("电视", "客厅 TV")),
-            RegisteredEntity("客厅空调", "climate.edgehome_living_room_ac", "living_room", "climate", ("客厅 AC", "客厅冷气")),
+            RegisteredEntity(
+                "客厅空调",
+                "climate.edgehome_living_room_ac",
+                "living_room",
+                "climate",
+                ("客厅 AC", "客厅冷气"),
+                feedback_entity_id="sensor.edgehome_living_room_ac_feedback",
+            ),
             RegisteredEntity(
                 "客厅窗帘",
                 "cover.edgehome_living_room_curtain",

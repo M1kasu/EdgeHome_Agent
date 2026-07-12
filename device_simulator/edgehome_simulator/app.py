@@ -104,7 +104,47 @@ class CurtainDevice:
         return "homeassistant/sensor/edgehome_living_room_curtain_feedback/config"
 
 
-SimulatedDevice = LightDevice | CurtainDevice
+@dataclass(frozen=True, slots=True)
+class ClimateDevice:
+    """A MQTT Climate device with simulator-owned mode and temperature state."""
+
+    device_id: str
+    name: str
+    room: str
+    initial_state: dict[str, Any]
+    command_delay_ms: int
+    failure_rate: float
+
+    @property
+    def command_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/mode_command"
+
+    @property
+    def temperature_command_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/temperature_command"
+
+    @property
+    def state_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/state"
+
+    @property
+    def availability_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/availability"
+
+    @property
+    def feedback_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/feedback"
+
+    @property
+    def discovery_topic(self) -> str:
+        return "homeassistant/climate/edgehome_living_room_ac/config"
+
+    @property
+    def feedback_discovery_topic(self) -> str:
+        return "homeassistant/sensor/edgehome_living_room_ac_feedback/config"
+
+
+SimulatedDevice = LightDevice | CurtainDevice | ClimateDevice
 
 
 class DeviceSimulator:
@@ -190,6 +230,8 @@ class DeviceSimulator:
             self._client.subscribe(device.command_topic, qos=1)
             if isinstance(device, CurtainDevice):
                 self._client.subscribe(device.set_position_topic, qos=1)
+            if isinstance(device, ClimateDevice):
+                self._client.subscribe(device.temperature_command_topic, qos=1)
         self._publish_discovery_and_states()
 
     def _on_message(self, _client: mqtt.Client, _userdata: Any, message: mqtt.MQTTMessage) -> None:
@@ -203,6 +245,7 @@ class DeviceSimulator:
                 for candidate in self._devices.values()
                 if candidate.command_topic == message.topic
                 or isinstance(candidate, CurtainDevice) and candidate.set_position_topic == message.topic
+                or isinstance(candidate, ClimateDevice) and candidate.temperature_command_topic == message.topic
             ),
             None,
         )
@@ -215,8 +258,10 @@ class DeviceSimulator:
                 if not isinstance(payload, dict):
                     raise ValueError("command payload must be a JSON object")
                 self._handle_light_command(device, payload)
-            else:
+            elif isinstance(device, CurtainDevice):
                 self._handle_curtain_command(device, raw, message.topic)
+            else:
+                self._handle_climate_command(device, raw, message.topic)
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
             self._store.append_event(device.device_id, "command_rejected", {"error": str(error)})
             self._publish_feedback(device, "rejected", reason=f"invalid_command: {error}", request_id=None)
@@ -312,10 +357,56 @@ class DeviceSimulator:
         self._publish_state(device, changed["state"], command_id)
         self._publish_feedback(device, "ok", request_id=command_id)
 
+    def _handle_climate_command(self, device: ClimateDevice, raw: str, topic: str) -> None:
+        record = self._require_record(device.device_id)
+        command_id = f"req-{uuid4().hex}"
+        self._store.append_event(device.device_id, "command_received", {"command_id": command_id, "raw": raw, "topic": topic})
+        if not record["online"]:
+            self._publish_feedback(device, "offline", reason="device_offline", request_id=command_id)
+            return
+        mode = str(record["fault_mode"])
+        delay_ms = _command_delay(device, record)
+        if delay_ms:
+            time.sleep(delay_ms / 1000)
+        if mode in {"reject", "random_failure"}:
+            self._publish_feedback(device, "rejected", reason=f"fault_mode={mode}", request_id=command_id)
+            return
+        if mode == "ack_without_state_change":
+            self._publish_state(device, record["state"], command_id)
+            self._publish_feedback(device, "ack_without_state_change", reason="fault_mode=ack_without_state_change", request_id=command_id)
+            return
+        if mode == "invalid_state":
+            self._publish_payload(device.state_topic, {"mode": "BROKEN", "temperature": "invalid"}, retain=True)
+            self._publish_feedback(device, "invalid_state", reason="fault_mode=invalid_state", request_id=command_id)
+            return
+        state = _climate_state(record["state"])
+        if topic == device.command_topic:
+            normalized = raw.lower()
+            if normalized not in {"off", "cool", "heat"}:
+                raise ValueError("climate mode must be off, cool, or heat")
+            state["mode"] = normalized
+        else:
+            temperature = float(raw)
+            if not 16 <= temperature <= 30:
+                raise ValueError("temperature must be between 16 and 30")
+            state["temperature"] = temperature
+        # The current temperature changes gradually enough to show a distinct
+        # device report, while the requested target remains exact.
+        state["current_temperature"] = round((state["current_temperature"] + state["temperature"]) / 2, 1)
+        changed = self._store.update_state(device.device_id, state, command_id)
+        self._publish_state(device, changed["state"], command_id)
+        self._publish_feedback(device, "ok", request_id=command_id)
+
     def _publish_discovery_and_states(self) -> None:
         for device in self._devices.values():
             record = self._require_record(device.device_id)
-            discovery = _light_discovery(device) if isinstance(device, LightDevice) else _curtain_discovery(device)
+            discovery = (
+                _light_discovery(device)
+                if isinstance(device, LightDevice)
+                else _curtain_discovery(device)
+                if isinstance(device, CurtainDevice)
+                else _climate_discovery(device)
+            )
             self._publish_payload(device.discovery_topic, discovery, retain=True)
             self._publish_payload(device.feedback_discovery_topic, _feedback_discovery(device), retain=True)
             self._publish_availability(device, record["online"])
@@ -331,7 +422,7 @@ class DeviceSimulator:
     def _publish_state(self, device: SimulatedDevice, state: dict[str, Any], request_id: str | None) -> None:
         if isinstance(device, LightDevice):
             payload: dict[str, Any] = {"state": state["power"], "brightness": state["brightness"], "updated_at": _timestamp()}
-        else:
+        elif isinstance(device, CurtainDevice):
             normalized = _curtain_state(state)
             mqtt_status = normalized["status"]
             if mqtt_status == "moving":
@@ -339,6 +430,8 @@ class DeviceSimulator:
             elif mqtt_status == "stuck":
                 mqtt_status = "stopped"
             payload = {**normalized, "status": mqtt_status, "updated_at": _timestamp()}
+        else:
+            payload = {**_climate_state(state), "updated_at": _timestamp()}
         if request_id is not None:
             payload["request_id"] = request_id
         self._publish_payload(device.state_topic, payload, retain=True)
@@ -397,7 +490,13 @@ def _light_discovery(device: LightDevice) -> dict[str, Any]:
 
 def _feedback_discovery(device: SimulatedDevice) -> dict[str, Any]:
     """Expose device protocol outcomes to HA without allowing the Agent to write them."""
-    suffix = "living_room_main" if isinstance(device, LightDevice) else "living_room_curtain"
+    suffix = (
+        "living_room_main"
+        if isinstance(device, LightDevice)
+        else "living_room_curtain"
+        if isinstance(device, CurtainDevice)
+        else "living_room_ac"
+    )
     return {
         "name": f"{device.name} 协议反馈",
         "unique_id": f"edgehome_mqtt_{suffix}_feedback",
@@ -445,6 +544,37 @@ def _curtain_discovery(device: CurtainDevice) -> dict[str, Any]:
     }
 
 
+def _climate_discovery(device: ClimateDevice) -> dict[str, Any]:
+    return {
+        "name": device.name,
+        "unique_id": "edgehome_mqtt_living_room_ac",
+        "default_entity_id": "climate.edgehome_living_room_ac",
+        "mode_command_topic": device.command_topic,
+        "mode_state_topic": device.state_topic,
+        "mode_state_template": "{{ value_json.mode }}",
+        "temperature_command_topic": device.temperature_command_topic,
+        "temperature_state_topic": device.state_topic,
+        "temperature_state_template": "{{ value_json.temperature }}",
+        "current_temperature_topic": device.state_topic,
+        "current_temperature_template": "{{ value_json.current_temperature }}",
+        "modes": ["off", "cool", "heat"],
+        "min_temp": 16,
+        "max_temp": 30,
+        "temp_step": 0.5,
+        "temperature_unit": "C",
+        "availability_topic": device.availability_topic,
+        "payload_available": "online",
+        "payload_not_available": "offline",
+        "json_attributes_topic": device.state_topic,
+        "device": {
+            "identifiers": ["edgehome_device_simulator_living_room"],
+            "name": "EdgeHome 客厅设备组",
+            "manufacturer": "EdgeHome Simulator",
+            "model": "Docker MQTT Device Simulator",
+        },
+    }
+
+
 def _light_state(previous: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     state = {"power": str(previous.get("power", "OFF")).upper(), "brightness": int(previous.get("brightness", 0))}
     if "state" in payload:
@@ -471,6 +601,17 @@ def _curtain_state(value: dict[str, Any]) -> dict[str, Any]:
     if status not in {"moving", "open", "closed", "stuck"}:
         raise ValueError("invalid curtain status")
     return {"position": position, "target_position": target, "status": status}
+
+
+def _climate_state(value: dict[str, Any]) -> dict[str, Any]:
+    mode = str(value.get("mode", "off")).lower()
+    temperature = float(value.get("temperature", 24))
+    current = float(value.get("current_temperature", temperature))
+    if mode not in {"off", "cool", "heat"}:
+        raise ValueError("invalid climate mode")
+    if not 16 <= temperature <= 30 or not 0 <= current <= 50:
+        raise ValueError("invalid climate temperatures")
+    return {"mode": mode, "temperature": temperature, "current_temperature": current}
 
 
 def _curtain_target(raw: str, is_position_command: bool) -> int:
@@ -510,8 +651,8 @@ def _load_devices(path: Path) -> dict[str, SimulatedDevice]:
         raise ValueError("devices.yaml must contain a devices mapping")
     devices: dict[str, SimulatedDevice] = {}
     for device_id, raw in loaded["devices"].items():
-        if not isinstance(device_id, str) or not isinstance(raw, dict) or raw.get("type") not in {"light", "curtain"}:
-            raise ValueError("device type must be light or curtain")
+        if not isinstance(device_id, str) or not isinstance(raw, dict) or raw.get("type") not in {"light", "curtain", "climate"}:
+            raise ValueError("device type must be light, curtain, or climate")
         initial_state = raw.get("initial_state")
         behavior = raw.get("behavior", {})
         if not isinstance(initial_state, dict) or not isinstance(behavior, dict):
@@ -522,9 +663,12 @@ def _load_devices(path: Path) -> dict[str, SimulatedDevice]:
                 initial_command["state"] = initial_command["power"]
             state = _light_state({"power": "OFF", "brightness": 0}, initial_command)
             devices[device_id] = LightDevice(device_id, str(raw.get("name", device_id)), str(raw.get("room", "home")), state, int(behavior.get("command_delay_ms", 0)), float(behavior.get("failure_rate", 0)))
-        else:
+        elif raw["type"] == "curtain":
             state = _curtain_state(initial_state)
             devices[device_id] = CurtainDevice(device_id, str(raw.get("name", device_id)), str(raw.get("room", "home")), state, int(behavior.get("command_delay_ms", 0)), float(behavior.get("failure_rate", 0)), int(behavior.get("move_duration_ms", 800)))
+        else:
+            state = _climate_state(initial_state)
+            devices[device_id] = ClimateDevice(device_id, str(raw.get("name", device_id)), str(raw.get("room", "home")), state, int(behavior.get("command_delay_ms", 0)), float(behavior.get("failure_rate", 0)))
     return devices
 
 
