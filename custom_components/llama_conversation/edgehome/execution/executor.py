@@ -33,8 +33,14 @@ class FixedPlanExecutor:
     # The Docker MQTT light owns its state and publishes feedback after a bounded
     # device delay. Poll that feedback rather than treating the service return as
     # completion or issuing a duplicate command while the first one is pending.
-    _DEVICE_FEEDBACK_SETTLE_SECONDS = {"light.edgehome_living_room_main": 1.0}
-    _DEVICE_FEEDBACK_TIMEOUT_SECONDS = {"light.edgehome_living_room_main": 3.0}
+    _DEVICE_FEEDBACK_SETTLE_SECONDS = {
+        "light.edgehome_living_room_main": 1.0,
+        "cover.edgehome_living_room_curtain": 0.2,
+    }
+    _DEVICE_FEEDBACK_TIMEOUT_SECONDS = {
+        "light.edgehome_living_room_main": 3.0,
+        "cover.edgehome_living_room_curtain": 5.0,
+    }
 
     def __init__(
         self,
@@ -261,6 +267,7 @@ class FixedPlanExecutor:
                 "ack_without_state_change": ("state_not_changed", "设备已确认但状态没有变化"),
                 "invalid_state": ("invalid_device_state", "设备上报了无效状态"),
                 "offline": ("device_unavailable", "设备当前不可用"),
+                "stuck": ("device_stuck", "设备移动中卡住"),
             }.get(status)
             if terminal is not None:
                 code, default_reason = terminal

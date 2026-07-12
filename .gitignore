@@ -2,6 +2,8 @@ models/
 loras/
 core/
 config/
+!device_simulator/config/
+!device_simulator/config/devices.yaml
 .DS_Store
 data/**/*.json
 data/**/*.jsonl

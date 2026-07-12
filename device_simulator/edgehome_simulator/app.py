@@ -1,4 +1,4 @@
-"""Run one MQTT-native simulated light with independent state and a test-only admin API."""
+"""Run MQTT-native simulated devices with independent SQLite-owned state."""
 
 from __future__ import annotations
 
@@ -63,10 +63,54 @@ class LightDevice:
         return "homeassistant/sensor/edgehome_living_room_main_feedback/config"
 
 
+@dataclass(frozen=True, slots=True)
+class CurtainDevice:
+    """A cover that reports movement and final position through MQTT topics."""
+
+    device_id: str
+    name: str
+    room: str
+    initial_state: dict[str, Any]
+    command_delay_ms: int
+    failure_rate: float
+    move_duration_ms: int
+
+    @property
+    def command_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/command"
+
+    @property
+    def set_position_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/set_position"
+
+    @property
+    def state_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/state"
+
+    @property
+    def availability_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/availability"
+
+    @property
+    def feedback_topic(self) -> str:
+        return f"edgehome/devices/{self.device_id}/feedback"
+
+    @property
+    def discovery_topic(self) -> str:
+        return "homeassistant/cover/edgehome_living_room_curtain/config"
+
+    @property
+    def feedback_discovery_topic(self) -> str:
+        return "homeassistant/sensor/edgehome_living_room_curtain_feedback/config"
+
+
+SimulatedDevice = LightDevice | CurtainDevice
+
+
 class DeviceSimulator:
     """Bridge MQTT commands to one device-owned SQLite state machine."""
 
-    def __init__(self, devices: dict[str, LightDevice], store: DeviceStateStore, mqtt_host: str, mqtt_port: int) -> None:
+    def __init__(self, devices: dict[str, SimulatedDevice], store: DeviceStateStore, mqtt_host: str, mqtt_port: int) -> None:
         if not devices:
             raise ValueError("at least one simulated device is required")
         self._devices = devices
@@ -144,6 +188,8 @@ class DeviceSimulator:
         self._client.subscribe(_HA_BIRTH_TOPIC, qos=1)
         for device in self._devices.values():
             self._client.subscribe(device.command_topic, qos=1)
+            if isinstance(device, CurtainDevice):
+                self._client.subscribe(device.set_position_topic, qos=1)
         self._publish_discovery_and_states()
 
     def _on_message(self, _client: mqtt.Client, _userdata: Any, message: mqtt.MQTTMessage) -> None:
@@ -151,14 +197,26 @@ class DeviceSimulator:
             if message.payload.decode("utf-8", errors="replace").strip().lower() == "online":
                 self._publish_discovery_and_states()
             return
-        device = next((candidate for candidate in self._devices.values() if candidate.command_topic == message.topic), None)
+        device = next(
+            (
+                candidate
+                for candidate in self._devices.values()
+                if candidate.command_topic == message.topic
+                or isinstance(candidate, CurtainDevice) and candidate.set_position_topic == message.topic
+            ),
+            None,
+        )
         if device is None:
             return
         try:
-            payload = json.loads(message.payload.decode("utf-8"))
-            if not isinstance(payload, dict):
-                raise ValueError("command payload must be a JSON object")
-            self._handle_light_command(device, payload)
+            raw = message.payload.decode("utf-8").strip()
+            if isinstance(device, LightDevice):
+                payload = json.loads(raw)
+                if not isinstance(payload, dict):
+                    raise ValueError("command payload must be a JSON object")
+                self._handle_light_command(device, payload)
+            else:
+                self._handle_curtain_command(device, raw, message.topic)
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
             self._store.append_event(device.device_id, "command_rejected", {"error": str(error)})
             self._publish_feedback(device, "rejected", reason=f"invalid_command: {error}", request_id=None)
@@ -209,10 +267,56 @@ class DeviceSimulator:
         self._publish_state(device, changed["state"], command_id)
         self._publish_feedback(device, "ok", request_id=command_id)
 
+    def _handle_curtain_command(self, device: CurtainDevice, raw: str, topic: str) -> None:
+        record = self._require_record(device.device_id)
+        command_id = f"req-{uuid4().hex}"
+        target = _curtain_target(raw, topic == device.set_position_topic)
+        self._store.append_event(device.device_id, "command_received", {"command_id": command_id, "raw": raw, "target_position": target})
+        if not record["online"]:
+            self._store.append_event(device.device_id, "command_ignored_offline", {"command_id": command_id})
+            self._publish_feedback(device, "offline", reason="device_offline", request_id=command_id)
+            return
+        mode = str(record["fault_mode"])
+        delay_ms = _command_delay(device, record)
+        if delay_ms:
+            time.sleep(delay_ms / 1000)
+        if mode in {"reject", "random_failure"}:
+            self._store.append_event(device.device_id, "command_rejected", {"command_id": command_id, "fault_mode": mode})
+            self._publish_feedback(device, "rejected", reason=f"fault_mode={mode}", request_id=command_id)
+            return
+        if mode == "ack_without_state_change":
+            self._store.append_event(device.device_id, "ack_without_state_change", {"command_id": command_id, "state": record["state"]})
+            self._publish_state(device, record["state"], command_id)
+            self._publish_feedback(device, "ack_without_state_change", reason="fault_mode=ack_without_state_change", request_id=command_id)
+            return
+        if mode == "invalid_state":
+            self._store.append_event(device.device_id, "invalid_state_published", {"command_id": command_id})
+            self._publish_payload(device.state_topic, {"status": "broken", "position": "invalid", "request_id": command_id}, retain=True)
+            self._publish_feedback(device, "invalid_state", reason="fault_mode=invalid_state", request_id=command_id)
+            return
+
+        previous = _curtain_state(record["state"])
+        moving = {"position": previous["position"], "target_position": target, "status": "moving"}
+        changed = self._store.update_state(device.device_id, moving, command_id)
+        self._publish_state(device, changed["state"], command_id)
+        if mode == "stuck":
+            position = round((previous["position"] + target) / 2)
+            stuck = {"position": position, "target_position": target, "status": "stuck"}
+            changed = self._store.update_state(device.device_id, stuck, command_id)
+            self._publish_state(device, changed["state"], command_id)
+            self._publish_feedback(device, "stuck", reason="fault_mode=stuck", request_id=command_id)
+            return
+        time.sleep(device.move_duration_ms / 1000)
+        final = {"position": target, "target_position": target, "status": "open" if target > 0 else "closed"}
+        changed = self._store.update_state(device.device_id, final, command_id)
+        self._publish_state(device, changed["state"], command_id)
+        self._publish_feedback(device, "ok", request_id=command_id)
+
     def _publish_discovery_and_states(self) -> None:
         for device in self._devices.values():
             record = self._require_record(device.device_id)
-            self._publish_payload(device.discovery_topic, _light_discovery(device), retain=True)
+            discovery = _light_discovery(device) if isinstance(device, LightDevice) else _curtain_discovery(device)
+            self._publish_payload(device.discovery_topic, discovery, retain=True)
             self._publish_payload(device.feedback_discovery_topic, _feedback_discovery(device), retain=True)
             self._publish_availability(device, record["online"])
             if record["online"]:
@@ -221,18 +325,27 @@ class DeviceSimulator:
             else:
                 self._publish_feedback(device, "offline", reason="device_offline", request_id=record["last_command_id"])
 
-    def _publish_availability(self, device: LightDevice, online: bool) -> None:
+    def _publish_availability(self, device: SimulatedDevice, online: bool) -> None:
         self._client.publish(device.availability_topic, "online" if online else "offline", qos=1, retain=True)
 
-    def _publish_state(self, device: LightDevice, state: dict[str, Any], request_id: str | None) -> None:
-        payload = {"state": state["power"], "brightness": state["brightness"], "updated_at": _timestamp()}
+    def _publish_state(self, device: SimulatedDevice, state: dict[str, Any], request_id: str | None) -> None:
+        if isinstance(device, LightDevice):
+            payload: dict[str, Any] = {"state": state["power"], "brightness": state["brightness"], "updated_at": _timestamp()}
+        else:
+            normalized = _curtain_state(state)
+            mqtt_status = normalized["status"]
+            if mqtt_status == "moving":
+                mqtt_status = "opening" if normalized["target_position"] > normalized["position"] else "closing"
+            elif mqtt_status == "stuck":
+                mqtt_status = "stopped"
+            payload = {**normalized, "status": mqtt_status, "updated_at": _timestamp()}
         if request_id is not None:
             payload["request_id"] = request_id
         self._publish_payload(device.state_topic, payload, retain=True)
 
     def _publish_feedback(
         self,
-        device: LightDevice,
+        device: SimulatedDevice,
         status: str,
         *,
         reason: str | None = None,
@@ -249,7 +362,7 @@ class DeviceSimulator:
     def _publish_payload(self, topic: str, payload: dict[str, Any], retain: bool = False) -> None:
         self._client.publish(topic, json.dumps(payload, ensure_ascii=False, separators=(",", ":")), qos=1, retain=retain)
 
-    def _require_device(self, device_id: str) -> LightDevice:
+    def _require_device(self, device_id: str) -> SimulatedDevice:
         if device := self._devices.get(device_id):
             return device
         raise KeyError(f"unknown device: {device_id}")
@@ -282,15 +395,47 @@ def _light_discovery(device: LightDevice) -> dict[str, Any]:
     }
 
 
-def _feedback_discovery(device: LightDevice) -> dict[str, Any]:
+def _feedback_discovery(device: SimulatedDevice) -> dict[str, Any]:
     """Expose device protocol outcomes to HA without allowing the Agent to write them."""
+    suffix = "living_room_main" if isinstance(device, LightDevice) else "living_room_curtain"
     return {
         "name": f"{device.name} 协议反馈",
-        "unique_id": "edgehome_mqtt_living_room_main_feedback",
-        "default_entity_id": "sensor.edgehome_living_room_main_feedback",
+        "unique_id": f"edgehome_mqtt_{suffix}_feedback",
+        "default_entity_id": f"sensor.edgehome_{suffix}_feedback",
         "state_topic": device.feedback_topic,
         "value_template": "{{ value_json.status }}",
         "json_attributes_topic": device.feedback_topic,
+        "device": {
+            "identifiers": ["edgehome_device_simulator_living_room"],
+            "name": "EdgeHome 客厅设备组",
+            "manufacturer": "EdgeHome Simulator",
+            "model": "Docker MQTT Device Simulator",
+        },
+    }
+
+
+def _curtain_discovery(device: CurtainDevice) -> dict[str, Any]:
+    return {
+        "name": device.name,
+        "unique_id": "edgehome_mqtt_living_room_curtain",
+        "default_entity_id": "cover.edgehome_living_room_curtain",
+        "device_class": "curtain",
+        "command_topic": device.command_topic,
+        "set_position_topic": device.set_position_topic,
+        "state_topic": device.state_topic,
+        "value_template": "{{ value_json.status }}",
+        "state_open": "open",
+        "state_opening": "opening",
+        "state_closed": "closed",
+        "state_closing": "closing",
+        "state_stopped": "stopped",
+        "position_topic": device.state_topic,
+        "position_template": "{{ value_json.position }}",
+        "availability_topic": device.availability_topic,
+        "payload_available": "online",
+        "payload_not_available": "offline",
+        "optimistic": False,
+        "json_attributes_topic": device.state_topic,
         "device": {
             "identifiers": ["edgehome_device_simulator_living_room"],
             "name": "EdgeHome 客厅设备组",
@@ -317,7 +462,34 @@ def _light_state(previous: dict[str, Any], payload: dict[str, Any]) -> dict[str,
     return state
 
 
-def _command_delay(device: LightDevice, record: dict[str, Any]) -> int:
+def _curtain_state(value: dict[str, Any]) -> dict[str, Any]:
+    position = int(value.get("position", 0))
+    target = int(value.get("target_position", position))
+    if not 0 <= position <= 100 or not 0 <= target <= 100:
+        raise ValueError("curtain position must be between 0 and 100")
+    status = str(value.get("status", "closed")).lower()
+    if status not in {"moving", "open", "closed", "stuck"}:
+        raise ValueError("invalid curtain status")
+    return {"position": position, "target_position": target, "status": status}
+
+
+def _curtain_target(raw: str, is_position_command: bool) -> int:
+    if is_position_command:
+        target = int(raw)
+    else:
+        command = raw.upper()
+        if command == "OPEN":
+            target = 100
+        elif command == "CLOSE":
+            target = 0
+        else:
+            raise ValueError("curtain command must be OPEN or CLOSE")
+    if not 0 <= target <= 100:
+        raise ValueError("curtain position must be between 0 and 100")
+    return target
+
+
+def _command_delay(device: SimulatedDevice, record: dict[str, Any]) -> int:
     if record["fault_mode"] == "delay":
         return record["fault_delay_ms"] or _FAULT_DELAY_MS
     return device.command_delay_ms
@@ -332,30 +504,27 @@ def _timestamp() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _load_devices(path: Path) -> dict[str, LightDevice]:
+def _load_devices(path: Path) -> dict[str, SimulatedDevice]:
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(loaded, dict) or not isinstance(loaded.get("devices"), dict):
         raise ValueError("devices.yaml must contain a devices mapping")
-    devices: dict[str, LightDevice] = {}
+    devices: dict[str, SimulatedDevice] = {}
     for device_id, raw in loaded["devices"].items():
-        if not isinstance(device_id, str) or not isinstance(raw, dict) or raw.get("type") != "light":
-            raise ValueError("the first simulator version supports only light devices")
+        if not isinstance(device_id, str) or not isinstance(raw, dict) or raw.get("type") not in {"light", "curtain"}:
+            raise ValueError("device type must be light or curtain")
         initial_state = raw.get("initial_state")
         behavior = raw.get("behavior", {})
         if not isinstance(initial_state, dict) or not isinstance(behavior, dict):
             raise ValueError(f"invalid definition for {device_id}")
-        initial_command = dict(initial_state)
-        if "power" in initial_command and "state" not in initial_command:
-            initial_command["state"] = initial_command["power"]
-        state = _light_state({"power": "OFF", "brightness": 0}, initial_command)
-        devices[device_id] = LightDevice(
-            device_id=device_id,
-            name=str(raw.get("name", device_id)),
-            room=str(raw.get("room", "home")),
-            initial_state=state,
-            command_delay_ms=int(behavior.get("command_delay_ms", 0)),
-            failure_rate=float(behavior.get("failure_rate", 0)),
-        )
+        if raw["type"] == "light":
+            initial_command = dict(initial_state)
+            if "power" in initial_command and "state" not in initial_command:
+                initial_command["state"] = initial_command["power"]
+            state = _light_state({"power": "OFF", "brightness": 0}, initial_command)
+            devices[device_id] = LightDevice(device_id, str(raw.get("name", device_id)), str(raw.get("room", "home")), state, int(behavior.get("command_delay_ms", 0)), float(behavior.get("failure_rate", 0)))
+        else:
+            state = _curtain_state(initial_state)
+            devices[device_id] = CurtainDevice(device_id, str(raw.get("name", device_id)), str(raw.get("room", "home")), state, int(behavior.get("command_delay_ms", 0)), float(behavior.get("failure_rate", 0)), int(behavior.get("move_duration_ms", 800)))
     return devices
 
 

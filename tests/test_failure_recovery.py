@@ -33,5 +33,5 @@ async def test_failure_recovery_reports_partial_success_after_curtain_state_does
     report = await executor.async_execute(plan)
 
     assert report.status == TaskStatus.PARTIAL_SUCCESS
-    assert report.step_results[-1].error_code == "verification_failed"
-    assert report.step_results[-1].attempts == 2
+    assert report.step_results[-1].error_code == "feedback_timeout"
+    assert report.step_results[-1].attempts == 1

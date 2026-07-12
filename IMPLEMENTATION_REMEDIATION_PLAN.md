@@ -12,7 +12,7 @@
 |M0 硬编码、虚假完成和根因审计|READY_FOR_EXTERNAL_ACCEPTANCE|审计报告、复现记录与整改计划已保存。|
 |M1 MQTT 主灯|READY_FOR_EXTERNAL_ACCEPTANCE|31 条正式 API 黑盒用例通过；MQTT、SQLite、HA、重启和故障证据已保存。|
 |M1.5 结构化会话记忆|READY_FOR_EXTERNAL_ACCEPTANCE|20 条正式 API 黑盒用例通过，覆盖查询、相对调节、失败不污染、HA 重启、会话隔离和 TTL。|
-|M2 MQTT 窗帘|NOT_STARTED|不得使用模板窗帘或 Helper 作为最终状态来源。|
+|M2 MQTT 窗帘|READY_FOR_EXTERNAL_ACCEPTANCE|Docker MQTT 窗帘与 SQLite 状态闭环已验收，覆盖移动、卡住、故障和独立重启；等待外部验收。|
 |M3 MQTT 空调|NOT_STARTED|不得使用 Generic Thermostat/Helper 作为最终状态来源。|
 |M4 MQTT 电视/智能插座|NOT_STARTED|不得使用模板开关作为最终状态来源。|
 |M5 动态观影场景|NOT_STARTED|等待 M1 至 M4 协议闭环验收。|

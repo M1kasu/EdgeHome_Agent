@@ -1,0 +1,25 @@
+devices:
+  living_room_main_light:
+    type: light
+    name: 客厅主灯
+    room: living_room
+    initial_state:
+      power: "ON"
+      brightness: 204
+    capabilities:
+      brightness: true
+    behavior:
+      command_delay_ms: 200
+      failure_rate: 0
+  living_room_curtain:
+    type: curtain
+    name: 客厅窗帘
+    room: living_room
+    initial_state:
+      position: 100
+      target_position: 100
+      status: open
+    behavior:
+      command_delay_ms: 100
+      move_duration_ms: 800
+      failure_rate: 0
