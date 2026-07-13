@@ -49,7 +49,12 @@ from .understanding.reference_resolver import ReferencePlanResolver
 # fallback.  This is a semantic safety boundary, not a list of acceptance
 # sentences: it covers destructive API-like tokens and broad shutdown grammar.
 _BULK_DESTRUCTIVE_REQUEST = re.compile(
-    r"(?:delete[_\s-]*(?:all|every)[_\s-]*devices|(?:全部|所有).{0,12}(?:断电|关(?:闭|掉|上)?|关闭)|(?:忽略|跳过).{0,16}(?:规则|检查).{0,16}(?:断电|关(?:闭|掉|上)?))",
+    r"(?:"
+    r"delete[_\s-]*(?:all|every)[_\s-]*devices|"
+    r"(?:全部|所有|全屋).{0,12}(?:断电|关(?:闭|掉|上)?)|"
+    r"(?:断电|关(?:闭|掉|上)?).{0,12}(?:全部|所有|全屋)(?:设备|电器|家电)|"
+    r"(?:忽略|跳过).{0,16}(?:规则|检查).{0,16}(?:断电|关(?:闭|掉|上)?)"
+    r")",
     re.IGNORECASE,
 )
 
@@ -173,7 +178,10 @@ class EdgeHomeCoordinator:
         if _BULK_DESTRUCTIVE_REQUEST.search(text):
             return FastPathResponse(
                 handled=True,
-                speech="已拒绝批量删除或全屋断电请求；受保护设备和未逐项验证的设备不会执行控制。",
+                speech=(
+                    "已拒绝该批量断电请求：冰箱、路由器等受保护设备不能通过批量操作关闭；"
+                    "未发送任何设备控制命令。"
+                ),
                 trace_route="bulk_destructive_rejected",
             )
         if text.strip() == "确认关闭受保护设备":

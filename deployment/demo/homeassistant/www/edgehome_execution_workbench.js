@@ -233,8 +233,10 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
       this._appendMessage({ role: "assistant", content: this._replyText(response) });
     } catch (error) {
       WORKBENCH_SESSION.messages = WORKBENCH_SESSION.messages.slice(0, -1);
-      const detail = error?.message ? `：${error.message}` : "。";
-      this._appendMessage({ role: "assistant", error: true, content: `本轮请求未能完成${detail}` });
+      const detail = error?.message
+        ? `失败原因：${error.message}`
+        : "对话服务未返回详细原因；本轮未确认任何设备操作成功。";
+      this._appendMessage({ role: "assistant", error: true, content: `本轮请求未能完成。${detail}` });
     } finally {
       WORKBENCH_SESSION.processing = false;
       this._refreshActiveWorkbench();
