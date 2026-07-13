@@ -100,6 +100,17 @@ python .\scripts\configure_mqtt_integration.py --url http://127.0.0.1:8123 --bro
 
 无需手工创建这些实体。
 
+### 3.1 录制与演示：EdgeHome 工作台
+
+完成上述配置后，打开 [EdgeHome 工作台](http://127.0.0.1:8123/edgehome-workbench)。正常用户从右上角 **Assist** 输入指令；工作台将同屏展示：
+
+- MQTT Discovery 设备的真实状态；
+- Agent 最近一次记录的处理路径、结构化计划和逐步状态回读；
+- 路由器、冰箱的受保护状态；
+- 仅用于本地演示的“重置环境 / 注入窗帘卡住 / 清除窗帘故障”按钮。
+
+这些按钮经 Home Assistant 调用本地 device-simulator 管理接口，便于演示故障回读；它们不是业务控制入口。工作台读取 `sensor.edgehome_last_execution`，因此模型回复、HTTP 200 或单独的 MQTT ACK 不会被展示为“已成功执行”。完整录制步骤见 [`competition_submission/07_演示视频脚本.md`](competition_submission/07_演示视频脚本.md)。
+
 ## 4. 日常启动、停止和重置
 
 ```powershell
