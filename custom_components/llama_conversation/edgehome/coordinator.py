@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import logging
 import re
 from typing import Any
 
@@ -44,6 +45,8 @@ from .tasks.parser import ChineseDelayedCommandParser
 from .understanding.models import FastIntent, FastRouteDecision, FastRouteStatus
 from .understanding.reference_resolver import ReferencePlanResolver
 
+_LOGGER = logging.getLogger(__name__)
+
 
 # Bulk deletion and blanket-power-off wording must never reach a generative
 # fallback.  This is a semantic safety boundary, not a list of acceptance
@@ -70,6 +73,7 @@ class FastPathResponse:
     planned_plan: TaskPlan | None = None
     execution_report: TaskExecutionReport | None = None
     trace_route: str = "fast_path"
+    trace_status: TaskStatus | None = None
     planning_text: str | None = None
 
 
@@ -421,6 +425,14 @@ class EdgeHomeCoordinator:
             return FastPathResponse(handled=True, speech="当前端侧资源繁忙，已保留快速控制，请稍后重试复杂任务。")
         try:
             planning = await planner.async_plan(request, {**runtime_options, "edgehome_queue_wait_ms": queue_wait_ms})
+        except Exception:
+            _LOGGER.exception("EdgeHome complex planning service failed before a plan was accepted")
+            return FastPathResponse(
+                handled=True,
+                speech="本轮未能完成：本地规划服务不可用或响应超时；未生成执行计划，也未发送任何设备控制命令。",
+                trace_route="complex_planning_unavailable",
+                trace_status=TaskStatus.FAILED,
+            )
         finally:
             await self._resource_monitor.async_release(lease)
             self._resource_scheduler.release_llm()
@@ -583,7 +595,7 @@ class EdgeHomeCoordinator:
         if report is not None:
             execution_steps = [self._trace_step_result(step) for step in report.step_results]
 
-        state = report.status.value if report is not None else "handled"
+        state = report.status.value if report is not None else (result.trace_status.value if result.trace_status else "handled")
         attributes: dict[str, Any] = {
             "route": result.trace_route,
             "route_label": self._trace_route_label(result.trace_route),
@@ -631,6 +643,7 @@ class EdgeHomeCoordinator:
         return {
             "fast_path": "快速规则",
             "complex_planning": "复杂任务规划",
+            "complex_planning_unavailable": "本地规划服务异常",
             "complex_replanning": "受限重规划",
             "protected_confirmation": "受保护设备二次确认",
             "dialogue_reference": "多轮引用操作",

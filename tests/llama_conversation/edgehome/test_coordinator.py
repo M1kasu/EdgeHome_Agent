@@ -13,7 +13,7 @@ from custom_components.llama_conversation.edgehome.entity_resolver import Entity
 from custom_components.llama_conversation.edgehome.execution.executor import FixedPlanExecutor
 from custom_components.llama_conversation.edgehome.knowledge.associations import DeviceManualAssociation, DeviceManualRegistry
 from custom_components.llama_conversation.edgehome.knowledge.indexer import KnowledgeDocument, LocalKnowledgeIndex
-from custom_components.llama_conversation.edgehome.models import PlanStep, TaskPlan, VerificationRule
+from custom_components.llama_conversation.edgehome.models import PlanStep, TaskPlan, TaskStatus, VerificationRule
 from custom_components.llama_conversation.edgehome.planner.llm_planner import PlanningResult, PlanningStatus
 
 
@@ -113,6 +113,40 @@ async def test_complex_candidate_rejection_stops_before_generic_model_fallback(h
 
     assert result.handled is True
     assert result.speech == "任务规划未通过安全校验，未执行任何设备。"
+
+
+@pytest.mark.asyncio
+async def test_complex_planning_backend_failure_returns_explained_safe_response(hass) -> None:
+    class FailingPlanner:
+        def is_candidate(self, _text: str) -> bool:
+            return True
+
+        async def async_plan(self, _request, _options) -> PlanningResult:
+            raise TimeoutError("planner offline")
+
+    class LlmScheduler:
+        def decide(self, **_kwargs):
+            return SimpleNamespace(decision="llm_path", reason="resources_available")
+
+        async def async_acquire_llm(self) -> float:
+            return 0.0
+
+        def release_llm(self) -> None:
+            return None
+
+    coordinator = EdgeHomeCoordinator(hass, resource_scheduler=LlmScheduler())
+    result = await coordinator.async_handle_complex("准备复杂场景", "conversation-1", "agent-1", {}, FailingPlanner())
+    coordinator.record_trace(result)
+    trace = hass.states.get("sensor.edgehome_last_execution")
+
+    assert result.handled is True
+    assert result.speech is not None
+    assert "本地规划服务不可用或响应超时" in result.speech
+    assert "未发送任何设备控制命令" in result.speech
+    assert result.trace_route == "complex_planning_unavailable"
+    assert result.trace_status == TaskStatus.FAILED
+    assert trace is not None
+    assert trace.state == "failed"
 
 
 @pytest.mark.asyncio

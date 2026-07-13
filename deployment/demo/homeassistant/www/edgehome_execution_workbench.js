@@ -6,7 +6,7 @@
  * 不在前端预置任何执行结果或设备数据。
  */
 
-const EDGEHOME_WORKBENCH_VERSION = "20260714-11";
+const EDGEHOME_WORKBENCH_VERSION = "20260714-15";
 
 const SHORTCUTS = [
   { label: "观影场景", prompt: "帮我准备客厅观影场景" },
@@ -63,6 +63,7 @@ const TRACE_STATUS = {
 // 模块级别，使一次真实请求在面板刷新前后仍可持续展示，而不写入浏览器存储。
 const WORKBENCH_SESSION = {
   conversationId: "",
+  agentId: "",
   messages: [],
   processing: false,
 };
@@ -126,6 +127,19 @@ function isRawToolPayload(value) {
   );
 }
 
+function conversationErrorDetail(error) {
+  const candidates = [
+    error?.message,
+    error?.error?.message,
+    error?.data?.message,
+    error?.error?.data?.message,
+    error?.code,
+    error?.error?.code,
+    typeof error === "string" ? error : "",
+  ];
+  return candidates.find((candidate) => typeof candidate === "string" && candidate.trim()) || "";
+}
+
 class EdgeHomeExecutionWorkbench extends HTMLElement {
   connectedCallback() {
     activeWorkbench = this;
@@ -168,10 +182,26 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
     return this._entity("sensor.edgehome_last_execution");
   }
 
-  _agentId() {
+  _agentEntityId() {
     const entities = Object.keys(this._hass?.states || {});
-    // 优先选择当前安装的 EdgeHome 本地对话智能体；干净环境中不存在时交给 HA 默认智能体。
+    // 仅用于界面展示；不能直接作为 conversation/process 的 agent_id。
     return entities.find((entityId) => entityId.startsWith("conversation.") && entityId.includes("edgehome")) || undefined;
+  }
+
+  async _resolveAgentId() {
+    if (WORKBENCH_SESSION.agentId) return WORKBENCH_SESSION.agentId;
+    const response = await this._hass.callWS({
+      type: "conversation/agent/list",
+      language: this._hass.language || "zh-Hans",
+    });
+    const agent = asArray(response?.agents).find(
+      (candidate) => typeof candidate?.id === "string" && candidate.id.startsWith("conversation.") && candidate.id.includes("edgehome"),
+    );
+    if (!agent?.id) {
+      throw new Error("未发现可用的 EdgeHome 对话代理，未发送本轮请求。");
+    }
+    WORKBENCH_SESSION.agentId = agent.id;
+    return agent.id;
   }
 
   _appendMessage(message) {
@@ -224,8 +254,7 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
         language: this._hass.language || "zh-Hans",
       };
       if (WORKBENCH_SESSION.conversationId) request.conversation_id = WORKBENCH_SESSION.conversationId;
-      const agentId = this._agentId();
-      if (agentId) request.agent_id = agentId;
+      request.agent_id = await this._resolveAgentId();
 
       const response = await this._hass.callWS(request);
       WORKBENCH_SESSION.conversationId = response?.conversation_id || WORKBENCH_SESSION.conversationId;
@@ -233,10 +262,11 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
       this._appendMessage({ role: "assistant", content: this._replyText(response) });
     } catch (error) {
       WORKBENCH_SESSION.messages = WORKBENCH_SESSION.messages.slice(0, -1);
-      const detail = error?.message
-        ? `失败原因：${error.message}`
+      const detail = conversationErrorDetail(error);
+      const explanation = detail
+        ? `失败原因：${detail}`
         : "对话服务未返回详细原因；本轮未确认任何设备操作成功。";
-      this._appendMessage({ role: "assistant", error: true, content: `本轮请求未能完成。${detail}` });
+      this._appendMessage({ role: "assistant", error: true, content: `本轮请求未能完成。${explanation}` });
     } finally {
       WORKBENCH_SESSION.processing = false;
       this._refreshActiveWorkbench();
@@ -263,7 +293,11 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
         const label = message.role === "user" ? "你" : message.intro ? "EdgeHome 引导" : "EdgeHome";
         const pending = message.pending ? '<span class="pending-dot" aria-label="处理中"></span>' : "";
         // 会话状态可能来自页面热更新前的旧组件；渲染时再次过滤，确保历史气泡也不泄露工具 JSON。
-        const content = isRawToolPayload(message.content) ? this._traceSummaryForToolPayload() : message.content;
+        const content = isRawToolPayload(message.content)
+          ? this._traceSummaryForToolPayload()
+          : message.error && message.content === "本轮请求未能完成。"
+            ? "本轮请求未能完成。该历史记录没有保存后端原因；未确认任何设备操作成功。"
+            : message.content;
         return `<div class="message-row ${kind}">
           <span class="message-label">${escapeHtml(label)}</span>
           <div class="message-bubble">${pending}${escapeHtml(content)}</div>
@@ -381,7 +415,7 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
     const goal = this._attribute(trace, "goal", "—");
     const speech = this._attribute(trace, "speech", "发起请求后，这里会保留智能体的真实回复。");
     const updatedAt = this._attribute(trace, "updated_at", null);
-    const agentId = this._agentId();
+    const agentId = WORKBENCH_SESSION.agentId || this._agentEntityId();
     const processing = WORKBENCH_SESSION.processing ? "disabled" : "";
 
     this.shadowRoot.innerHTML = `
