@@ -35,6 +35,7 @@ def test_installer_adds_workbench_assets(tmp_path: Path) -> None:
     assert "conversation/process" in frontend
     assert "conversation/agent/list" in frontend
     assert "conversationErrorDetail" in frontend
+    assert "LOCAL_READ_TOOLS" in frontend
     assert "快捷场景" in frontend
     assert "工具与 MQTT 回读" in frontend
     assert "isRawToolPayload" in frontend

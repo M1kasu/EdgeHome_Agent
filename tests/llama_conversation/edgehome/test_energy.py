@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from custom_components.llama_conversation.edgehome.energy.conversation import EnergyConversationHandler
+from custom_components.llama_conversation.edgehome.energy.service import EnergyService
 from custom_components.llama_conversation.edgehome.energy.statistics import (
     EnergyAnalyzer,
     EnergySample,
@@ -35,6 +36,25 @@ async def test_energy_conversation_accepts_natural_weekly_increase_question() ->
 
     assert result is not None
     assert result.startswith("最近一周累计用电 42.50 kWh")
+
+
+@pytest.mark.asyncio
+async def test_energy_conversation_reads_live_living_room_power_without_device_control() -> None:
+    class Service:
+        def current_living_room_power_watts(self) -> float:
+            return 95.0
+
+    handler = EnergyConversationHandler(None, Service())
+
+    result = await handler.async_handle("查询客厅当前能耗", "conversation-1")
+
+    assert result == "客厅当前可读功率为 95.0 W，来自客厅电视 MQTT 功耗计。这是实时功率而非累计电量；未控制任何设备。"
+
+
+def test_energy_service_reads_live_mqtt_power_sensor(hass) -> None:
+    hass.states.async_set("sensor.edgehome_living_room_tv_power", "95.0", {"unit_of_measurement": "W"})
+
+    assert EnergyService(hass).current_living_room_power_watts() == 95.0
 
 
 @pytest.mark.asyncio

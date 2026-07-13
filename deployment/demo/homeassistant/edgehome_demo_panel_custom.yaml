@@ -2,6 +2,6 @@
   sidebar_title: EdgeHome Agent
   sidebar_icon: mdi:shield-home-outline
   url_path: edgehome-workbench
-  module_url: /local/edgehome_execution_workbench.js?v=20260714-15
+  module_url: /local/edgehome_execution_workbench.js?v=20260714-16
   embed_iframe: false
   trust_external_script: false

@@ -26,6 +26,20 @@ class EnergyConversationHandler:
     ) -> str | None:
         normalized = text.strip().rstrip("。！？?!")
         if normalized in {
+            "查询客厅当前能耗",
+            "查询客厅能耗",
+            "客厅当前能耗",
+            "客厅当前功耗",
+            "查询客厅当前功耗",
+        }:
+            watts = self._service.current_living_room_power_watts()
+            if watts is None:
+                return "客厅 MQTT 功耗计当前没有可用读数，因此无法给出实时功率；未控制任何设备。"
+            return (
+                f"客厅当前可读功率为 {watts:.1f} W，来自客厅电视 MQTT 功耗计。"
+                "这是实时功率而非累计电量；未控制任何设备。"
+            )
+        if normalized in {
             "最近一周为什么用电量变高了",
             "最近一周为什么用电量变高",
             "最近一周为什么用电量增加",

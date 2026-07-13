@@ -6,7 +6,7 @@
  * 不在前端预置任何执行结果或设备数据。
  */
 
-const EDGEHOME_WORKBENCH_VERSION = "20260714-15";
+const EDGEHOME_WORKBENCH_VERSION = "20260714-16";
 
 const SHORTCUTS = [
   { label: "观影场景", prompt: "帮我准备客厅观影场景" },
@@ -48,6 +48,8 @@ const TOOL_LABELS = {
   "switch.turn_on": "开启设备",
   "switch.turn_off": "关闭设备",
 };
+
+const LOCAL_READ_TOOLS = new Set(["get_room_state", "get_device_state"]);
 
 const TRACE_STATUS = {
   success: { label: "已完成并验证", className: "ok", icon: "mdi:check-circle" },
@@ -354,7 +356,7 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
   }
 
   _resultRows(results) {
-    if (!results.length) return '<div class="empty-copy">等待一次包含设备动作的请求。</div>';
+    if (!results.length) return '<div class="empty-copy">本轮未发送 MQTT 命令；本地查询无需设备回读。</div>';
     return results
       .map((result) => {
         const verified = result?.verified === true;
@@ -408,7 +410,7 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
     const steps = asArray(this._attribute(trace, "plan_steps", []));
     const results = asArray(this._attribute(trace, "step_results", []));
     // 仅设备实体动作属于 MQTT 回读；读取家庭状态属于本地规划前置步骤，不能被误标为“等待设备回读”。
-    const mqttResults = results.filter((result) => Boolean(result?.entity_id));
+    const mqttResults = results.filter((result) => Boolean(result?.entity_id) && !LOCAL_READ_TOOLS.has(result?.tool));
     const verifiedCount = mqttResults.filter((result) => result?.verified === true).length;
     const route = this._attribute(trace, "route_label", "等待第一次请求");
     const decision = this._attribute(trace, "decision", "—");
@@ -518,7 +520,7 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
 
           <div class="right-column">
             <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:format-list-checks"></ha-icon>任务规划</div><span class="card-note">${steps.length} 步</span></div><div class="panel-body">${this._planRows(steps)}</div></section>
-            <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:transmission-tower"></ha-icon>工具与 MQTT 回读</div><span class="card-note">${mqttResults.length ? `${verifiedCount}/${mqttResults.length} 已验证` : "等待动作"}</span></div><div class="panel-body">${this._resultRows(mqttResults)}</div></section>
+            <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:transmission-tower"></ha-icon>执行与 MQTT 回读</div><span class="card-note">${mqttResults.length ? `${verifiedCount}/${mqttResults.length} 已验证` : "本地读取"}</span></div><div class="panel-body">${this._resultRows(mqttResults)}</div></section>
             <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:devices"></ha-icon>设备状态面板</div><span class="card-note">独立 MQTT 模拟设备</span></div><div class="panel-body">${this._deviceRows()}</div></section>
             <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:chart-line"></ha-icon>环境与能耗</div><span class="card-note">实时实体状态</span></div><div class="panel-body"><div class="metric-grid">${this._environmentRows()}</div></div></section>
             <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:shield-lock-outline"></ha-icon>安全边界</div><span class="card-note">保护设备不可批量断电</span></div><div class="panel-body">${this._protectedDevice("switch.edgehome_router", "mdi:router-network")}${this._protectedDevice("switch.edgehome_refrigerator", "mdi:fridge-outline")}<p class="boundary-note">执行候选动作先经过实体白名单、参数范围与安全策略检查；最终仅以设备 MQTT 状态和 Home Assistant 回读一致为完成依据。</p></div></section>

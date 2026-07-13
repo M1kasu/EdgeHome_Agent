@@ -23,6 +23,7 @@ class EnergyService:
         normal_dataset: Path | None = None,
         automation_manager: EnergyAutomationManager | None = None,
     ) -> None:
+        self._hass = hass
         configured_root = Path(hass.config.path("edgehome_energy"))
         root = configured_root if configured_root.exists() else Path(__file__).resolve().parents[4] / "datasets" / "energy"
         self._abnormal_dataset = abnormal_dataset or root / "abnormal_week.csv"
@@ -36,6 +37,16 @@ class EnergyService:
     async def query_energy_data(self) -> EnergyLoadResult:
         """读取当前测试数据；原始记录不交给语言模型。"""
         return self._loader.load(self._abnormal_dataset)
+
+    def current_living_room_power_watts(self) -> float | None:
+        """Return the live MQTT power-meter value, without inferring cumulative energy."""
+        state = self._hass.states.get("sensor.edgehome_living_room_tv_power")
+        if state is None or state.state in {"unknown", "unavailable"}:
+            return None
+        try:
+            return float(state.state)
+        except (TypeError, ValueError):
+            return None
 
     async def analyse_home_energy(self) -> EnergyAnalysis:
         """计算当前异常周并与正常周对比。"""
