@@ -20,6 +20,8 @@ def test_brightness_parser_supports_generic_half_and_tenths() -> None:
 
     assert extractor.extract("把客厅主灯调到一半", FastIntent.SET_BRIGHTNESS).value == 50
     assert extractor.extract("把客厅主灯调成三成", FastIntent.SET_BRIGHTNESS).value == 30
+    assert extractor.extract("客厅那盏大灯开到四成", FastIntent.SET_BRIGHTNESS).value == 40
+    assert extractor.extract("窗帘拉到三分之一", FastIntent.CONTROL_CURTAIN).value == 33
 
 
 def test_light_intent_accepts_generic_open_and_brightness_forms() -> None:
@@ -27,6 +29,7 @@ def test_light_intent_accepts_generic_open_and_brightness_forms() -> None:
 
     assert classifier.classify("把客厅主照明开一下").intent == FastIntent.TURN_ON
     assert classifier.classify("灯光降到20%").intent == FastIntent.SET_BRIGHTNESS
+    assert classifier.classify("客厅那盏大灯给我开到四成").intent == FastIntent.SET_BRIGHTNESS
 
 
 def test_entity_resolution_combines_room_and_device_tokens_without_a_full_phrase() -> None:

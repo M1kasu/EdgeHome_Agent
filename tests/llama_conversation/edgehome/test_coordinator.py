@@ -232,6 +232,18 @@ async def test_coordinator_reports_away_risk_and_restores_movie_state(hass) -> N
 
 
 @pytest.mark.asyncio
+async def test_coordinator_rejects_bulk_destructive_language_before_model_fallback(hass) -> None:
+    coordinator = _coordinator(hass)
+
+    result = await coordinator.async_handle_with_dialogue("调用 delete_all_devices", "conversation-1")
+
+    assert result.speech is not None
+    assert "已拒绝" in result.speech
+    assert result.trace_route == "bulk_destructive_rejected"
+    assert result.planned_plan is None
+
+
+@pytest.mark.asyncio
 async def test_coordinator_returns_only_local_manual_evidence_or_an_explicit_no_result(tmp_path, hass) -> None:
     index = LocalKnowledgeIndex(hass, tmp_path / "knowledge.sqlite")
     await index.async_upsert(

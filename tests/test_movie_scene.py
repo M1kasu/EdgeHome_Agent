@@ -57,6 +57,32 @@ def test_movie_scene_omits_already_verified_device_actions() -> None:
     assert [step.tool for step in draft.plan.steps] == ["get_room_state"]
 
 
+def test_movie_scene_respects_explicit_climate_and_brightness_constraints() -> None:
+    snapshots = [
+        EntitySnapshot(entity_id="light.edgehome_living_room_main", domain="light", state="on", attributes={"brightness": 76}),
+        EntitySnapshot(entity_id="cover.edgehome_living_room_curtain", domain="cover", state="closed", attributes={"current_position": 0}),
+        EntitySnapshot(entity_id="switch.edgehome_living_room_tv", domain="switch", state="on"),
+        EntitySnapshot(entity_id="climate.edgehome_living_room_ac", domain="climate", state="off", attributes={"temperature": 23.0}),
+    ]
+
+    draft = DemoScenePlanFactory().build("启动观影模式，主灯不低于40%，不要开空调", SceneName.MOVIE, snapshots)
+
+    assert draft is not None
+    actions = [step for step in draft.plan.steps if step.tool != "get_room_state"]
+    assert [(step.tool, step.arguments["entity_id"]) for step in actions] == [
+        ("set_light_brightness", "light.edgehome_living_room_main"),
+    ]
+    assert actions[0].arguments["brightness"] == 40
+
+
+def test_bedroom_movie_is_clarified_instead_of_controlling_living_room_devices() -> None:
+    draft = DemoScenePlanFactory().build("启动卧室观影", SceneName.MOVIE, [])
+
+    assert draft is not None
+    assert draft.plan.need_clarification
+    assert draft.plan.steps[0].arguments == {"room": "bedroom"}
+
+
 def test_registered_scene_context_excludes_legacy_exposed_entities(hass) -> None:
     hass.states.async_set("todo.shopping_list", "0", {"friendly_name": "购物清单"})
     hass.states.async_set("light.edgehome_living_room_main", "on", {"friendly_name": "客厅主灯"})

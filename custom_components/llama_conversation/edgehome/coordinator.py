@@ -45,6 +45,15 @@ from .understanding.models import FastIntent, FastRouteDecision, FastRouteStatus
 from .understanding.reference_resolver import ReferencePlanResolver
 
 
+# Bulk deletion and blanket-power-off wording must never reach a generative
+# fallback.  This is a semantic safety boundary, not a list of acceptance
+# sentences: it covers destructive API-like tokens and broad shutdown grammar.
+_BULK_DESTRUCTIVE_REQUEST = re.compile(
+    r"(?:delete[_\s-]*(?:all|every)[_\s-]*devices|(?:全部|所有).{0,12}(?:断电|关(?:闭|掉|上)?|关闭)|(?:忽略|跳过).{0,16}(?:规则|检查).{0,16}(?:断电|关(?:闭|掉|上)?))",
+    re.IGNORECASE,
+)
+
+
 @dataclass(frozen=True, slots=True)
 class FastPathResponse:
     """Conversation-facing result that distinguishes safe handling from model fallback."""
@@ -161,6 +170,12 @@ class EdgeHomeCoordinator:
         }
         if not self._input_guard.accepts(text):
             return FastPathResponse(handled=True, speech="输入为空或超过 EdgeHome 允许长度，已拒绝处理。")
+        if _BULK_DESTRUCTIVE_REQUEST.search(text):
+            return FastPathResponse(
+                handled=True,
+                speech="已拒绝批量删除或全屋断电请求；受保护设备和未逐项验证的设备不会执行控制。",
+                trace_route="bulk_destructive_rejected",
+            )
         if text.strip() == "确认关闭受保护设备":
             pending = await self._dialogue_store.async_consume_protected_confirmation(conversation_id, **context_identity)
             if pending is None:

@@ -12,6 +12,9 @@ _CHINESE_UNITS = {"十": 10, "百": 100}
 _ARABIC_NUMBER = re.compile(r"(?<![\d.])([+-]?\d{1,3}(?:\.\d+)?)(?:\s*(?:%|％|度|℃|摄氏度))?")
 _CHINESE_NUMBER = re.compile(r"[零〇一二两三四五六七八九十百点]+")
 _BRIGHTNESS_FRACTION = re.compile(r"([零〇一二两三四五六七八九十\d]+)\s*成")
+_CHINESE_FRACTION = re.compile(r"([零〇一二两三四五六七八九十\d]+)\s*分之\s*([零〇一二两三四五六七八九十\d]+)")
+_RELATIVE_TEMPERATURE = re.compile(r"(?:往?(?:上|下)|升高|降低|提高|减少|增加|加|减|提)[^。；，,]{0,6}?(?:度|℃)")
+_ABSOLUTE_TEMPERATURE = re.compile(r"(?:调到|调至|设为|设置|改成|调成|降至|升至)[^。；，,]{0,4}?\d{1,3}(?:\.\d+)?\s*(?:度|℃)")
 
 
 class ChineseSlotExtractor:
@@ -19,6 +22,8 @@ class ChineseSlotExtractor:
 
     def extract(self, text: str, intent: FastIntent) -> FastSlots:
         """Return entity text and an optional bounded numeric value for one intent."""
+        if intent == FastIntent.SET_TEMPERATURE and _RELATIVE_TEMPERATURE.search(text) and not _ABSOLUTE_TEMPERATURE.search(text):
+            return FastSlots(entity_query=text.strip(), value=None, errors=["相对温度请说明目标温度"])
         value = self._value_for_intent(text, intent)
         errors: list[str] = []
 
@@ -44,6 +49,15 @@ class ChineseSlotExtractor:
                 numerator = _parse_brightness_fraction(fraction.group(1))
                 if numerator is not None:
                     return numerator * 10
+        if intent in {FastIntent.SET_BRIGHTNESS, FastIntent.CONTROL_CURTAIN}:
+            if "一半" in text:
+                return 50.0
+            fraction = _CHINESE_FRACTION.search(text)
+            if fraction is not None:
+                denominator = _parse_brightness_fraction(fraction.group(1))
+                numerator = _parse_brightness_fraction(fraction.group(2))
+                if denominator and numerator is not None and 0 <= numerator <= denominator:
+                    return round(numerator * 100 / denominator)
         numbers = self._numbers(text)
         return numbers[-1] if numbers else None
 

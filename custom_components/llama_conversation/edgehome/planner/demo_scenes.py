@@ -59,6 +59,14 @@ class DemoScenePlanFactory:
 
     def _movie(self, goal: str, snapshots: list[EntitySnapshot]) -> TaskPlan:
         """Create a state-aware scene using only independently verified MQTT devices."""
+        if "卧室" in goal:
+            return TaskPlan(
+                goal=goal,
+                scene=SceneName.MOVIE.value,
+                need_clarification=True,
+                clarification_question="卧室尚未接入独立 MQTT 观影设备，请确认是否改为执行客厅观影场景。",
+                steps=[PlanStep(id="movie_read_bedroom", tool="get_room_state", arguments={"room": "bedroom"})],
+            )
         devices = {record.device_type: record.entity_id for record in self._registry.for_scene("movie", protocol="mqtt")}
         expected_domains = {"light", "cover", "switch", "climate"}
         if set(devices) != expected_domains:
@@ -72,6 +80,10 @@ class DemoScenePlanFactory:
         current = {snapshot.entity_id: snapshot for snapshot in snapshots}
         light_id, curtain_id, tv_id, climate_id = (devices["light"], devices["cover"], devices["switch"], devices["climate"])
         brightness, temperature = self._movie_brightness(goal), self._movie_temperature(goal)
+        minimum_brightness = self._movie_minimum_brightness(goal)
+        if minimum_brightness is not None:
+            brightness = max(brightness, minimum_brightness)
+        skip_climate = self._movie_skips_climate(goal)
         steps = [PlanStep(id="movie_read_living", tool="get_room_state", arguments={"room": "living_room"})]
         if _current_position(current.get(curtain_id)) != 0:
             steps.append(self._curtain_step("movie_close_curtain", curtain_id, 0, on_failure=OnFailurePolicy.SKIP))
@@ -79,10 +91,11 @@ class DemoScenePlanFactory:
             steps.append(self._brightness_step("movie_dim_main", light_id, brightness))
         if _state(current.get(tv_id)) != "on":
             steps.append(self._on_step("movie_enable_tv", tv_id))
-        if _state(current.get(climate_id)) != "cool":
-            steps.append(self._hvac_mode_step("movie_enable_ac", climate_id, "cool"))
-        if not _temperature_matches(current.get(climate_id), temperature):
-            steps.append(self._temperature_step("movie_set_ac_temperature", climate_id, temperature))
+        if not skip_climate:
+            if _state(current.get(climate_id)) != "cool":
+                steps.append(self._hvac_mode_step("movie_enable_ac", climate_id, "cool"))
+            if not _temperature_matches(current.get(climate_id), temperature):
+                steps.append(self._temperature_step("movie_set_ac_temperature", climate_id, temperature))
         return TaskPlan(
             goal=goal,
             scene=SceneName.MOVIE.value,
@@ -250,6 +263,18 @@ class DemoScenePlanFactory:
         if match and 16.0 <= float(match.group(1)) <= 30.0:
             return float(match.group(1))
         return 25.5
+
+    @staticmethod
+    def _movie_minimum_brightness(goal: str) -> int | None:
+        match = re.search(r"(?:主灯|灯光|照明|灯)[^。；，,]{0,16}?(?:不低于|至少|最低)\s*(\d{1,3})\s*(?:%|％|百分之|成)?", goal)
+        if match and 0 <= int(match.group(1)) <= 100:
+            return int(match.group(1))
+        return None
+
+    @staticmethod
+    def _movie_skips_climate(goal: str) -> bool:
+        normalized = "".join(goal.split())
+        return bool(re.search(r"(?:不要开|别开|不需要开|无需开|不要启动|别启动)(?:客厅)?空调", normalized))
 
     @staticmethod
     def _delay_seconds(goal: str) -> int | None:

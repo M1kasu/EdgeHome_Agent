@@ -16,7 +16,7 @@ class ChineseIntentClassifier:
     _QUERY_WORDS = re.compile(r"状态|查询|查看|看看|多少|几度|吗|么|？|\?")
     _BRIGHTNESS_WORDS = re.compile(r"亮度|调亮|调暗|调高|调低|提高|降低|明亮")
     _LIGHT_PERCENT_COMMAND = re.compile(
-        r"(?:灯|灯光|照明|光).*(?:调到|调至|设为|设置|改成|调成|降到|升到|提高|降低|调高|调低|亮度).*(?:%|％|百分之|成|一半)"
+        r"(?:灯|灯光|照明|光).*(?:调到|调至|设为|设置|改成|调成|降到|升到|提高|降低|调高|调低|开到|开至|亮度).*(?:%|％|百分之|成|一半|分之)"
     )
     _TEMPERATURE_WORDS = re.compile(r"温度|几度|制冷|制热")
     _AC_TEMPERATURE_COMMAND = re.compile(r"(?:空调|ac).*(?:\d{1,3}(?:\.\d+)?\s*度|调到|调为|设为)", re.IGNORECASE)

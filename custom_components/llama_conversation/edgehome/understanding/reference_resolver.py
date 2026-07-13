@@ -44,10 +44,10 @@ _REFERENCE_MARKER = re.compile(r"(?:它|这个|那个|刚才|目前|上一)")
 _TURN_OFF = re.compile(r"(?:关(?:掉|闭|上)?(?:吧)?|熄灭)")
 _COPY_MARKER = re.compile(r"(?:一样|同样|这个值)")
 _RELATIVE = re.compile(
-    r"(?P<direction>调高|提高|增加|升高|调低|降低|减少|降|调亮|调暗|亮|暗)"
+    r"(?P<direction>调高|提高|增加|升高|压亮|调低|降低|减少|压暗|降|调亮|调暗|亮|暗)"
     r"(?:\s*(?P<amount>\d{1,3})\s*(?:%|％|个?百分点)?)?"
 )
-_INCREASE_WORDS = frozenset({"调高", "提高", "增加", "升高", "调亮", "亮"})
+_INCREASE_WORDS = frozenset({"调高", "提高", "增加", "升高", "压亮", "调亮", "亮"})
 
 
 class ReferencePlanResolver:
