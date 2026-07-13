@@ -173,3 +173,27 @@
       default_entity_id: binary_sensor.edgehome_window
       device_class: window
       state: "{{ is_state('input_boolean.edgehome_window_open_state', 'on') }}"
+- button:
+    - name: EdgeHome 演示：重置环境
+      unique_id: edgehome_demo_reset_environment
+      default_entity_id: button.edgehome_demo_reset_environment
+      press:
+        - action: script.turn_on
+          target:
+            entity_id: script.edgehome_reset_demo_environment
+    - name: EdgeHome 演示：注入窗帘卡住
+      unique_id: edgehome_demo_inject_curtain_stuck
+      default_entity_id: button.edgehome_demo_inject_curtain_stuck
+      press:
+        - action: rest_command.edgehome_set_curtain_fault
+          data:
+            mode: stuck
+            delay_ms: 0
+    - name: EdgeHome 演示：清除窗帘故障
+      unique_id: edgehome_demo_clear_curtain_fault
+      default_entity_id: button.edgehome_demo_clear_curtain_fault
+      press:
+        - action: rest_command.edgehome_set_curtain_fault
+          data:
+            mode: none
+            delay_ms: 0

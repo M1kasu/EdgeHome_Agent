@@ -1,0 +1,7 @@
+edgehome_set_curtain_fault:
+  url: http://device-simulator:8090/admin/devices/living_room_curtain/fault
+  method: POST
+  headers:
+    content-type: application/json
+  payload: >-
+    {"mode":"{{ mode | default('none') }}","delay_ms":{{ delay_ms | default(0) }}}

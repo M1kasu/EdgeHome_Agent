@@ -1,0 +1,104 @@
+title: EdgeHome 工作台
+views:
+  - title: 可信执行闭环
+    path: execution
+    icon: mdi:shield-check-outline
+    cards:
+      - type: markdown
+        content: |
+          # EdgeHome 可信执行工作台
+          正常用户从右上角 **Assist** 输入生活化指令；本页只展示由 EdgeHome 真实记录的计划、执行和回读结果。
+
+          {% set trace = 'sensor.edgehome_last_execution' %}
+          **当前处理路径：** {{ state_attr(trace, 'route_label') or '等待首次请求' }}  
+          **最终结论：** {{ states(trace) if states(trace) not in ['unknown', 'unavailable'] else '尚无执行记录' }}  
+          **最近目标：** {{ state_attr(trace, 'goal') or '—' }}
+      - type: horizontal-stack
+        cards:
+          - type: vertical-stack
+            cards:
+              - type: markdown
+                content: |
+                  ## 设备真实状态
+                  设备由独立 MQTT 模拟器维护状态，并非 Home Assistant Helper 假状态。
+              - type: grid
+                columns: 2
+                square: false
+                cards:
+                  - type: tile
+                    entity: light.edgehome_living_room_main
+                    name: 客厅主灯
+                    icon: mdi:ceiling-light
+                  - type: tile
+                    entity: cover.edgehome_living_room_curtain
+                    name: 客厅窗帘
+                    icon: mdi:curtains
+                  - type: tile
+                    entity: climate.edgehome_living_room_ac
+                    name: 客厅空调
+                    icon: mdi:air-conditioner
+                  - type: tile
+                    entity: switch.edgehome_living_room_tv
+                    name: 客厅电视
+                    icon: mdi:television
+          - type: vertical-stack
+            cards:
+              - type: markdown
+                content: |
+                  ## 决策与结构化计划
+                  {% set trace = 'sensor.edgehome_last_execution' %}
+                  {% set labels = {
+                    'light.edgehome_living_room_main': '客厅主灯',
+                    'cover.edgehome_living_room_curtain': '客厅窗帘',
+                    'climate.edgehome_living_room_ac': '客厅空调',
+                    'switch.edgehome_living_room_tv': '客厅电视'
+                  } %}
+                  {% set steps = state_attr(trace, 'plan_steps') or [] %}
+                  {% if steps %}
+                  {% for step in steps %}
+                  {{ loop.index }}. **{{ step['tool'] }}**{% if step['entity_id'] %} → {{ labels.get(step['entity_id'], step['entity_id']) }}{% endif %}
+                  {% endfor %}
+                  {% else %}
+                  _本轮未生成设备控制计划，可能是查询、澄清或安全拒绝。_
+                  {% endif %}
+              - type: markdown
+                content: |
+                  ## 回读验证结果
+                  {% set trace = 'sensor.edgehome_last_execution' %}
+                  {% set labels = {
+                    'light.edgehome_living_room_main': '客厅主灯',
+                    'cover.edgehome_living_room_curtain': '客厅窗帘',
+                    'climate.edgehome_living_room_ac': '客厅空调',
+                    'switch.edgehome_living_room_tv': '客厅电视'
+                  } %}
+                  {% set results = state_attr(trace, 'step_results') or [] %}
+                  {% if results %}
+                  {% for result in results %}
+                  {% if result['verified'] %}✅{% else %}❌{% endif %} **{{ labels.get(result['entity_id'], result['entity_id'] or result['tool']) }}**：{{ result['state_before'] or '—' }} → {{ result['state_after'] or '—' }}{% if result['error'] %}（{{ result['error'] }}）{% endif %}
+                  {% endfor %}
+                  {% else %}
+                  _等待一次实际执行后展示设备回读。_
+                  {% endif %}
+      - type: horizontal-stack
+        cards:
+          - type: markdown
+            content: |
+              ## 安全边界
+              路由器：**{{ states('switch.edgehome_router') }}**  
+              冰箱：**{{ states('switch.edgehome_refrigerator') }}**
+
+              受保护设备和批量断电请求会在模型规划前拦截；拒绝不等于执行成功。
+          - type: vertical-stack
+            cards:
+              - type: button
+                entity: button.edgehome_demo_reset_environment
+                name: 重置演示环境
+                icon: mdi:restart
+              - type: button
+                entity: button.edgehome_demo_inject_curtain_stuck
+                name: 演示：注入窗帘卡住
+                icon: mdi:curtains-alert
+              - type: button
+                entity: button.edgehome_demo_clear_curtain_fault
+                name: 清除窗帘故障
+                icon: mdi:check-circle-outline

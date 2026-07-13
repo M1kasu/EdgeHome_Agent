@@ -3,6 +3,10 @@ edgehome_reset_demo_environment:
   description: 将全部 edgehome_* 虚拟设备恢复到晚间场景，供每次测试前调用。
   mode: single
   sequence:
+    - action: rest_command.edgehome_set_curtain_fault
+      data:
+        mode: none
+        delay_ms: 0
     - action: input_boolean.turn_on
       target:
         entity_id:
@@ -66,3 +70,23 @@ edgehome_reset_demo_environment:
           - climate.edgehome_bedroom_ac
       data:
         hvac_mode: "off"
+
+edgehome_demo_inject_curtain_stuck:
+  alias: EdgeHome 演示：注入窗帘卡住故障
+  description: 仅用于演示状态回读如何识别窗帘部分失败。
+  mode: single
+  sequence:
+    - action: rest_command.edgehome_set_curtain_fault
+      data:
+        mode: stuck
+        delay_ms: 0
+
+edgehome_demo_clear_curtain_fault:
+  alias: EdgeHome 演示：清除窗帘故障
+  description: 清除演示故障注入，恢复下一次正常设备控制。
+  mode: single
+  sequence:
+    - action: rest_command.edgehome_set_curtain_fault
+      data:
+        mode: none
+        delay_ms: 0

@@ -15,6 +15,8 @@ _CONFIG_INCLUDES = {
     "input_number": "edgehome_demo_input_number.yaml",
     "template": "edgehome_demo_templates.yaml",
     "climate": "edgehome_demo_climate.yaml",
+    "rest_command": "edgehome_demo_rest_commands.yaml",
+    "lovelace": "edgehome_demo_lovelace.yaml",
 }
 _SCRIPT_START = "# >>> EdgeHome demo script (managed) >>>"
 _SCRIPT_END = "# <<< EdgeHome demo script (managed) <<<"
@@ -37,11 +39,15 @@ def install(config_dir: Path) -> None:
 
 def _ensure_includes(path: Path) -> None:
     content = _remove_legacy_mqtt_include(path.read_text(encoding="utf-8"))
-    additions = [
-        f"{key}: !include {filename}"
-        for key, filename in _CONFIG_INCLUDES.items()
-        if f"!include {filename}" not in content
-    ]
+    additions = []
+    for key, filename in _CONFIG_INCLUDES.items():
+        if f"!include {filename}" in content:
+            continue
+        # 保留用户已有的顶层集成配置，避免安装演示工作台时覆盖手工 Lovelace 或 REST 命令。
+        # 仅在干净配置中写入受版本控制的 EdgeHome include。
+        if re.search(rf"(?m)^{re.escape(key)}\s*:", content):
+            continue
+        additions.append(f"{key}: !include {filename}")
     if additions:
         suffix = "" if content.endswith("\n") else "\n"
         path.write_text(f"{content}{suffix}\n# EdgeHome 虚拟家居测试环境\n{'\n'.join(additions)}\n", encoding="utf-8")

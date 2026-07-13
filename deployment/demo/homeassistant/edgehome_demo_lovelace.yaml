@@ -1,0 +1,8 @@
+dashboards:
+  edgehome-workbench:
+    mode: yaml
+    title: EdgeHome 工作台
+    icon: mdi:shield-home-outline
+    show_in_sidebar: true
+    require_admin: false
+    filename: edgehome_demo_execution_dashboard.yaml
