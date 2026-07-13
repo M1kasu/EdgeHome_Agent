@@ -8,6 +8,9 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 docker compose -f deployment/docker-compose.yml up -d --build
+if ($LASTEXITCODE -ne 0) {
+    throw "docker compose failed; inspect the command output above before retrying."
+}
 
 # Docker Compose returns before Home Assistant and llama.cpp are healthy.
 # Poll within a bounded period so a normal cold start is not reported as a failure.
