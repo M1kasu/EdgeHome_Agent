@@ -113,6 +113,15 @@ function briefId(value) {
   return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
 }
 
+function isRawToolPayload(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  return (
+    /(?:HassCallService|function_call|tool_calls|target_device)/i.test(text) &&
+    (/^```(?:json)?\s*[\[{]/i.test(text) || /^[\[{]/.test(text))
+  );
+}
+
 class EdgeHomeExecutionWorkbench extends HTMLElement {
   connectedCallback() {
     activeWorkbench = this;
@@ -166,11 +175,28 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
   }
 
   _replyText(response) {
-    return (
+    const candidate =
       response?.response?.speech?.plain?.speech ||
       response?.response?.card?.simple?.content ||
-      "智能体已处理请求，但没有返回可展示的文本。"
-    );
+      "";
+    if (!isRawToolPayload(candidate)) {
+      return candidate || "智能体已处理请求，但没有返回可展示的文本。";
+    }
+    return this._traceSummaryForToolPayload();
+  }
+
+  _traceSummaryForToolPayload() {
+    const trace = this._trace();
+    const speech = this._attribute(trace, "speech", "");
+    if (speech && !isRawToolPayload(speech)) return speech;
+
+    const results = asArray(this._attribute(trace, "step_results", []));
+    if (!results.length) return "已生成受限设备执行计划，详细状态请查看右侧工作台。";
+    const failed = results.filter((result) => result?.verified === false);
+    if (failed.length) return `已生成执行计划，但有 ${failed.length} 个步骤未通过设备状态回读。`;
+    const waiting = results.filter((result) => result?.verified === null || result?.verified === undefined);
+    if (waiting.length) return `已生成执行计划，正在等待 ${waiting.length} 个设备步骤的 MQTT 状态回读。`;
+    return "设备执行计划已完成，并已通过 MQTT 状态回读验证。";
   }
 
   async _sendPrompt(rawPrompt) {
