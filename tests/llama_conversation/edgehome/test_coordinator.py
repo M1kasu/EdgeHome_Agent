@@ -226,6 +226,8 @@ async def test_coordinator_reports_away_risk_and_restores_movie_state(hass) -> N
     assert "在家人员 Alice" in report.speech
     assert "打开门窗 前门" in report.speech
     assert restored.speech == "已恢复观影前状态。"
+    assert restored.execution_report is not None
+    assert restored.trace_route == "scenario_restore"
     assert hass.states.get("light.living").state == "off"
 
 

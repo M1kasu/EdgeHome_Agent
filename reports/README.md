@@ -13,6 +13,7 @@
 - [M4 电视与功耗验收](M4_TV_ACCEPTANCE.md)
 - [M5 动态 MQTT 观影验收](M5_MOVIE_ACCEPTANCE.md)
 - [M6 离家保护验收](M6_LEAVING_ACCEPTANCE.md)
+- [M7 跨设备故障恢复验收](M7_FAULT_RECOVERY_ACCEPTANCE.md)
 
 ## 核心质量与比赛报告
 

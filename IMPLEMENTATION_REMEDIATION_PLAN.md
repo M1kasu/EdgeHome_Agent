@@ -17,7 +17,7 @@
 |M4 MQTT 电视/智能插座|READY_FOR_EXTERNAL_ACCEPTANCE|客厅电视已迁移为 Docker MQTT Switch；开关、功耗、故障与三容器重启矩阵 12/12 通过本地验收。路由器和冰箱仍受保护。|
 |M5 动态观影场景|READY_FOR_EXTERNAL_ACCEPTANCE|仅编排主灯、窗帘、空调、电视四个 MQTT 设备；动态参数、幂等、部分失败与拒绝场景 6/6 通过本地验收。|
 |M6 离家保护|READY_FOR_EXTERNAL_ACCEPTANCE|离家前阻断在场／门窗风险，只关闭必要 MQTT 设备；冰箱与路由器在 4/4 本地用例中保持开启。|
-|M7 故障恢复|NOT_STARTED|依赖 M1 至 M6 的真实协议设备。|
+|M7 故障恢复|READY_FOR_EXTERNAL_ACCEPTANCE|观影恢复点覆盖主灯、窗帘、空调模式/温度与电视；3/3 正式 Conversation API 故障恢复用例通过。|
 |M8 离线、重启与稳定性|NOT_STARTED|跨设备最终验收。|
 
 允许状态：`NOT_STARTED`、`IMPLEMENTING`、`IMPLEMENTED_NOT_VERIFIED`、`INTEGRATION_VERIFIED`、`READY_FOR_EXTERNAL_ACCEPTANCE`、`EXTERNALLY_ACCEPTED`、`REJECTED`、`BLOCKED`。自动化过程不得自行标记 `EXTERNALLY_ACCEPTED`。

@@ -680,18 +680,31 @@ class EdgeHomeCoordinator:
                 return FastPathResponse(handled=True, speech="离家检查完成：未发现人员、门窗或传感器异常。")
             return FastPathResponse(handled=True, speech=f"离家检查：在家人员 {people}；打开门窗 {opened}；不可用门窗 {unavailable}。")
 
-        if text not in {"恢复观影前状态", "恢复观影场景"}:
+        if text.strip() not in {"恢复观影前状态", "恢复观影场景", "恢复观影"}:
             return None
         plan = await self._scenarios.async_restore_plan(conversation_id, "movie")
         if plan is None:
-            return FastPathResponse(handled=True, speech="没有可恢复的观影场景状态。")
+            return FastPathResponse(handled=True, speech="没有可恢复的观影场景状态。", trace_route="scenario_restore")
         report = await self._executor.async_execute(plan)
         if report.status == TaskStatus.SUCCESS:
             await self._scenarios.async_clear(conversation_id, "movie")
-            return FastPathResponse(handled=True, speech="已恢复观影前状态。", completed_plan=plan)
+            return FastPathResponse(
+                handled=True,
+                speech="已恢复观影前状态。",
+                completed_plan=plan,
+                planned_plan=plan,
+                execution_report=report,
+                trace_route="scenario_restore",
+            )
         failure = report.step_results[-1] if report.step_results else None
         reason = failure.error_message if failure and failure.error_message else "设备状态没有达到预期"
-        return FastPathResponse(handled=True, speech=f"恢复观影前状态失败：{reason}。")
+        return FastPathResponse(
+            handled=True,
+            speech=f"恢复观影前状态失败：{reason}。恢复点已保留，可在设备恢复后重试。",
+            planned_plan=plan,
+            execution_report=report,
+            trace_route="scenario_restore",
+        )
 
     async def _async_handle_mqtt_movie_scene(
         self,

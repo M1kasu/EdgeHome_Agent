@@ -37,3 +37,30 @@ async def test_scenario_manager_captures_targets_and_builds_restoration_plan(has
 
     await manager.async_clear("conversation-1", "movie")
     assert await manager.async_restore_plan("conversation-1", "movie") is None
+
+
+@pytest.mark.asyncio
+async def test_scenario_manager_restores_climate_mode_and_target_temperature(hass) -> None:
+    hass.states.async_set("climate.living", "heat", {"temperature": 23.5})
+    resolver = ExposedEntityResolver(hass, exposure_checker=lambda *_: True)
+    manager = ScenarioStateManager(hass, resolver)
+    movie_plan = TaskPlan(
+        goal="观影模式",
+        steps=[
+            PlanStep(
+                id="scene_ac",
+                tool="set_temperature",
+                arguments={"entity_id": "climate.living", "temperature": 26.0},
+                verify=VerificationRule(entity_id="climate.living", attributes={"temperature": 26.0}),
+            )
+        ],
+    )
+
+    await manager.async_capture("conversation-1", "movie", movie_plan)
+    restoration = await manager.async_restore_plan("conversation-1", "movie")
+
+    assert restoration is not None
+    assert [(step.tool, step.arguments) for step in restoration.steps] == [
+        ("set_hvac_mode", {"entity_id": "climate.living", "hvac_mode": "heat"}),
+        ("set_temperature", {"entity_id": "climate.living", "temperature": 23.5}),
+    ]
