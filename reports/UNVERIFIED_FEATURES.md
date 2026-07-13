@@ -1,6 +1,6 @@
 # 未验证与未完成能力
 
-**更新时间：2026-07-13（M7 完成后）**
+**更新时间：2026-07-13（M8 完成后）**
 
 |能力|状态|边界与原因|
 |---|---|---|
@@ -12,7 +12,7 @@
 |M5 动态观影|READY_FOR_EXTERNAL_ACCEPTANCE|仅使用四个 MQTT 设备，动态参数、幂等与部分失败场景已通过本地验收。|
 |M6 离家保护|READY_FOR_EXTERNAL_ACCEPTANCE|已在四个 MQTT 设备上完成正常离家、门窗/人员阻断与电视拒绝 4/4 本地验收；冰箱和路由器保持开启。|
 |M7 故障恢复|READY_FOR_EXTERNAL_ACCEPTANCE|3 条正式 Conversation API 用例验证跨设备恢复、拒绝后的同会话重试和失败场景恢复点清理；仍等待独立外部验收。|
-|M8 离线/重启/稳定性|NOT_STARTED|仅 M1 单设备重启和 broker 恢复已验证，尚未完成系统级稳定性验收。|
+|M8 离线/重启/稳定性|READY_FOR_EXTERNAL_ACCEPTANCE|4 条正式系统用例覆盖三轮场景循环、HA 重启、模拟器 SQLite 恢复和 Broker 中断/恢复；仍等待独立外部验收。|
 |能耗分析|IMPLEMENTED_NOT_VERIFIED|使用合成/本地数据，不得描述为真实家庭长期能耗。|
 |硬编码审计|IMPLEMENTED_NOT_VERIFIED|M1 相关错误为 0；已知自然语言分支 warning 仍须在后续阶段继续收敛。|
 

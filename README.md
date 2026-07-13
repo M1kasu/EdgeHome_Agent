@@ -14,6 +14,9 @@ EdgeHome Agent 是一个运行在本机 Docker 环境中的 Home Assistant 边�
 | M3：MQTT 空调 | 待外部黑盒验收 | 支持 16–30°C 目标温度、状态回读、6 项故障矩阵和三容器恢复。 |
 | M4：MQTT 客厅电视 | 待外部黑盒验收 | 支持开关、95 W／1.5 W 功耗回读、5 类故障和三容器恢复。 |
 | M5：动态 MQTT 观影 | 待外部黑盒验收 | 只编排四个 MQTT 设备，支持动态参数、幂等与部分失败回读。 |
+| M6：离家保护 | 待外部黑盒验收 | 门窗/人员风险会阻断执行；只控制四个 MQTT 设备，冰箱和路由器始终受保护。 |
+| M7：跨设备故障恢复 | 待外部黑盒验收 | 观影恢复点覆盖主灯、窗帘、空调模式/温度与电视；设备拒绝后可安全重试。 |
+| M8：系统稳定性 | 待外部黑盒验收 | 已验证三轮场景循环，以及 HA、模拟器和 Broker 的中断与自动恢复。 |
 | 物理设备接入 | 未声明 | 当前仅使用 Docker 数字设备仿真器。 |
 
 > PR #12 保持 Draft，M1 尚未合并；请勿把脚本通过或仓库中的模拟实体表述为物理设备验收通过。
@@ -88,6 +91,9 @@ python .\scripts\accept_m3_mqtt_climate.py
 python .\scripts\verify_m3_climate_restart_matrix.py
 python .\scripts\accept_m4_mqtt_tv.py
 python .\scripts\accept_m5_mqtt_movie.py
+python .\scripts\accept_m6_leaving_protection.py
+python .\scripts\accept_m7_fault_recovery.py
+python .\scripts\accept_m8_system_stability.py
 ```
 
 普通 Assist 对话会自动回传 `conversation_id`。开发者工具或一次性 REST 请求若未回传上一轮 ID，会被安全地视为新会话，并要求澄清设备，绝不会使用全局“上一设备”猜测。

@@ -1,6 +1,6 @@
 # EdgeHome 实施整改计划
 
-**计划版本：M6 完成后，2026-07-12**
+**计划版本：M8 完成后，2026-07-13**
 **当前分支：** `agent/phase14-competition-package`
 
 每个里程碑均须先实现、再通过正式 Home Assistant Conversation API 做黑盒验收、保存原始证据、独立提交并推送。PR 始终保持 Draft，只有独立验收方可以标记 `EXTERNALLY_ACCEPTED`。
@@ -18,7 +18,7 @@
 |M5 动态观影场景|READY_FOR_EXTERNAL_ACCEPTANCE|仅编排主灯、窗帘、空调、电视四个 MQTT 设备；动态参数、幂等、部分失败与拒绝场景 6/6 通过本地验收。|
 |M6 离家保护|READY_FOR_EXTERNAL_ACCEPTANCE|离家前阻断在场／门窗风险，只关闭必要 MQTT 设备；冰箱与路由器在 4/4 本地用例中保持开启。|
 |M7 故障恢复|READY_FOR_EXTERNAL_ACCEPTANCE|观影恢复点覆盖主灯、窗帘、空调模式/温度与电视；3/3 正式 Conversation API 故障恢复用例通过。|
-|M8 离线、重启与稳定性|NOT_STARTED|跨设备最终验收。|
+|M8 离线、重启与稳定性|READY_FOR_EXTERNAL_ACCEPTANCE|4/4 正式 Conversation API 系统用例通过，覆盖三轮场景循环、HA／模拟器／Broker 中断与自动恢复。|
 
 允许状态：`NOT_STARTED`、`IMPLEMENTING`、`IMPLEMENTED_NOT_VERIFIED`、`INTEGRATION_VERIFIED`、`READY_FOR_EXTERNAL_ACCEPTANCE`、`EXTERNALLY_ACCEPTED`、`REJECTED`、`BLOCKED`。自动化过程不得自行标记 `EXTERNALLY_ACCEPTED`。
 
