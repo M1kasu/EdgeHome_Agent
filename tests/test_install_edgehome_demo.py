@@ -24,12 +24,17 @@ def test_installer_adds_workbench_assets(tmp_path: Path) -> None:
     assert configuration.count("rest_command: !include edgehome_demo_rest_commands.yaml") == 1
     panel = (tmp_path / "edgehome_demo_panel_custom.yaml").read_text(encoding="utf-8")
     assert "edgehome-execution-workbench" in panel
-    assert "sidebar_title: EdgeHome Workbench" in panel
+    assert "sidebar_title: EdgeHome Agent" in panel
     assert "sidebar_icon: mdi:shield-home-outline" in panel
     assert "module_url: /local/edgehome_execution_workbench.js" in panel
     assert "edgehome_set_curtain_fault:" in (tmp_path / "edgehome_demo_rest_commands.yaml").read_text(encoding="utf-8")
     assert 'mode: "none"' in (tmp_path / "edgehome_demo_templates.yaml").read_text(encoding="utf-8")
-    assert (tmp_path / "www" / "edgehome_execution_workbench.js").is_file()
+    workbench = (tmp_path / "www" / "edgehome_execution_workbench.js")
+    assert workbench.is_file()
+    frontend = workbench.read_text(encoding="utf-8")
+    assert "conversation/process" in frontend
+    assert "快捷场景" in frontend
+    assert "工具与 MQTT 回读" in frontend
 
 
 def test_installer_preserves_existing_lovelace_configuration(tmp_path: Path) -> None:

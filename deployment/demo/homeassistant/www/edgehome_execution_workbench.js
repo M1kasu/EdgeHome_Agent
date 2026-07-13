@@ -1,6 +1,28 @@
-/* EdgeHome 可信执行工作台：不依赖第三方卡片，所有字段均来自 Home Assistant 状态机。 */
+/*
+ * EdgeHome 智能体演示工作台。
+ *
+ * 设计上沿用“对话输入 + 快捷场景 + 过程可见”的竞赛演示结构；所有结果均来自
+ * Home Assistant Conversation WebSocket、sensor.edgehome_last_execution 和 MQTT 实体状态，
+ * 不在前端预置任何执行结果或设备数据。
+ */
 
-const EDGEHOME_WORKBENCH_VERSION = "20260714";
+const EDGEHOME_WORKBENCH_VERSION = "20260714-11";
+
+const SHORTCUTS = [
+  { label: "观影场景", prompt: "帮我准备客厅观影场景" },
+  { label: "离家保护", prompt: "我要出门了，进入离家保护模式" },
+  { label: "调暗主灯", prompt: "把客厅主灯调到四成" },
+  { label: "窗帘控制", prompt: "把客厅窗帘拉到三分之一" },
+  { label: "能耗查询", prompt: "查询客厅当前能耗" },
+  { label: "设备巡检", prompt: "检查客厅设备现在的状态" },
+];
+
+const DEVICE_META = [
+  { entityId: "light.edgehome_living_room_main", label: "客厅主灯", icon: "mdi:ceiling-light" },
+  { entityId: "cover.edgehome_living_room_curtain", label: "客厅窗帘", icon: "mdi:curtains" },
+  { entityId: "climate.edgehome_living_room_ac", label: "客厅空调", icon: "mdi:air-conditioner" },
+  { entityId: "switch.edgehome_living_room_tv", label: "客厅电视", icon: "mdi:television-classic" },
+];
 
 const ENTITY_LABELS = {
   "light.edgehome_living_room_main": "客厅主灯",
@@ -23,15 +45,24 @@ const TOOL_LABELS = {
   "switch.turn_off": "关闭设备",
 };
 
-const STATUS_META = {
-  success: { label: "已完成并验证", tone: "success", icon: "mdi:check-decagram" },
-  partial_success: { label: "部分完成", tone: "warning", icon: "mdi:alert-decagram" },
-  failed: { label: "执行未完成", tone: "danger", icon: "mdi:close-octagon" },
-  needs_replan: { label: "等待受限重规划", tone: "warning", icon: "mdi:source-branch-sync" },
-  handled: { label: "已处理", tone: "info", icon: "mdi:shield-check" },
-  unknown: { label: "等待首次指令", tone: "muted", icon: "mdi:clock-outline" },
-  unavailable: { label: "执行记录不可用", tone: "danger", icon: "mdi:cloud-alert" },
+const TRACE_STATUS = {
+  success: { label: "已完成并验证", className: "ok", icon: "mdi:check-circle" },
+  partial_success: { label: "部分完成", className: "warn", icon: "mdi:alert-circle" },
+  failed: { label: "执行未完成", className: "error", icon: "mdi:close-circle" },
+  needs_replan: { label: "需要重新规划", className: "warn", icon: "mdi:source-branch-sync" },
+  handled: { label: "已处理", className: "info", icon: "mdi:check-circle-outline" },
+  unknown: { label: "等待指令", className: "muted", icon: "mdi:clock-outline" },
+  unavailable: { label: "记录不可用", className: "error", icon: "mdi:cloud-alert" },
 };
+
+// Home Assistant 在实体状态变化后可能重新创建 panel_custom 实例。将演示会话提升到
+// 模块级别，使一次真实请求在面板刷新前后仍可持续展示，而不写入浏览器存储。
+const WORKBENCH_SESSION = {
+  conversationId: "",
+  messages: [],
+  processing: false,
+};
+let activeWorkbench = null;
 
 function escapeHtml(value) {
   return String(value ?? "—")
@@ -61,7 +92,7 @@ function stateText(state) {
     closing: "关闭中",
     heat: "制热",
     cool: "制冷",
-    heat_cool: "自动冷热",
+    heat_cool: "自动冷暖",
     dry: "除湿",
     fan_only: "送风",
     unavailable: "离线",
@@ -70,22 +101,45 @@ function stateText(state) {
   return labels[state] || String(state || "未知");
 }
 
+function dateText(value) {
+  if (!value || value === "—") return "等待新的请求";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString("zh-CN", { hour12: false });
+}
+
+function briefId(value) {
+  if (!value) return "新会话";
+  return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
+}
+
 class EdgeHomeExecutionWorkbench extends HTMLElement {
-  setConfig(config) {
-    this._config = config || {};
+  connectedCallback() {
+    activeWorkbench = this;
+    if (!WORKBENCH_SESSION.messages.length) {
+      WORKBENCH_SESSION.messages = [this._introMessage()];
+    }
     this._render();
+  }
+
+  disconnectedCallback() {
+    if (activeWorkbench === this) activeWorkbench = null;
+  }
+
+  _introMessage() {
+    return {
+      role: "assistant",
+      intro: true,
+      content: "我是 EdgeHome 家居智能体。输入自然语言指令，右侧会同步展示本轮的决策、计划、MQTT 回读和设备状态。",
+    };
+  }
+
+  _refreshActiveWorkbench() {
+    (activeWorkbench || this)._render();
   }
 
   set hass(hass) {
     this._hass = hass;
-    this._render();
-  }
-
-  getCardSize() {
-    return 16;
-  }
-
-  connectedCallback() {
     this._render();
   }
 
@@ -97,317 +151,348 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
     return entity?.attributes?.[name] ?? fallback;
   }
 
-  _deviceCard(entityId, title, icon, metric, detail) {
-    const entity = this._entity(entityId);
-    const state = entity?.state || "unavailable";
-    const online = state !== "unavailable" && state !== "unknown";
-    return `
-      <article class="device-card ${online ? "" : "is-offline"}">
-        <div class="device-icon"><ha-icon icon="${icon}"></ha-icon></div>
-        <div class="device-main">
-          <span>${escapeHtml(title)}</span>
-          <strong>${escapeHtml(metric)}</strong>
-          <small>${escapeHtml(detail)}</small>
-        </div>
-        <span class="device-state ${online ? "" : "offline"}">${online ? "MQTT 在线" : "不可用"}</span>
-      </article>`;
+  _trace() {
+    return this._entity("sensor.edgehome_last_execution");
   }
 
-  _lightCard() {
-    const entity = this._entity("light.edgehome_living_room_main");
-    const state = entity?.state || "unavailable";
-    const brightness = numberOrNull(this._attribute(entity, "brightness"));
-    const percent = brightness === null ? null : Math.round((brightness / 255) * 100);
-    const metric = state === "on" ? `${percent ?? "—"}%` : stateText(state);
-    return this._deviceCard(
-      "light.edgehome_living_room_main",
-      "客厅主灯",
-      "mdi:ceiling-light",
-      metric,
-      state === "on" ? "亮度由设备状态回读" : "等待下一次控制"
+  _agentId() {
+    const entities = Object.keys(this._hass?.states || {});
+    // 优先选择当前安装的 EdgeHome 本地对话智能体；干净环境中不存在时交给 HA 默认智能体。
+    return entities.find((entityId) => entityId.startsWith("conversation.") && entityId.includes("edgehome")) || undefined;
+  }
+
+  _appendMessage(message) {
+    WORKBENCH_SESSION.messages = [...WORKBENCH_SESSION.messages, message];
+  }
+
+  _replyText(response) {
+    return (
+      response?.response?.speech?.plain?.speech ||
+      response?.response?.card?.simple?.content ||
+      "智能体已处理请求，但没有返回可展示的文本。"
     );
   }
 
-  _curtainCard() {
-    const entity = this._entity("cover.edgehome_living_room_curtain");
-    const state = entity?.state || "unavailable";
-    const position = numberOrNull(this._attribute(entity, "current_position"));
-    const metric = position === null ? stateText(state) : `${position}%`;
-    return this._deviceCard(
-      "cover.edgehome_living_room_curtain",
-      "客厅窗帘",
-      "mdi:curtains",
-      metric,
-      state === "opening" || state === "closing" ? "设备正在移动" : stateText(state)
-    );
-  }
-
-  _acCard() {
-    const entity = this._entity("climate.edgehome_living_room_ac");
-    const state = entity?.state || "unavailable";
-    const target = numberOrNull(this._attribute(entity, "temperature"));
-    const current = numberOrNull(this._attribute(entity, "current_temperature"));
-    const metric = state === "off" ? "已关闭" : target === null ? stateText(state) : `${target}°C`;
-    const detail = current === null ? stateText(state) : `当前 ${current}°C · ${stateText(state)}`;
-    return this._deviceCard("climate.edgehome_living_room_ac", "客厅空调", "mdi:air-conditioner", metric, detail);
-  }
-
-  _tvCard() {
-    const entity = this._entity("switch.edgehome_living_room_tv");
-    const state = entity?.state || "unavailable";
-    return this._deviceCard(
-      "switch.edgehome_living_room_tv",
-      "客厅电视",
-      "mdi:television-classic",
-      stateText(state),
-      state === "on" ? "设备状态已同步" : "未纳入当前操作"
-    );
-  }
-
-  _plan(steps) {
-    if (!steps.length) {
-      return `<div class="empty-state"><ha-icon icon="mdi:route-variant"></ha-icon><span>等待一次请求后展示结构化计划</span></div>`;
+  async _sendPrompt(rawPrompt) {
+    const prompt = String(rawPrompt || "").trim();
+    if (!prompt || WORKBENCH_SESSION.processing) return;
+    if (!this._hass?.callWS) {
+      this._appendMessage({ role: "assistant", error: true, content: "当前页面未连接到 Home Assistant 对话服务。" });
+      this._refreshActiveWorkbench();
+      return;
     }
-    return steps
-      .map((step, index) => {
-        const entityId = step?.entity_id || "";
-        const target = ENTITY_LABELS[entityId] || entityId || "本地处理";
-        const tool = TOOL_LABELS[step?.tool] || step?.tool || "受限处理";
-        return `
-          <div class="timeline-row">
-            <span class="timeline-index">${index + 1}</span>
-            <div>
-              <strong>${escapeHtml(tool)}</strong>
-              <small>${escapeHtml(target)}</small>
-            </div>
-            <ha-icon icon="mdi:shield-check-outline"></ha-icon>
-          </div>`;
+
+    WORKBENCH_SESSION.processing = true;
+    this._appendMessage({ role: "user", content: prompt });
+    this._appendMessage({ role: "assistant", pending: true, content: "EdgeHome 正在理解指令并等待设备回读…" });
+    this._refreshActiveWorkbench();
+
+    try {
+      const request = {
+        type: "conversation/process",
+        text: prompt,
+        language: this._hass.language || "zh-Hans",
+      };
+      if (WORKBENCH_SESSION.conversationId) request.conversation_id = WORKBENCH_SESSION.conversationId;
+      const agentId = this._agentId();
+      if (agentId) request.agent_id = agentId;
+
+      const response = await this._hass.callWS(request);
+      WORKBENCH_SESSION.conversationId = response?.conversation_id || WORKBENCH_SESSION.conversationId;
+      WORKBENCH_SESSION.messages = WORKBENCH_SESSION.messages.slice(0, -1);
+      this._appendMessage({ role: "assistant", content: this._replyText(response) });
+    } catch (error) {
+      WORKBENCH_SESSION.messages = WORKBENCH_SESSION.messages.slice(0, -1);
+      const detail = error?.message ? `：${error.message}` : "。";
+      this._appendMessage({ role: "assistant", error: true, content: `本轮请求未能完成${detail}` });
+    } finally {
+      WORKBENCH_SESSION.processing = false;
+      this._refreshActiveWorkbench();
+    }
+  }
+
+  _resetConversation() {
+    if (WORKBENCH_SESSION.processing) return;
+    WORKBENCH_SESSION.conversationId = "";
+    WORKBENCH_SESSION.messages = [
+      {
+        role: "assistant",
+        intro: true,
+        content: "已开始新的面板会话。新的请求不会继承上一轮设备控制上下文。",
+      },
+    ];
+    this._refreshActiveWorkbench();
+  }
+
+  _messageList() {
+    return WORKBENCH_SESSION.messages
+      .map((message) => {
+        const kind = message.role === "user" ? "user" : message.error ? "error" : "assistant";
+        const label = message.role === "user" ? "你" : message.intro ? "EdgeHome 引导" : "EdgeHome";
+        const pending = message.pending ? '<span class="pending-dot" aria-label="处理中"></span>' : "";
+        return `<div class="message-row ${kind}">
+          <span class="message-label">${escapeHtml(label)}</span>
+          <div class="message-bubble">${pending}${escapeHtml(message.content)}</div>
+        </div>`;
       })
       .join("");
   }
 
-  _verification(results) {
-    if (!results.length) {
-      return `<div class="empty-state"><ha-icon icon="mdi:database-search-outline"></ha-icon><span>无设备动作，或等待状态回读</span></div>`;
+  _deviceDetail(entityId) {
+    const entity = this._entity(entityId);
+    const state = entity?.state || "unavailable";
+    if (entityId.includes("living_room_main")) {
+      const brightness = numberOrNull(this._attribute(entity, "brightness"));
+      return state === "on" && brightness !== null ? `亮度 ${Math.round((brightness / 255) * 100)}%` : stateText(state);
     }
+    if (entityId.includes("curtain")) {
+      const position = numberOrNull(this._attribute(entity, "current_position"));
+      return position === null ? stateText(state) : `${position}% · ${stateText(state)}`;
+    }
+    if (entityId.includes("_ac")) {
+      const target = numberOrNull(this._attribute(entity, "temperature"));
+      const current = numberOrNull(this._attribute(entity, "current_temperature"));
+      if (state === "off") return "已关闭";
+      return target === null ? stateText(state) : `${target}°C${current === null ? "" : ` / 当前 ${current}°C`}`;
+    }
+    return stateText(state);
+  }
+
+  _deviceRows() {
+    return DEVICE_META.map(({ entityId, label, icon }) => {
+      const entity = this._entity(entityId);
+      const state = entity?.state || "unavailable";
+      const online = state !== "unavailable" && state !== "unknown";
+      return `<div class="device-row">
+        <ha-icon icon="${icon}"></ha-icon>
+        <span>${escapeHtml(label)}</span>
+        <small>${escapeHtml(this._deviceDetail(entityId))}</small>
+        <i class="state-dot ${online ? "online" : "offline"}" title="${online ? "设备在线" : "设备不可用"}"></i>
+      </div>`;
+    }).join("");
+  }
+
+  _planRows(steps) {
+    if (!steps.length) return '<div class="empty-copy">本轮没有生成可执行的设备计划。</div>';
+    return steps
+      .map((step, index) => {
+        const target = ENTITY_LABELS[step?.entity_id] || step?.entity_id || "本地处理";
+        const tool = TOOL_LABELS[step?.tool] || step?.tool || "受限处理";
+        return `<div class="list-row">
+          <b>${index + 1}</b><span><strong>${escapeHtml(tool)}</strong><small>${escapeHtml(target)}</small></span>
+        </div>`;
+      })
+      .join("");
+  }
+
+  _resultRows(results) {
+    if (!results.length) return '<div class="empty-copy">等待一次包含设备动作的请求。</div>';
     return results
       .map((result) => {
-        const entityId = result?.entity_id || "";
-        const target = ENTITY_LABELS[entityId] || entityId || result?.tool || "执行步骤";
         const verified = result?.verified === true;
         const pending = result?.verified === null || result?.verified === undefined;
+        const target = ENTITY_LABELS[result?.entity_id] || result?.entity_id || result?.tool || "执行步骤";
+        const outcome = pending ? "等待回读" : verified ? "已验证" : "未通过";
+        const className = pending ? "pending" : verified ? "verified" : "failed";
         const before = stateText(result?.state_before);
         const after = stateText(result?.state_after);
-        const outcome = pending ? "待校验" : verified ? "已验证" : "未通过";
-        const error = result?.error ? `<small class="verify-error">${escapeHtml(result.error)}</small>` : "";
-        return `
-          <div class="verify-row ${verified ? "verified" : pending ? "pending" : "failed"}">
-            <span class="verify-icon"><ha-icon icon="${verified ? "mdi:check" : pending ? "mdi:clock-outline" : "mdi:alert"}"></ha-icon></span>
-            <div class="verify-copy">
-              <strong>${escapeHtml(target)}</strong>
-              <small>${escapeHtml(before)} <b>→</b> ${escapeHtml(after)}</small>
-              ${error}
-            </div>
-            <span>${outcome}</span>
-          </div>`;
+        const error = result?.error ? `<small class="error-copy">${escapeHtml(result.error)}</small>` : "";
+        return `<div class="result-row ${className}">
+          <ha-icon icon="${verified ? "mdi:check-circle" : pending ? "mdi:clock-outline" : "mdi:alert-circle"}"></ha-icon>
+          <span><strong>${escapeHtml(target)}</strong><small>${escapeHtml(before)} → ${escapeHtml(after)}</small>${error}</span>
+          <em>${outcome}</em>
+        </div>`;
+      })
+      .join("");
+  }
+
+  _environmentRows() {
+    const metrics = [
+      { entityId: "sensor.edgehome_living_room_temperature", label: "客厅温度", icon: "mdi:thermometer" },
+      { entityId: "sensor.edgehome_living_room_illuminance", label: "环境光照", icon: "mdi:weather-sunny" },
+      { entityId: "sensor.edgehome_living_room_tv_power", label: "电视功耗", icon: "mdi:flash-outline" },
+    ];
+    return metrics
+      .map(({ entityId, label, icon }) => {
+        const entity = this._entity(entityId);
+        const unit = this._attribute(entity, "unit_of_measurement", "");
+        const value = entity?.state && entity.state !== "unavailable" ? `${entity.state}${unit}` : "不可用";
+        return `<div class="metric-cell"><ha-icon icon="${icon}"></ha-icon><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
       })
       .join("");
   }
 
   _protectedDevice(entityId, icon) {
     const entity = this._entity(entityId);
-    const state = entity?.state || "unavailable";
-    const safe = state === "on";
-    return `
-      <div class="protected-device ${safe ? "safe" : "attention"}">
-        <ha-icon icon="${icon}"></ha-icon>
-        <span>${escapeHtml(ENTITY_LABELS[entityId])}</span>
-        <strong>${safe ? "受保护 · 开启" : stateText(state)}</strong>
-      </div>`;
+    const safe = entity?.state === "on";
+    return `<div class="safety-device ${safe ? "safe" : "attention"}">
+      <ha-icon icon="${icon}"></ha-icon><span>${escapeHtml(ENTITY_LABELS[entityId])}</span><strong>${safe ? "受保护 · 开启" : stateText(entity?.state)}</strong>
+    </div>`;
   }
 
   _render() {
-    if (!this.shadowRoot) {
-      this.attachShadow({ mode: "open" });
-    }
-    const traceEntityId = this._config?.trace_entity || "sensor.edgehome_last_execution";
-    const trace = this._entity(traceEntityId);
+    if (!this.isConnected) return;
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+
+    const trace = this._trace();
     const traceState = trace?.state || "unknown";
-    const status = STATUS_META[traceState] || STATUS_META.handled;
+    const status = TRACE_STATUS[traceState] || TRACE_STATUS.handled;
     const steps = asArray(this._attribute(trace, "plan_steps", []));
     const results = asArray(this._attribute(trace, "step_results", []));
     const verifiedCount = results.filter((result) => result?.verified === true).length;
-    const route = this._attribute(trace, "route_label", "等待首次请求");
-    const goal = this._attribute(trace, "goal", "从右上角 Assist 输入生活化指令");
-    const decision = this._attribute(trace, "decision", "未生成新的执行决策");
-    const speech = this._attribute(trace, "speech", "等待一次 EdgeHome 处理结果");
-    const updatedAt = this._attribute(trace, "updated_at", "—");
+    const route = this._attribute(trace, "route_label", "等待第一次请求");
+    const decision = this._attribute(trace, "decision", "—");
+    const goal = this._attribute(trace, "goal", "—");
+    const speech = this._attribute(trace, "speech", "发起请求后，这里会保留智能体的真实回复。");
+    const updatedAt = this._attribute(trace, "updated_at", null);
+    const agentId = this._agentId();
+    const processing = WORKBENCH_SESSION.processing ? "disabled" : "";
 
     this.shadowRoot.innerHTML = `
       <style>
-        :host { display: block; min-height: 100%; color: #e9f1ff; font-family: Inter, "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif; }
+        :host { display: block; min-height: 100%; color: var(--primary-text-color, #1f2937); font-family: Roboto, "Noto Sans SC", "Microsoft YaHei", sans-serif; }
         * { box-sizing: border-box; }
-        .workbench { position: relative; overflow: hidden; padding: 26px; border-radius: 24px; background: radial-gradient(circle at 8% -5%, rgba(48, 106, 255, .42), transparent 29%), radial-gradient(circle at 92% 0%, rgba(0, 214, 179, .18), transparent 25%), linear-gradient(135deg, #071321 0%, #0c1d31 48%, #091629 100%); box-shadow: 0 20px 60px rgba(2, 8, 23, .32); }
-        .workbench::before { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .32; background-image: linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px); background-size: 30px 30px; mask-image: linear-gradient(to bottom, #000, transparent 86%); }
-        .header, .content-grid, .footer-note { position: relative; z-index: 1; }
-        .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 24px; border-bottom: 1px solid rgba(157, 187, 230, .16); }
-        .brand { display: flex; gap: 16px; align-items: flex-start; }
-        .brand-shield { display: grid; place-items: center; flex: 0 0 auto; width: 52px; height: 52px; border: 1px solid rgba(93, 151, 255, .7); border-radius: 16px; color: #9bc0ff; background: linear-gradient(145deg, rgba(61, 118, 255, .3), rgba(15, 34, 68, .5)); box-shadow: inset 0 0 20px rgba(120, 166, 255, .12); }
-        .brand-shield ha-icon { --mdc-icon-size: 30px; }
-        .eyebrow { display: flex; align-items: center; gap: 7px; color: #87a6d8; font-size: 11px; font-weight: 700; letter-spacing: .14em; }
-        .pulse { width: 7px; height: 7px; border-radius: 50%; background: #45e3b3; box-shadow: 0 0 0 5px rgba(69, 227, 179, .12), 0 0 14px #45e3b3; }
-        h1 { margin: 4px 0 5px; font-size: clamp(24px, 3vw, 34px); letter-spacing: -.045em; color: #f6f9ff; }
-        .subtitle { margin: 0; color: #a9bbd6; font-size: 13px; line-height: 1.6; }
-        .status-card { min-width: 190px; padding: 13px 14px; border: 1px solid rgba(159, 185, 228, .19); border-radius: 14px; background: rgba(5, 16, 33, .42); }
-        .status-card .label { display: block; margin-bottom: 8px; color: #91a6c7; font-size: 11px; }
-        .status-line { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; }
-        .status-line ha-icon { --mdc-icon-size: 19px; }
-        .status-line.success { color: #55e8bb; } .status-line.warning { color: #ffd06b; } .status-line.danger { color: #ff8f9f; } .status-line.info { color: #98bbff; } .status-line.muted { color: #b2c0d7; }
-        .status-card small { display: block; margin-top: 6px; color: #788eaf; font-size: 11px; }
-        .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 20px 0; }
-        .summary-cell { padding: 14px; border: 1px solid rgba(157, 187, 230, .15); border-radius: 14px; background: rgba(16, 37, 66, .58); }
-        .summary-cell span { display: block; margin-bottom: 7px; color: #8ca2c4; font-size: 11px; }
-        .summary-cell strong { display: block; overflow: hidden; color: #f0f5ff; font-size: 14px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
-        .content-grid { display: grid; grid-template-columns: 1.16fr .84fr; gap: 16px; }
-        .left-stack, .right-stack { display: grid; gap: 16px; }
-        .panel { border: 1px solid rgba(157, 187, 230, .15); border-radius: 18px; background: linear-gradient(145deg, rgba(18, 42, 75, .78), rgba(8, 24, 46, .76)); overflow: hidden; }
-        .panel-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 12px; }
-        .panel-title { display: flex; align-items: center; gap: 9px; color: #f1f6ff; font-size: 15px; font-weight: 700; }
-        .panel-title ha-icon { color: #84afff; --mdc-icon-size: 19px; }
-        .panel-kicker { color: #8499ba; font-size: 11px; }
-        .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; padding: 5px 18px 18px; }
-        .flow-node { position: relative; display: grid; gap: 7px; justify-items: center; text-align: center; color: #9eb2d1; font-size: 11px; }
-        .flow-node:not(:last-child)::after { content: ""; position: absolute; top: 17px; left: 63%; width: 74%; height: 1px; background: linear-gradient(90deg, #3776dd, rgba(70, 153, 255, .12)); }
-        .flow-node ha-icon { z-index: 1; padding: 8px; border: 1px solid rgba(96, 151, 255, .45); border-radius: 11px; color: #9ec2ff; background: #102a50; --mdc-icon-size: 20px; }
-        .flow-node.active ha-icon { color: #5ce7bd; border-color: rgba(79, 229, 181, .6); background: rgba(38, 148, 122, .2); box-shadow: 0 0 20px rgba(53, 235, 185, .12); }
-        .flow-node.alert ha-icon { color: #ffd16f; border-color: rgba(255, 209, 111, .55); background: rgba(151, 104, 12, .18); }
-        .device-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0 18px 18px; }
-        .device-card { display: flex; align-items: center; gap: 11px; min-height: 96px; padding: 13px; border: 1px solid rgba(161, 195, 241, .14); border-radius: 14px; background: rgba(5, 18, 37, .44); }
-        .device-card.is-offline { opacity: .65; }
-        .device-icon { display: grid; flex: 0 0 auto; width: 37px; height: 37px; place-items: center; border-radius: 11px; color: #9ac0ff; background: linear-gradient(145deg, #193963, #102540); }
-        .device-icon ha-icon { --mdc-icon-size: 21px; }
-        .device-main { min-width: 0; flex: 1; }
-        .device-main span, .device-main small { display: block; overflow: hidden; color: #8ea4c4; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-        .device-main strong { display: block; margin: 4px 0; color: #f0f6ff; font-size: 18px; letter-spacing: -.02em; }
-        .device-state { align-self: flex-start; padding: 3px 6px; border-radius: 99px; color: #73e5be; background: rgba(61, 209, 164, .12); font-size: 9px; white-space: nowrap; }
-        .device-state.offline { color: #ff9aaa; background: rgba(255, 116, 139, .12); }
-        .timeline, .verification { padding: 0 18px 18px; }
-        .timeline-row, .verify-row { display: flex; align-items: center; gap: 11px; padding: 11px 0; border-top: 1px solid rgba(159, 190, 234, .1); }
-        .timeline-row:first-child, .verify-row:first-child { border-top: 0; }
-        .timeline-index { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; color: #c4d8ff; background: rgba(75, 132, 236, .2); font-size: 11px; font-weight: 700; }
-        .timeline-row div, .verify-copy { min-width: 0; flex: 1; }
-        .timeline-row strong, .verify-copy strong { display: block; overflow: hidden; color: #eaf2ff; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-        .timeline-row small, .verify-copy small { display: block; overflow: hidden; margin-top: 3px; color: #8fa5c4; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-        .timeline-row > ha-icon { color: #5d91df; --mdc-icon-size: 17px; }
-        .verify-icon { display: grid; width: 25px; height: 25px; place-items: center; border-radius: 50%; }
-        .verify-icon ha-icon { --mdc-icon-size: 16px; }
-        .verify-row.verified .verify-icon { color: #50e7b9; background: rgba(65, 215, 166, .13); }
-        .verify-row.pending .verify-icon { color: #f6ce72; background: rgba(241, 183, 65, .14); }
-        .verify-row.failed .verify-icon { color: #ff95a3; background: rgba(250, 102, 124, .14); }
-        .verify-row > span:last-child { color: #9eb2cf; font-size: 10px; white-space: nowrap; }
-        .verify-error { color: #ff9eaa !important; }
-        .empty-state { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 23px 14px 20px; color: #8296b5; text-align: center; font-size: 12px; }
-        .empty-state ha-icon { color: #5579b5; --mdc-icon-size: 25px; }
-        .decision { margin: 0 18px 18px; padding: 13px; border-left: 2px solid #4d85e8; border-radius: 0 10px 10px 0; color: #b6c8e4; background: rgba(51, 99, 177, .12); font-size: 12px; line-height: 1.55; }
-        .decision b { color: #eef5ff; }
-        .safety-wrap { display: grid; gap: 9px; padding: 0 18px 14px; }
-        .protected-device { display: flex; align-items: center; gap: 9px; padding: 10px; border: 1px solid rgba(158, 187, 230, .14); border-radius: 10px; background: rgba(6, 20, 39, .35); }
-        .protected-device ha-icon { color: #9ebcff; --mdc-icon-size: 19px; }
-        .protected-device span { flex: 1; color: #b7c8e3; font-size: 12px; }
-        .protected-device strong { color: #71e7bd; font-size: 11px; }
-        .protected-device.attention strong { color: #ffbf78; }
-        .safety-note { margin: 0 18px 17px; color: #8399ba; font-size: 11px; line-height: 1.5; }
-        .boundary-list { display: grid; gap: 8px; padding: 0 18px 18px; }
-        .boundary-item { display: flex; gap: 9px; align-items: flex-start; padding: 10px 11px; border: 1px solid rgba(156, 191, 239, .13); border-radius: 10px; color: #9db1cf; background: rgba(17, 42, 76, .45); font-size: 11px; line-height: 1.5; }
-        .boundary-item ha-icon { flex: 0 0 auto; margin-top: 1px; color: #7eaeff; --mdc-icon-size: 17px; }
-        .boundary-item strong { color: #dce9ff; font-weight: 600; }
-        .footer-note { display: flex; justify-content: space-between; gap: 12px; margin-top: 17px; color: #7f95b5; font-size: 10px; }
-        .footer-note strong { color: #9cb6dd; font-weight: 600; }
-        @media (max-width: 840px) { .workbench { padding: 18px; border-radius: 18px; } .header { align-items: stretch; flex-direction: column; } .status-card { min-width: 0; } .content-grid { grid-template-columns: 1fr; } .summary-grid { grid-template-columns: 1fr; } }
-        @media (max-width: 470px) { .brand { gap: 11px; } .brand-shield { width: 43px; height: 43px; border-radius: 13px; } h1 { font-size: 23px; } .device-grid { grid-template-columns: 1fr; padding-left: 13px; padding-right: 13px; } .flow { padding-left: 13px; padding-right: 13px; } .flow-node:not(:last-child)::after { width: 66%; } .panel-header { padding-left: 13px; padding-right: 13px; } .timeline, .verification, .safety-wrap, .boundary-list { padding-left: 13px; padding-right: 13px; } .decision, .safety-note { margin-left: 13px; margin-right: 13px; } }
+        button, textarea { font: inherit; }
+        .workbench { max-width: 1480px; margin: 0 auto; padding: 24px; }
+        .header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; margin-bottom: 18px; }
+        .brand { display: flex; align-items: flex-start; gap: 13px; }
+        .brand-mark { display: grid; width: 46px; height: 46px; place-items: center; border-radius: 14px; color: var(--primary-color, #03a9f4); background: color-mix(in srgb, var(--primary-color, #03a9f4) 10%, var(--card-background-color, #fff)); }
+        .brand-mark ha-icon { --mdc-icon-size: 27px; }
+        h1 { margin: 0; color: var(--primary-text-color, #182230); font-size: clamp(24px, 3vw, 31px); line-height: 1.2; letter-spacing: -.025em; }
+        .subtitle { margin: 6px 0 0; color: var(--secondary-text-color, #64748b); font-size: 13px; line-height: 1.55; }
+        .status-badge { display: flex; align-items: center; gap: 7px; padding: 9px 12px; border-radius: 999px; color: var(--secondary-text-color, #64748b); background: var(--card-background-color, #fff); box-shadow: var(--ha-card-box-shadow, 0 1px 3px rgba(0,0,0,.12)); font-size: 12px; white-space: nowrap; }
+        .status-badge ha-icon { --mdc-icon-size: 18px; }
+        .status-badge.ok { color: var(--success-color, #16805c); } .status-badge.warn { color: var(--warning-color, #b26a00); } .status-badge.error { color: var(--error-color, #c62828); } .status-badge.info { color: var(--primary-color, #0369a1); }
+        .layout { display: grid; grid-template-columns: minmax(0, 1.22fr) minmax(355px, .78fr); gap: 16px; align-items: start; }
+        .left-column, .right-column { display: grid; gap: 16px; }
+        .card { overflow: hidden; border-radius: var(--ha-card-border-radius, 18px); background: var(--card-background-color, #fff); box-shadow: var(--ha-card-box-shadow, 0 1px 3px rgba(0,0,0,.12)); }
+        .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 16px 18px 12px; }
+        .card-title { display: flex; align-items: center; gap: 8px; color: var(--primary-color, #03a9f4); font-size: 15px; font-weight: 700; }
+        .card-title ha-icon { --mdc-icon-size: 20px; }
+        .card-note { color: var(--secondary-text-color, #64748b); font-size: 11px; }
+        .conversation-card { min-height: 510px; display: grid; grid-template-rows: auto 1fr auto; }
+        .messages { display: flex; min-height: 315px; max-height: 465px; flex-direction: column; gap: 13px; overflow: auto; padding: 8px 18px 18px; background: color-mix(in srgb, var(--secondary-background-color, #f6f8fb) 78%, var(--card-background-color, #fff)); }
+        .message-row { display: flex; flex-direction: column; gap: 5px; max-width: 82%; }
+        .message-row.user { align-self: flex-end; align-items: flex-end; }
+        .message-label { color: var(--secondary-text-color, #64748b); font-size: 11px; font-weight: 700; }
+        .message-bubble { position: relative; padding: 11px 13px; border-radius: 12px; color: var(--primary-text-color, #1f2937); background: var(--card-background-color, #fff); box-shadow: 0 1px 2px rgba(25, 40, 65, .07); font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+        .message-row.user .message-bubble { color: var(--text-primary-color, #fff); background: var(--primary-color, #03a9f4); }
+        .message-row.error .message-bubble { color: var(--error-color, #c62828); background: color-mix(in srgb, var(--error-color, #c62828) 8%, var(--card-background-color, #fff)); }
+        .pending-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--primary-color, #03a9f4); animation: pulse 1.1s infinite ease-in-out; }
+        @keyframes pulse { 0%,100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
+        .composer { padding: 14px 18px 18px; border-top: 1px solid var(--divider-color, #e2e8f0); }
+        .composer-row { display: flex; align-items: flex-end; gap: 9px; }
+        textarea { width: 100%; min-height: 43px; max-height: 110px; resize: vertical; padding: 10px 12px; border: 1px solid var(--divider-color, #d7dde7); border-radius: 10px; color: var(--primary-text-color, #1f2937); outline: none; background: var(--card-background-color, #fff); font-size: 13px; line-height: 1.45; }
+        textarea:focus { border-color: var(--primary-color, #03a9f4); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color, #03a9f4) 18%, transparent); }
+        .icon-button, .send-button, .shortcut { border: 0; cursor: pointer; }
+        .icon-button { display: grid; width: 43px; height: 43px; flex: 0 0 auto; place-items: center; border-radius: 10px; color: var(--secondary-text-color, #64748b); background: var(--secondary-background-color, #f1f5f9); }
+        .icon-button ha-icon { --mdc-icon-size: 20px; }
+        .send-button { display: inline-flex; height: 43px; align-items: center; gap: 6px; padding: 0 13px; border-radius: 10px; color: var(--text-primary-color, #fff); background: var(--primary-color, #03a9f4); font-size: 13px; font-weight: 700; }
+        .send-button ha-icon { --mdc-icon-size: 18px; }
+        button:hover:not(:disabled) { filter: brightness(.96); } button:disabled { cursor: not-allowed; opacity: .55; }
+        .shortcut-area { padding: 0 18px 18px; }
+        .section-label { display: block; margin: 0 0 9px; color: var(--secondary-text-color, #64748b); font-size: 12px; font-weight: 700; }
+        .shortcut-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+        .shortcut { padding: 8px 10px; border-radius: 9px; color: var(--primary-color, #0277bd); background: color-mix(in srgb, var(--primary-color, #03a9f4) 9%, var(--card-background-color, #fff)); font-size: 12px; }
+        .process-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+        .process-card { padding: 15px; }
+        .process-card h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 11px; color: var(--primary-color, #03a9f4); font-size: 14px; }
+        .process-card h3 ha-icon { --mdc-icon-size: 18px; }
+        .kv { display: grid; gap: 8px; }
+        .kv div { display: grid; grid-template-columns: 72px 1fr; gap: 8px; align-items: start; }
+        .kv span { color: var(--secondary-text-color, #64748b); font-size: 11px; } .kv strong { color: var(--primary-text-color, #1f2937); font-size: 12px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+        .panel-body { padding: 0 18px 18px; }
+        .decision-copy { margin: 0; padding: 11px 12px; border-left: 3px solid var(--primary-color, #03a9f4); border-radius: 0 8px 8px 0; color: var(--secondary-text-color, #58677b); background: var(--secondary-background-color, #f6f8fb); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+        .list-row, .result-row, .device-row { display: flex; gap: 9px; align-items: center; padding: 10px 0; border-top: 1px solid var(--divider-color, #e5eaf1); }
+        .list-row:first-child, .result-row:first-child, .device-row:first-child { border-top: 0; }
+        .list-row > b { display: grid; width: 22px; height: 22px; flex: 0 0 auto; place-items: center; border-radius: 50%; color: var(--primary-color, #0277bd); background: color-mix(in srgb, var(--primary-color, #03a9f4) 11%, transparent); font-size: 11px; }
+        .list-row span, .result-row span { min-width: 0; flex: 1; } .list-row strong, .result-row strong { display: block; color: var(--primary-text-color, #1f2937); font-size: 12px; } .list-row small, .result-row small { display: block; margin-top: 3px; color: var(--secondary-text-color, #64748b); font-size: 11px; }
+        .result-row ha-icon { --mdc-icon-size: 19px; } .result-row.verified ha-icon { color: var(--success-color, #16805c); } .result-row.pending ha-icon { color: var(--warning-color, #b26a00); } .result-row.failed ha-icon { color: var(--error-color, #c62828); }
+        .result-row em { color: var(--secondary-text-color, #64748b); font-size: 10px; font-style: normal; white-space: nowrap; } .error-copy { color: var(--error-color, #c62828) !important; }
+        .empty-copy { padding: 8px 0 3px; color: var(--secondary-text-color, #64748b); font-size: 12px; line-height: 1.55; }
+        .device-row > ha-icon { color: var(--primary-color, #03a9f4); --mdc-icon-size: 19px; } .device-row > span { min-width: 0; flex: 1; color: var(--primary-text-color, #1f2937); font-size: 12px; font-weight: 600; } .device-row > small { color: var(--secondary-text-color, #64748b); font-size: 11px; text-align: right; }
+        .state-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; } .state-dot.online { background: var(--success-color, #16805c); } .state-dot.offline { background: var(--error-color, #c62828); }
+        .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+        .metric-cell { padding: 10px; border-radius: 10px; background: var(--secondary-background-color, #f6f8fb); } .metric-cell ha-icon { color: var(--primary-color, #03a9f4); --mdc-icon-size: 18px; } .metric-cell span, .metric-cell strong { display: block; } .metric-cell span { margin-top: 7px; color: var(--secondary-text-color, #64748b); font-size: 10px; } .metric-cell strong { margin-top: 3px; color: var(--primary-text-color, #1f2937); font-size: 13px; overflow-wrap: anywhere; }
+        .safety-device { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-top: 1px solid var(--divider-color, #e5eaf1); } .safety-device:first-child { border-top: 0; } .safety-device ha-icon { color: var(--primary-color, #03a9f4); --mdc-icon-size: 19px; } .safety-device span { flex: 1; color: var(--primary-text-color, #1f2937); font-size: 12px; font-weight: 600; } .safety-device strong { color: var(--success-color, #16805c); font-size: 11px; } .safety-device.attention strong { color: var(--warning-color, #b26a00); }
+        .boundary-note { margin: 10px 0 0; color: var(--secondary-text-color, #64748b); font-size: 11px; line-height: 1.55; }
+        .footer { margin-top: 14px; color: var(--secondary-text-color, #64748b); font-size: 10px; text-align: right; }
+        @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } .right-column { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } .right-column > .card:nth-child(1), .right-column > .card:nth-child(2) { grid-column: span 1; } }
+        @media (max-width: 680px) { .workbench { padding: 16px; } .header { flex-direction: column; gap: 11px; } .status-badge { align-self: flex-start; } .right-column { grid-template-columns: 1fr; } .process-grid, .metric-grid { grid-template-columns: 1fr; } .conversation-card { min-height: 480px; } .message-row { max-width: 92%; } .send-button span { display: none; } .send-button { width: 43px; justify-content: center; padding: 0; } }
       </style>
-      <section class="workbench">
+      <main class="workbench">
         <header class="header">
           <div class="brand">
-            <div class="brand-shield"><ha-icon icon="mdi:shield-home-outline"></ha-icon></div>
-            <div>
-              <div class="eyebrow"><span class="pulse"></span> EDGEHOME / TRUSTED EXECUTION</div>
-              <h1>家居可信执行工作台</h1>
-              <p class="subtitle">从右上角 Assist 发起对话；本页同步展示计划、设备状态与回读结果。</p>
-            </div>
+            <div class="brand-mark"><ha-icon icon="mdi:home-automation"></ha-icon></div>
+            <div><h1>EdgeHome · 家居智能体工作台</h1><p class="subtitle">对话驱动 · 规划可见 · MQTT 设备回读 · 本地可信执行</p></div>
           </div>
-          <div class="status-card">
-            <span class="label">最近一次执行结论</span>
-            <div class="status-line ${status.tone}"><ha-icon icon="${status.icon}"></ha-icon>${escapeHtml(status.label)}</div>
-            <small>${escapeHtml(route)}</small>
-          </div>
+          <div class="status-badge ${status.className}"><ha-icon icon="${status.icon}"></ha-icon>${escapeHtml(status.label)}</div>
         </header>
 
-        <section class="summary-grid">
-          <div class="summary-cell"><span>当前处理路径</span><strong>${escapeHtml(route)}</strong></div>
-          <div class="summary-cell"><span>最近目标</span><strong>${escapeHtml(goal)}</strong></div>
-          <div class="summary-cell"><span>状态回读</span><strong>${results.length ? `${verifiedCount} / ${results.length} 步已验证` : "等待设备动作"}</strong></div>
+        <section class="layout">
+          <div class="left-column">
+            <section class="card conversation-card">
+              <div class="card-head"><div class="card-title"><ha-icon icon="mdi:message-text-outline"></ha-icon>对话窗口</div><span class="card-note">自然语言输入与最终解释回复</span></div>
+              <div class="messages" id="edgehome-messages">${this._messageList()}</div>
+              <div class="composer">
+                <div class="composer-row"><textarea id="edgehome-input" ${processing} placeholder="例如：把客厅主灯调到四成，或者帮我准备观影场景"></textarea><button class="icon-button" type="button" data-action="reset" ${processing} aria-label="新建会话"><ha-icon icon="mdi:restart"></ha-icon></button><button class="send-button" type="button" data-action="send" ${processing}><ha-icon icon="mdi:send"></ha-icon><span>${WORKBENCH_SESSION.processing ? "处理中" : "发送"}</span></button></div>
+              </div>
+              <div class="shortcut-area"><span class="section-label">快捷场景</span><div class="shortcut-grid">${SHORTCUTS.map((item) => `<button class="shortcut" type="button" data-prompt="${escapeHtml(item.prompt)}" ${processing}>${escapeHtml(item.label)}</button>`).join("")}</div></div>
+            </section>
+
+            <section class="process-grid">
+              <article class="card process-card"><h3><ha-icon icon="mdi:brain"></ha-icon>模型与意图</h3><div class="kv"><div><span>执行智能体</span><strong>${escapeHtml(agentId ? "EdgeHome 本地对话智能体" : "Home Assistant 默认对话智能体")}</strong></div><div><span>决策路径</span><strong>${escapeHtml(route)}</strong></div><div><span>判断说明</span><strong>${escapeHtml(decision)}</strong></div></div></article>
+              <article class="card process-card"><h3><ha-icon icon="mdi:message-processing-outline"></ha-icon>会话上下文</h3><div class="kv"><div><span>会话标识</span><strong>${escapeHtml(briefId(WORKBENCH_SESSION.conversationId))}</strong></div><div><span>对话轮次</span><strong>${Math.max(0, Math.floor((WORKBENCH_SESSION.messages.length - 1) / 2))}</strong></div><div><span>更新时间</span><strong>${escapeHtml(dateText(updatedAt))}</strong></div></div></article>
+            </section>
+          </div>
+
+          <div class="right-column">
+            <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:format-list-checks"></ha-icon>任务规划</div><span class="card-note">${steps.length} 步</span></div><div class="panel-body">${this._planRows(steps)}</div></section>
+            <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:transmission-tower"></ha-icon>工具与 MQTT 回读</div><span class="card-note">${results.length ? `${verifiedCount}/${results.length} 已验证` : "等待动作"}</span></div><div class="panel-body">${this._resultRows(results)}</div></section>
+            <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:devices"></ha-icon>设备状态面板</div><span class="card-note">独立 MQTT 模拟设备</span></div><div class="panel-body">${this._deviceRows()}</div></section>
+            <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:chart-line"></ha-icon>环境与能耗</div><span class="card-note">实时实体状态</span></div><div class="panel-body"><div class="metric-grid">${this._environmentRows()}</div></div></section>
+            <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:shield-lock-outline"></ha-icon>安全边界</div><span class="card-note">保护设备不可批量断电</span></div><div class="panel-body">${this._protectedDevice("switch.edgehome_router", "mdi:router-network")}${this._protectedDevice("switch.edgehome_refrigerator", "mdi:fridge-outline")}<p class="boundary-note">执行候选动作先经过实体白名单、参数范围与安全策略检查；最终仅以设备 MQTT 状态和 Home Assistant 回读一致为完成依据。</p></div></section>
+          </div>
         </section>
+        <div class="footer">EdgeHome Agent Workspace · UI ${EDGEHOME_WORKBENCH_VERSION}</div>
+      </main>`;
 
-        <main class="content-grid">
-          <div class="left-stack">
-            <section class="panel">
-              <div class="panel-header"><div class="panel-title"><ha-icon icon="mdi:source-branch"></ha-icon>可信执行链路</div><span class="panel-kicker">候选计划不可直连设备</span></div>
-              <div class="flow">
-                <div class="flow-node active"><ha-icon icon="mdi:message-text-outline"></ha-icon><span>生活化指令</span></div>
-                <div class="flow-node active"><ha-icon icon="mdi:format-list-checks"></ha-icon><span>受限计划</span></div>
-                <div class="flow-node ${traceState === "failed" ? "alert" : "active"}"><ha-icon icon="mdi:transmission-tower"></ha-icon><span>MQTT 设备</span></div>
-                <div class="flow-node ${status.tone === "danger" || status.tone === "warning" ? "alert" : "active"}"><ha-icon icon="mdi:database-check-outline"></ha-icon><span>状态回读</span></div>
-              </div>
-            </section>
+    this._bindInteractionEvents();
+    requestAnimationFrame(() => {
+      const messages = this.shadowRoot?.querySelector("#edgehome-messages");
+      if (messages) messages.scrollTop = messages.scrollHeight;
+    });
+  }
 
-            <section class="panel">
-              <div class="panel-header"><div class="panel-title"><ha-icon icon="mdi:sofa-outline"></ha-icon>家庭设备</div><span class="panel-kicker">独立 MQTT 数字设备</span></div>
-              <div class="device-grid">${this._lightCard()}${this._curtainCard()}${this._acCard()}${this._tvCard()}</div>
-            </section>
+  _bindInteractionEvents() {
+    if (this._eventsBound || !this.shadowRoot) return;
+    this._eventsBound = true;
 
-            <section class="panel">
-              <div class="panel-header"><div class="panel-title"><ha-icon icon="mdi:clipboard-text-outline"></ha-icon>本轮结论</div><span class="panel-kicker">${escapeHtml(updatedAt)}</span></div>
-              <div class="decision"><b>EdgeHome：</b>${escapeHtml(speech)}<br><b>决策：</b>${escapeHtml(decision)}</div>
-            </section>
-          </div>
-
-          <div class="right-stack">
-            <section class="panel">
-              <div class="panel-header"><div class="panel-title"><ha-icon icon="mdi:format-list-numbered"></ha-icon>任务计划</div><span class="panel-kicker">${steps.length} 步</span></div>
-              <div class="timeline">${this._plan(steps)}</div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-header"><div class="panel-title"><ha-icon icon="mdi:check-circle-outline"></ha-icon>回读验证</div><span class="panel-kicker">以最终状态为准</span></div>
-              <div class="verification">${this._verification(results)}</div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-header"><div class="panel-title"><ha-icon icon="mdi:shield-lock-outline"></ha-icon>安全边界</div><span class="panel-kicker">受保护设备不参与批量断电</span></div>
-              <div class="safety-wrap">${this._protectedDevice("switch.edgehome_router", "mdi:router-network")} ${this._protectedDevice("switch.edgehome_refrigerator", "mdi:fridge-outline")}</div>
-              <p class="safety-note">界面只读取已落地的执行和状态数据；真实控制统一由 Assist 触发，避免演示页面绕开规划与回读链路。</p>
-              <div class="boundary-list">
-                <div class="boundary-item"><ha-icon icon="mdi:shield-check-outline"></ha-icon><span><strong>计划先行：</strong>候选动作须经实体白名单、参数范围和安全策略检查。</span></div>
-                <div class="boundary-item"><ha-icon icon="mdi:database-check-outline"></ha-icon><span><strong>回读为准：</strong>仅当 MQTT 设备状态与 Home Assistant 回读一致，才可报告完成。</span></div>
-              </div>
-            </section>
-          </div>
-        </main>
-
-        <footer class="footer-note"><span><strong>可信完成标准：</strong>设备 MQTT 状态与 Home Assistant 回读一致</span><span>UI ${EDGEHOME_WORKBENCH_VERSION}</span></footer>
-      </section>`;
-
+    // 事件委托避免 Home Assistant 状态更新触发重新渲染后，旧按钮监听器失效。
+    this.addEventListener("click", (event) => {
+      const trigger = event.composedPath().find((node) => node?.dataset?.action || node?.dataset?.prompt);
+      if (!trigger) return;
+      if (trigger.dataset.prompt) {
+        this._sendPrompt(trigger.dataset.prompt);
+        return;
+      }
+      if (trigger.dataset.action === "reset") {
+        this._resetConversation();
+        return;
+      }
+      if (trigger.dataset.action === "send") {
+        this._sendPrompt(this.shadowRoot?.querySelector("#edgehome-input")?.value);
+      }
+    });
+    this.addEventListener("keydown", (event) => {
+      if (event.target?.id === "edgehome-input" && event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        this._sendPrompt(event.target.value);
+      }
+    });
   }
 }
 
 if (!customElements.get("edgehome-execution-workbench")) {
   customElements.define("edgehome-execution-workbench", EdgeHomeExecutionWorkbench);
 }
-
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "edgehome-execution-workbench",
-  name: "EdgeHome 可信执行工作台",
-  description: "展示实际计划、MQTT 设备状态与回读验证的本地工作台。",
-});
