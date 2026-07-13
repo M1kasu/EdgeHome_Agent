@@ -14,17 +14,22 @@ _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
 
 
-def test_installer_adds_workbench_and_fault_control_assets(tmp_path: Path) -> None:
-    """A clean Home Assistant config receives the tracked dashboard assets once."""
+def test_installer_adds_workbench_assets(tmp_path: Path) -> None:
+    """A clean Home Assistant config receives the tracked product workbench once."""
     _MODULE.install(tmp_path)
     _MODULE.install(tmp_path)
 
     configuration = (tmp_path / "configuration.yaml").read_text(encoding="utf-8")
-    assert configuration.count("lovelace: !include edgehome_demo_lovelace.yaml") == 1
+    assert configuration.count("panel_custom: !include edgehome_demo_panel_custom.yaml") == 1
     assert configuration.count("rest_command: !include edgehome_demo_rest_commands.yaml") == 1
-    assert "edgehome-workbench:" in (tmp_path / "edgehome_demo_lovelace.yaml").read_text(encoding="utf-8")
-    assert "sensor.edgehome_last_execution" in (tmp_path / "edgehome_demo_execution_dashboard.yaml").read_text(encoding="utf-8")
+    panel = (tmp_path / "edgehome_demo_panel_custom.yaml").read_text(encoding="utf-8")
+    assert "edgehome-execution-workbench" in panel
+    assert "sidebar_title: EdgeHome Workbench" in panel
+    assert "sidebar_icon: mdi:shield-home-outline" in panel
+    assert "module_url: /local/edgehome_execution_workbench.js" in panel
     assert "edgehome_set_curtain_fault:" in (tmp_path / "edgehome_demo_rest_commands.yaml").read_text(encoding="utf-8")
+    assert 'mode: "none"' in (tmp_path / "edgehome_demo_templates.yaml").read_text(encoding="utf-8")
+    assert (tmp_path / "www" / "edgehome_execution_workbench.js").is_file()
 
 
 def test_installer_preserves_existing_lovelace_configuration(tmp_path: Path) -> None:

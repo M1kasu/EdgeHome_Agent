@@ -195,5 +195,6 @@
       press:
         - action: rest_command.edgehome_set_curtain_fault
           data:
-            mode: none
+            # 引号避免 YAML 将 none 当作空值，确保模拟器收到明确的故障清除指令。
+            mode: "none"
             delay_ms: 0

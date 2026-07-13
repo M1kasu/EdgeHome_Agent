@@ -5,7 +5,8 @@ edgehome_reset_demo_environment:
   sequence:
     - action: rest_command.edgehome_set_curtain_fault
       data:
-        mode: none
+        # 引号避免 YAML 将 none 当作空值，确保模拟器收到明确的故障清除指令。
+        mode: "none"
         delay_ms: 0
     - action: input_boolean.turn_on
       target:
@@ -88,5 +89,6 @@ edgehome_demo_clear_curtain_fault:
   sequence:
     - action: rest_command.edgehome_set_curtain_fault
       data:
-        mode: none
+        # 引号避免 YAML 将 none 当作空值，确保模拟器收到明确的故障清除指令。
+        mode: "none"
         delay_ms: 0
