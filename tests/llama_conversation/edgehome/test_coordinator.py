@@ -150,23 +150,15 @@ async def test_complex_planning_backend_failure_returns_explained_safe_response(
 
 
 @pytest.mark.asyncio
-async def test_leaving_scene_is_selected_before_router_keyword_matching(monkeypatch, hass) -> None:
+async def test_scene_candidate_is_handed_to_model_before_router_keyword_matching(hass) -> None:
     coordinator = _coordinator(hass)
-    seen: list[tuple[str, str]] = []
+    text = "我要出门一天，把不需要的设备关掉，但冰箱和路由器不要动。"
 
-    async def handle_leaving(text: str, conversation_id: str) -> FastPathResponse:
-        seen.append((text, conversation_id))
-        return FastPathResponse(handled=True, speech="离家保护已处理。", trace_route="deterministic_leaving_scene")
+    result = await coordinator.async_handle_with_dialogue(text, "conversation-1")
 
-    monkeypatch.setattr(coordinator, "_async_handle_deterministic_leaving_scene", handle_leaving)
-
-    result = await coordinator.async_handle_with_dialogue(
-        "我要出门一天，把不需要的设备关掉，但冰箱和路由器不要动。",
-        "conversation-1",
-    )
-
-    assert result.speech == "离家保护已处理。"
-    assert seen == [("我要出门一天，把不需要的设备关掉，但冰箱和路由器不要动。", "conversation-1")]
+    assert result.handled is False
+    assert result.planning_text == text
+    assert result.trace_route == "complex_scene_candidate"
 
 
 @pytest.mark.asyncio

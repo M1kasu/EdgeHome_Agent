@@ -32,3 +32,23 @@ async def test_template_fallback_uses_only_registered_movie_plan(hass) -> None:
 
     assert result.status == PlanningStatus.ACCEPTED
     assert result.source == PlanningSource.DEMO_SCENE_FALLBACK
+
+
+@pytest.mark.asyncio
+async def test_explicit_scene_constraints_never_fall_back_to_a_generic_template(hass) -> None:
+    hass.states.async_set("light.edgehome_living_room_main", "off")
+    hass.states.async_set("switch.edgehome_living_room_tv", "off")
+    hass.states.async_set("climate.edgehome_living_room_ac", "off")
+    hass.states.async_set("cover.edgehome_living_room_curtain", "closed")
+    tools = build_default_tool_registry()
+    resolver = EntityNameResolver(hass, exposure_checker=lambda *_: True)
+    planner = LLMTaskPlanner(_NoModel(), TaskHomeStateBuilder(resolver), StructuredPlanParser(PlanValidator(tools, resolver)), tools)  # type: ignore[arg-type]
+
+    result = await planner.async_plan(
+        PlanningRequest(goal="准备观影，但不要打开空调，主灯不低于40%", agent_id="test"),
+        {},
+    )
+
+    assert result.status == PlanningStatus.UNAVAILABLE
+    assert result.source is None
+    assert result.model_attempts == 1

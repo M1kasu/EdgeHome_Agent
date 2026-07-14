@@ -75,6 +75,9 @@ class FastPathResponse:
     trace_route: str = "fast_path"
     trace_status: TaskStatus | None = None
     planning_text: str | None = None
+    planning_source: str | None = None
+    planning_attempts: int = 0
+    planning_repair_reason: str | None = None
 
 
 class EdgeHomeCoordinator:
@@ -226,6 +229,8 @@ class EdgeHomeCoordinator:
         if isinstance(resumed, FastPathResponse):
             return resumed
         resumed_text = resumed
+        scene_candidate = self._scene_templates.match(resumed_text)
+
         energy_conversation = await self._energy_conversation.async_handle(
             resumed_text,
             conversation_id,
@@ -238,7 +243,7 @@ class EdgeHomeCoordinator:
             return FastPathResponse(handled=True, speech=information, trace_route="local_information")
 
         state = await self._dialogue_store.async_get(conversation_id, **context_identity)
-        if state is None and self._reference_resolver.requires_prior_context(resumed_text):
+        if state is None and scene_candidate is None and self._reference_resolver.requires_prior_context(resumed_text):
             question = "\u8bf7\u8bf4\u660e\u8981\u64cd\u4f5c\u54ea\u4e2a\u8bbe\u5907\u3002"
             await self._dialogue_store.async_set_clarification(
                 conversation_id,
@@ -295,21 +300,17 @@ class EdgeHomeCoordinator:
         if delayed is not None:
             return delayed
 
-        movie = await self._async_handle_mqtt_movie_scene(
-            resumed_text,
-            conversation_id,
-            **context_identity,
-        )
-        if movie is not None:
-            return movie
-
-        leaving = await self._async_handle_deterministic_leaving_scene(
-            resumed_text,
-            conversation_id,
-            **context_identity,
-        )
-        if leaving is not None:
-            return leaving
+        # A named multi-device scene is never sent through the single-device
+        # fast router.  Otherwise a word such as "窗帘" can make the router
+        # request an arbitrary disambiguation before the model is allowed to
+        # compile the complete goal, constraints, and execution graph.
+        # Environment checks and deliberate scheduling still take precedence.
+        if scene_candidate is not None:
+            return FastPathResponse(
+                handled=False,
+                planning_text=resumed_text,
+                trace_route="complex_scene_candidate",
+            )
 
         decision = self._router.route(resumed_text)
         if decision.status == FastRouteStatus.READY and decision.plan is not None:
@@ -458,11 +459,17 @@ class EdgeHomeCoordinator:
         user_id: str | None = None,
     ) -> FastPathResponse:
         """执行已通过模型或模板入口产生的同一份受限计划。"""
+        planning_trace = {
+            "planning_source": planning.source.value if planning.source is not None else None,
+            "planning_attempts": planning.model_attempts,
+            "planning_repair_reason": planning.repair_reason,
+        }
         if planning.status != PlanningStatus.ACCEPTED or planning.plan is None:
             return FastPathResponse(
                 handled=True,
                 speech="任务规划未通过安全校验，未执行任何设备。",
                 trace_route="complex_planning",
+                **planning_trace,
             )
         if planning.plan.need_clarification:
             await self._dialogue_store.async_set_clarification(
@@ -472,14 +479,14 @@ class EdgeHomeCoordinator:
                 user_id=user_id,
                 assistant_id=agent_id,
             )
-            return FastPathResponse(handled=True, speech=planning.plan.clarification_question)
+            return FastPathResponse(handled=True, speech=planning.plan.clarification_question, **planning_trace)
 
         revalidation = self._environment_guard.revalidate(
             planning.plan,
             self._environment_guard.from_context(planning.plan, planning.context_entities),
         )
         if not revalidation.accepted:
-            return FastPathResponse(handled=True, speech="环境状态已变化，已取消过时计划，请重新确认需求。")
+            return FastPathResponse(handled=True, speech="环境状态已变化，已取消过时计划，请重新确认需求。", **planning_trace)
 
         scenario_name = planning.scene if planning.scene == "movie" else None
         protected = self._executor.validator.safety_guard.protected_shutdowns(planning.plan)
@@ -496,6 +503,7 @@ class EdgeHomeCoordinator:
                 speech="检测到受保护设备。请回复“确认关闭受保护设备”进行二次确认。",
                 planned_plan=planning.plan,
                 trace_route="protected_confirmation",
+                **planning_trace,
             )
         if scenario_name:
             await self._scenarios.async_capture(conversation_id, scenario_name, planning.plan)
@@ -517,6 +525,7 @@ class EdgeHomeCoordinator:
                         planned_plan=planning.plan,
                         execution_report=report,
                         trace_route="complex_planning",
+                        **planning_trace,
                     )
                 return FastPathResponse(
                     handled=True,
@@ -525,6 +534,7 @@ class EdgeHomeCoordinator:
                     planned_plan=planning.plan,
                     execution_report=report,
                     trace_route="complex_planning",
+                    **planning_trace,
                 )
             return FastPathResponse(
                 handled=True,
@@ -533,6 +543,7 @@ class EdgeHomeCoordinator:
                 planned_plan=planning.plan,
                 execution_report=report,
                 trace_route="complex_planning",
+                **planning_trace,
             )
         replan = self._failure_replanner.decide(text, planning.plan, report)
         if replan.allowed and replan.prompt_goal is not None:
@@ -556,6 +567,9 @@ class EdgeHomeCoordinator:
                             planned_plan=replacement.plan,
                             execution_report=replacement_report,
                             trace_route="complex_replanning",
+                            planning_source=replacement.source.value if replacement.source is not None else None,
+                            planning_attempts=replacement.model_attempts,
+                            planning_repair_reason=replacement.repair_reason,
                         )
                     report = replacement_report
         if scenario_name:
@@ -568,6 +582,7 @@ class EdgeHomeCoordinator:
             planned_plan=planning.plan,
             execution_report=report,
             trace_route="complex_planning",
+            **planning_trace,
         )
 
     def record_trace(self, result: FastPathResponse) -> str:
@@ -588,6 +603,8 @@ class EdgeHomeCoordinator:
                     "step_id": step.id,
                     "tool": step.tool,
                     "entity_id": str(step.arguments.get("entity_id", "")),
+                    "arguments": step.arguments,
+                    "depends_on": list(step.depends_on),
                 }
                 for step in plan.steps
             ]
@@ -600,7 +617,13 @@ class EdgeHomeCoordinator:
             "route": result.trace_route,
             "route_label": self._trace_route_label(result.trace_route),
             "decision": decision,
+            "planning_source": result.planning_source,
+            "planning_source_label": self._planning_source_label(result.planning_source),
+            "planning_attempts": result.planning_attempts,
+            "planning_repair_reason": result.planning_repair_reason,
             "goal": plan.goal if plan is not None else None,
+            "planning_rationale": plan.rationale if plan is not None else None,
+            "planning_constraints": [constraint.model_dump(mode="json") for constraint in plan.constraints] if plan is not None else [],
             "plan_steps": plan_steps,
             "step_results": execution_steps,
             "speech": result.speech,
@@ -609,10 +632,18 @@ class EdgeHomeCoordinator:
         self._hass.states.async_set("sensor.edgehome_last_execution", state, attributes)
 
         lines = [f"处理路径：{attributes['route_label']}"]
+        if result.planning_source:
+            lines.append(f"规划来源：{attributes['planning_source_label']}（模型尝试 {result.planning_attempts} 次）")
+        if result.planning_repair_reason:
+            lines.append(f"规划修复原因：{result.planning_repair_reason}")
         if decision:
             lines.append(f"决策：{decision}")
         if plan is not None:
             lines.append(f"固定计划：{plan.goal}")
+            if plan.rationale:
+                lines.append(f"规划说明：{plan.rationale}")
+            if plan.constraints:
+                lines.append("显式约束：" + "；".join(constraint.statement for constraint in plan.constraints))
             lines.append("计划步骤：")
             lines.extend(self._trace_plan_step(step) for step in plan_steps)
         if execution_steps:
@@ -623,7 +654,7 @@ class EdgeHomeCoordinator:
         return "\n".join(lines)
 
     @staticmethod
-    def _trace_step_result(step: StepExecutionResult) -> dict[str, str | int | bool | None]:
+    def _trace_step_result(step: StepExecutionResult) -> dict[str, Any]:
         return {
             "step_id": step.step_id,
             "tool": step.tool,
@@ -636,6 +667,7 @@ class EdgeHomeCoordinator:
             "state_after": step.state_after.state if step.state_after else None,
             "verified": step.verification.passed if step.verification else None,
             "error": step.error_message,
+            "duration_ms": max(0, int((step.completed_at - step.started_at).total_seconds() * 1000)),
         }
 
     @staticmethod
@@ -655,9 +687,20 @@ class EdgeHomeCoordinator:
         }.get(route, "EdgeHome 本地处理")
 
     @staticmethod
+    def _planning_source_label(source: str | None) -> str:
+        return {
+            "model": "本地模型自主规划",
+            "model_repaired": "本地模型修复后规划",
+            "model_sanitized": "本地模型规划（安全收缩）",
+            "demo_scene_fallback": "安全模板降级",
+        }.get(source, "未使用模型规划")
+
+    @staticmethod
     def _trace_plan_step(step: dict[str, Any]) -> str:
         entity_id = step["entity_id"] or "无实体参数"
-        return f"- {step['step_id']}：{step['tool']}（{entity_id}）"
+        dependencies = step.get("depends_on") or []
+        dependency_text = f"；依赖 {','.join(dependencies)}" if dependencies else ""
+        return f"- {step['step_id']}：{step['tool']}（{entity_id}{dependency_text}）"
 
     @staticmethod
     def _trace_execution_step(step: dict[str, Any]) -> str:

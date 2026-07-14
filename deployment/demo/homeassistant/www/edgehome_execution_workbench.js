@@ -6,7 +6,7 @@
  * 不在前端预置任何执行结果或设备数据。
  */
 
-const EDGEHOME_WORKBENCH_VERSION = "20260714-17";
+const EDGEHOME_WORKBENCH_VERSION = "20260714-19";
 
 const SHORTCUTS = [
   { label: "观影场景", prompt: "帮我准备客厅观影场景" },
@@ -429,12 +429,33 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
     return steps
       .map((step, index) => {
         const target = ENTITY_LABELS[step?.entity_id] || step?.entity_id || "本地处理";
-        const tool = TOOL_LABELS[step?.tool] || step?.tool || "受限处理";
+        const compilerPreflight = String(step?.step_id || "").startsWith("preflight_");
+        const tool = compilerPreflight ? "安全预读（编译器）" : (TOOL_LABELS[step?.tool] || step?.tool || "受限处理");
+        const dependencies = asArray(step?.depends_on);
+        const argumentText = Object.entries(step?.arguments || {})
+          .filter(([key]) => key !== "entity_id")
+          .map(([key, value]) => `${key}=${typeof value === "object" ? JSON.stringify(value) : value}`)
+          .join("，");
+        const dependencyText = dependencies.length ? `依赖：${dependencies.join(" → ")}` : "起始步骤";
+        const detail = [target, compilerPreflight ? "控制前强制读取同一设备状态" : dependencyText, argumentText].filter(Boolean).join(" · ");
         return `<div class="list-row">
-          <b>${index + 1}</b><span><strong>${escapeHtml(tool)}</strong><small>${escapeHtml(target)}</small></span>
+          <b>${index + 1}</b><span><strong>${escapeHtml(tool)}</strong><small>${escapeHtml(detail)}</small></span>
         </div>`;
       })
       .join("");
+  }
+
+  _constraintRows(constraints, rationale, repairReason) {
+    const rationaleRow = rationale
+      ? `<p class="decision-copy">${escapeHtml(rationale)}</p>`
+      : '<div class="empty-copy">本轮未提供额外规划说明。</div>';
+    const constraintRows = constraints.length
+      ? constraints
+        .map((constraint) => `<div class="constraint-row"><ha-icon icon="${constraint?.hard === false ? "mdi:information-outline" : "mdi:shield-check-outline"}"></ha-icon><span>${escapeHtml(constraint?.statement || "未命名约束")}</span><em>${escapeHtml(constraint?.source === "safety" ? "安全" : constraint?.source === "environment" ? "环境" : "用户")}</em></div>`)
+        .join("")
+      : '<div class="empty-copy">未提取到需要额外执行的显式约束。</div>';
+    const repair = repairReason ? `<p class="repair-copy">模型计划曾被拦截并修复：${escapeHtml(repairReason)}</p>` : "";
+    return `${rationaleRow}<div class="constraint-list">${constraintRows}</div>${repair}`;
   }
 
   _resultRows(results) {
@@ -448,10 +469,11 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
         const className = pending ? "pending" : verified ? "verified" : "failed";
         const before = stateText(result?.state_before);
         const after = stateText(result?.state_after);
+        const duration = numberOrNull(result?.duration_ms);
         const error = result?.error ? `<small class="error-copy">${escapeHtml(result.error)}</small>` : "";
         return `<div class="result-row ${className}">
           <ha-icon icon="${verified ? "mdi:check-circle" : pending ? "mdi:clock-outline" : "mdi:alert-circle"}"></ha-icon>
-          <span><strong>${escapeHtml(target)}</strong><small>${escapeHtml(before)} → ${escapeHtml(after)}</small>${error}</span>
+          <span><strong>${escapeHtml(target)}</strong><small>${escapeHtml(before)} → ${escapeHtml(after)}${duration === null ? "" : ` · ${duration} ms`}</small>${error}</span>
           <em>${outcome}</em>
         </div>`;
       })
@@ -496,6 +518,11 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
     const verifiedCount = mqttResults.filter((result) => result?.verified === true).length;
     const route = this._attribute(trace, "route_label", "等待第一次请求");
     const decision = this._attribute(trace, "decision", "—");
+    const planningSource = this._attribute(trace, "planning_source_label", "未触发模型规划");
+    const planningAttempts = numberOrNull(this._attribute(trace, "planning_attempts", 0)) || 0;
+    const planningRationale = this._attribute(trace, "planning_rationale", "");
+    const planningConstraints = asArray(this._attribute(trace, "planning_constraints", []));
+    const planningRepairReason = this._attribute(trace, "planning_repair_reason", "");
     const goal = this._attribute(trace, "goal", "—");
     const speech = this._attribute(trace, "speech", "发起请求后，这里会保留智能体的真实回复。");
     const updatedAt = this._attribute(trace, "updated_at", null);
@@ -566,6 +593,10 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
         .list-row span, .result-row span { min-width: 0; flex: 1; } .list-row strong, .result-row strong { display: block; color: var(--primary-text-color, #1f2937); font-size: 12px; } .list-row small, .result-row small { display: block; margin-top: 3px; color: var(--secondary-text-color, #64748b); font-size: 11px; }
         .result-row ha-icon { --mdc-icon-size: 19px; } .result-row.verified ha-icon { color: var(--success-color, #16805c); } .result-row.pending ha-icon { color: var(--warning-color, #b26a00); } .result-row.failed ha-icon { color: var(--error-color, #c62828); }
         .result-row em { color: var(--secondary-text-color, #64748b); font-size: 10px; font-style: normal; white-space: nowrap; } .error-copy { color: var(--error-color, #c62828) !important; }
+        .constraint-list { margin-top: 10px; }
+        .constraint-row { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-top: 1px solid var(--divider-color, #e5eaf1); }
+        .constraint-row ha-icon { color: var(--primary-color, #03a9f4); --mdc-icon-size: 17px; } .constraint-row span { flex: 1; color: var(--primary-text-color, #1f2937); font-size: 12px; line-height: 1.45; } .constraint-row em { color: var(--secondary-text-color, #64748b); font-size: 10px; font-style: normal; }
+        .repair-copy { margin: 10px 0 0; color: var(--warning-color, #b26a00); font-size: 11px; line-height: 1.5; }
         .empty-copy { padding: 8px 0 3px; color: var(--secondary-text-color, #64748b); font-size: 12px; line-height: 1.55; }
         .device-row > ha-icon { color: var(--primary-color, #03a9f4); --mdc-icon-size: 19px; } .device-row > span { min-width: 0; flex: 1; color: var(--primary-text-color, #1f2937); font-size: 12px; font-weight: 600; } .device-row > small { color: var(--secondary-text-color, #64748b); font-size: 11px; text-align: right; }
         .state-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; } .state-dot.online { background: var(--success-color, #16805c); } .state-dot.offline { background: var(--error-color, #c62828); }
@@ -598,13 +629,14 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
             </section>
 
             <section class="process-grid">
-              <article class="card process-card"><h3><ha-icon icon="mdi:brain"></ha-icon>模型与意图</h3><div class="kv"><div><span>执行智能体</span><strong>${escapeHtml(agentId ? "EdgeHome 本地对话智能体" : "Home Assistant 默认对话智能体")}</strong></div><div><span>决策路径</span><strong>${escapeHtml(route)}</strong></div><div><span>判断说明</span><strong>${escapeHtml(decision)}</strong></div></div></article>
+              <article class="card process-card"><h3><ha-icon icon="mdi:brain"></ha-icon>模型与意图</h3><div class="kv"><div><span>执行智能体</span><strong>${escapeHtml(agentId ? "EdgeHome 本地对话智能体" : "Home Assistant 默认对话智能体")}</strong></div><div><span>决策路径</span><strong>${escapeHtml(route)}</strong></div><div><span>规划来源</span><strong>${escapeHtml(planningSource)}${planningAttempts ? ` · ${planningAttempts} 次` : ""}</strong></div><div><span>判断说明</span><strong>${escapeHtml(decision)}</strong></div></div></article>
               <article class="card process-card"><h3><ha-icon icon="mdi:message-processing-outline"></ha-icon>会话上下文</h3><div class="kv"><div><span>会话标识</span><strong>${escapeHtml(briefId(WORKBENCH_SESSION.conversationId))}</strong></div><div><span>对话轮次</span><strong>${Math.max(0, Math.floor((WORKBENCH_SESSION.messages.length - 1) / 2))}</strong></div><div><span>更新时间</span><strong>${escapeHtml(dateText(updatedAt))}</strong></div></div></article>
             </section>
           </div>
 
           <div class="right-column">
-            <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:format-list-checks"></ha-icon>任务规划</div><span class="card-note">${steps.length} 步</span></div><div class="panel-body">${this._planRows(steps)}</div></section>
+            <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:source-branch"></ha-icon>任务规划 DAG</div><span class="card-note">${steps.length} 步</span></div><div class="panel-body">${this._planRows(steps)}</div></section>
+            <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:shield-search"></ha-icon>约束与规划证据</div><span class="card-note">模型输出先校验后执行</span></div><div class="panel-body">${this._constraintRows(planningConstraints, planningRationale, planningRepairReason)}</div></section>
             <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:transmission-tower"></ha-icon>执行与 MQTT 回读</div><span class="card-note">${mqttResults.length ? `${verifiedCount}/${mqttResults.length} 已验证` : "本地读取"}</span></div><div class="panel-body">${this._resultRows(mqttResults)}</div></section>
             <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:devices"></ha-icon>设备状态面板</div><span class="card-note">独立 MQTT 模拟设备</span></div><div class="panel-body">${this._deviceRows()}</div></section>
             <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:chart-line"></ha-icon>环境与能耗</div><span class="card-note">实时实体状态</span></div><div class="panel-body"><div class="metric-grid">${this._environmentRows()}</div></div></section>

@@ -46,6 +46,10 @@ def test_installer_adds_workbench_assets(tmp_path: Path) -> None:
     assert "_restoreInitialState" in frontend
     assert "restore-demo" in frontend
     assert "恢复初始状态" in frontend
+    assert "任务规划 DAG" in frontend
+    assert "约束与规划证据" in frontend
+    assert "planning_source_label" in frontend
+    assert "安全预读（编译器）" in frontend
     assert "LOCAL_READ_TOOLS" in frontend
     assert "快捷场景" in frontend
     assert "执行与 MQTT 回读" in frontend
