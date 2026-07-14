@@ -6,7 +6,7 @@
  * 不在前端预置任何执行结果或设备数据。
  */
 
-const EDGEHOME_WORKBENCH_VERSION = "20260714-16";
+const EDGEHOME_WORKBENCH_VERSION = "20260714-17";
 
 const SHORTCUTS = [
   { label: "观影场景", prompt: "帮我准备客厅观影场景" },
@@ -288,6 +288,88 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
     this._refreshActiveWorkbench();
   }
 
+  _initialMqttDevicesRestored() {
+    const light = this._entity("light.edgehome_living_room_main");
+    const curtain = this._entity("cover.edgehome_living_room_curtain");
+    const ac = this._entity("climate.edgehome_living_room_ac");
+    const tv = this._entity("switch.edgehome_living_room_tv");
+    const brightness = numberOrNull(this._attribute(light, "brightness"));
+    const curtainPosition = numberOrNull(this._attribute(curtain, "current_position"));
+    const temperature = numberOrNull(this._attribute(ac, "temperature"));
+
+    // 与 device_simulator/config/devices.yaml 的 M1--M4 初始状态一致。
+    // 前端只依据 HA 已回读的 MQTT 实体判定成功，不把“已发出脚本”误报为恢复完成。
+    return (
+      light?.state === "on" &&
+      brightness === 204 &&
+      curtain?.state === "open" &&
+      curtainPosition === 100 &&
+      ac?.state === "cool" &&
+      temperature === 24 &&
+      tv?.state === "off"
+    );
+  }
+
+  async _waitForInitialMqttDeviceStates(timeoutMs = 6000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (this._initialMqttDevicesRestored()) return true;
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+    }
+    return this._initialMqttDevicesRestored();
+  }
+
+  async _restoreInitialState() {
+    if (WORKBENCH_SESSION.processing) return;
+    if (!this._hass?.callService) {
+      this._appendMessage({
+        role: "assistant",
+        error: true,
+        content: "无法恢复初始状态：当前页面未连接到 Home Assistant 服务调用接口。",
+      });
+      this._refreshActiveWorkbench();
+      return;
+    }
+
+    WORKBENCH_SESSION.processing = true;
+    this._appendMessage({ role: "user", content: "恢复初始状态" });
+    this._appendMessage({
+      role: "assistant",
+      pending: true,
+      content: "正在恢复演示基线：重置环境条件，并等待 M1--M4 MQTT 设备重新上报状态…",
+    });
+    this._refreshActiveWorkbench();
+
+    try {
+      await this._hass.callService("script", "turn_on", {
+        entity_id: "script.edgehome_reset_demo_environment",
+      });
+      const restored = await this._waitForInitialMqttDeviceStates();
+      if (!restored) {
+        throw new Error(
+          "MQTT 设备未在 6 秒内全部回到初始状态；未将本次恢复标记为成功。请检查 device-simulator 与 Mosquitto 是否在线。",
+        );
+      }
+
+      WORKBENCH_SESSION.conversationId = "";
+      WORKBENCH_SESSION.messages = [
+        {
+          role: "assistant",
+          intro: true,
+          content:
+            "初始状态已恢复：主灯 80%、窗帘打开、空调制冷 24°C、电视关闭；环境条件与安全设备也已复位。已同时新建会话，不继承之前的控制上下文。",
+        },
+      ];
+    } catch (error) {
+      WORKBENCH_SESSION.messages = WORKBENCH_SESSION.messages.slice(0, -1);
+      const detail = conversationErrorDetail(error) || "Home Assistant 未返回详细原因。";
+      this._appendMessage({ role: "assistant", error: true, content: `恢复初始状态未完成。失败原因：${detail}` });
+    } finally {
+      WORKBENCH_SESSION.processing = false;
+      this._refreshActiveWorkbench();
+    }
+  }
+
   _messageList() {
     return WORKBENCH_SESSION.messages
       .map((message) => {
@@ -456,14 +538,17 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
         .composer-row { display: flex; align-items: flex-end; gap: 9px; }
         textarea { width: 100%; min-height: 43px; max-height: 110px; resize: vertical; padding: 10px 12px; border: 1px solid var(--divider-color, #d7dde7); border-radius: 10px; color: var(--primary-text-color, #1f2937); outline: none; background: var(--card-background-color, #fff); font-size: 13px; line-height: 1.45; }
         textarea:focus { border-color: var(--primary-color, #03a9f4); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color, #03a9f4) 18%, transparent); }
-        .icon-button, .send-button, .shortcut { border: 0; cursor: pointer; }
+        .icon-button, .send-button, .shortcut, .restore-demo { border: 0; cursor: pointer; }
         .icon-button { display: grid; width: 43px; height: 43px; flex: 0 0 auto; place-items: center; border-radius: 10px; color: var(--secondary-text-color, #64748b); background: var(--secondary-background-color, #f1f5f9); }
         .icon-button ha-icon { --mdc-icon-size: 20px; }
         .send-button { display: inline-flex; height: 43px; align-items: center; gap: 6px; padding: 0 13px; border-radius: 10px; color: var(--text-primary-color, #fff); background: var(--primary-color, #03a9f4); font-size: 13px; font-weight: 700; }
         .send-button ha-icon { --mdc-icon-size: 18px; }
         button:hover:not(:disabled) { filter: brightness(.96); } button:disabled { cursor: not-allowed; opacity: .55; }
         .shortcut-area { padding: 0 18px 18px; }
-        .section-label { display: block; margin: 0 0 9px; color: var(--secondary-text-color, #64748b); font-size: 12px; font-weight: 700; }
+        .shortcut-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 9px; }
+        .section-label { color: var(--secondary-text-color, #64748b); font-size: 12px; font-weight: 700; }
+        .restore-demo { display: inline-flex; align-items: center; gap: 5px; min-height: 29px; padding: 5px 9px; border-radius: 8px; color: var(--secondary-text-color, #58677b); background: var(--secondary-background-color, #f1f5f9); font-size: 11px; font-weight: 700; }
+        .restore-demo ha-icon { --mdc-icon-size: 15px; }
         .shortcut-grid { display: flex; flex-wrap: wrap; gap: 8px; }
         .shortcut { padding: 8px 10px; border-radius: 9px; color: var(--primary-color, #0277bd); background: color-mix(in srgb, var(--primary-color, #03a9f4) 9%, var(--card-background-color, #fff)); font-size: 12px; }
         .process-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
@@ -509,7 +594,7 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
               <div class="composer">
                 <div class="composer-row"><textarea id="edgehome-input" ${processing} placeholder="例如：把客厅主灯调到四成，或者帮我准备观影场景"></textarea><button class="icon-button" type="button" data-action="reset" ${processing} aria-label="新建会话"><ha-icon icon="mdi:restart"></ha-icon></button><button class="send-button" type="button" data-action="send" ${processing}><ha-icon icon="mdi:send"></ha-icon><span>${WORKBENCH_SESSION.processing ? "处理中" : "发送"}</span></button></div>
               </div>
-              <div class="shortcut-area"><span class="section-label">快捷场景</span><div class="shortcut-grid">${SHORTCUTS.map((item) => `<button class="shortcut" type="button" data-prompt="${escapeHtml(item.prompt)}" ${processing}>${escapeHtml(item.label)}</button>`).join("")}</div></div>
+              <div class="shortcut-area"><div class="shortcut-heading"><span class="section-label">快捷场景</span><button class="restore-demo" type="button" data-action="restore-demo" ${processing} title="恢复 MQTT 设备、环境条件和安全设备的演示初始状态"><ha-icon icon="mdi:restore"></ha-icon><span>${WORKBENCH_SESSION.processing ? "正在恢复" : "恢复初始状态"}</span></button></div><div class="shortcut-grid">${SHORTCUTS.map((item) => `<button class="shortcut" type="button" data-prompt="${escapeHtml(item.prompt)}" ${processing}>${escapeHtml(item.label)}</button>`).join("")}</div></div>
             </section>
 
             <section class="process-grid">
@@ -550,6 +635,10 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
       }
       if (trigger.dataset.action === "reset") {
         this._resetConversation();
+        return;
+      }
+      if (trigger.dataset.action === "restore-demo") {
+        this._restoreInitialState();
         return;
       }
       if (trigger.dataset.action === "send") {

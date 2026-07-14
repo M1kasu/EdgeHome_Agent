@@ -27,7 +27,15 @@ def test_installer_adds_workbench_assets(tmp_path: Path) -> None:
     assert "sidebar_title: EdgeHome Agent" in panel
     assert "sidebar_icon: mdi:shield-home-outline" in panel
     assert "module_url: /local/edgehome_execution_workbench.js" in panel
-    assert "edgehome_set_curtain_fault:" in (tmp_path / "edgehome_demo_rest_commands.yaml").read_text(encoding="utf-8")
+    rest_commands = (tmp_path / "edgehome_demo_rest_commands.yaml").read_text(encoding="utf-8")
+    assert "edgehome_set_curtain_fault:" in rest_commands
+    assert "edgehome_reset_mqtt_main_light:" in rest_commands
+    assert "edgehome_reset_mqtt_curtain:" in rest_commands
+    scripts = (tmp_path / "scripts.yaml").read_text(encoding="utf-8")
+    assert "rest_command.edgehome_reset_mqtt_main_light" in scripts
+    assert "rest_command.edgehome_reset_mqtt_tv" in scripts
+    # 客厅空调是 M3 MQTT 设备，不能在设备复位后再被 Helper 演示脚本覆盖。
+    assert "- climate.edgehome_living_room_ac" not in scripts
     assert 'mode: "none"' in (tmp_path / "edgehome_demo_templates.yaml").read_text(encoding="utf-8")
     workbench = (tmp_path / "www" / "edgehome_execution_workbench.js")
     assert workbench.is_file()
@@ -35,9 +43,12 @@ def test_installer_adds_workbench_assets(tmp_path: Path) -> None:
     assert "conversation/process" in frontend
     assert "conversation/agent/list" in frontend
     assert "conversationErrorDetail" in frontend
+    assert "_restoreInitialState" in frontend
+    assert "restore-demo" in frontend
+    assert "恢复初始状态" in frontend
     assert "LOCAL_READ_TOOLS" in frontend
     assert "快捷场景" in frontend
-    assert "工具与 MQTT 回读" in frontend
+    assert "执行与 MQTT 回读" in frontend
     assert "isRawToolPayload" in frontend
     assert 'get_room_state: "读取家庭状态"' in frontend
     assert "const mqttResults = results.filter" in frontend

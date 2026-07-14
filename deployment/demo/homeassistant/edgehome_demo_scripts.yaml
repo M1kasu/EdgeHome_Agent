@@ -60,17 +60,22 @@ edgehome_reset_demo_environment:
     - action: climate.set_temperature
       target:
         entity_id:
-          - climate.edgehome_living_room_ac
           - climate.edgehome_bedroom_ac
       data:
         temperature: 26
     - action: climate.set_hvac_mode
       target:
         entity_id:
-          - climate.edgehome_living_room_ac
           - climate.edgehome_bedroom_ac
       data:
         hvac_mode: "off"
+    # M1--M4 是独立 MQTT 模拟设备；仅复位 HA Helper 无法恢复其 SQLite 状态。
+    # 必须放在模板空调操作之后：最终 MQTT 基线不能被模板设备服务再次覆盖。
+    # 模拟器会从 SQLite 恢复默认状态，并重新发布 availability 与 state。
+    - action: rest_command.edgehome_reset_mqtt_main_light
+    - action: rest_command.edgehome_reset_mqtt_curtain
+    - action: rest_command.edgehome_reset_mqtt_ac
+    - action: rest_command.edgehome_reset_mqtt_tv
 
 edgehome_demo_inject_curtain_stuck:
   alias: EdgeHome 演示：注入窗帘卡住故障
