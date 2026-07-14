@@ -59,7 +59,7 @@ services:
       - ./homeassistant:/config
       - ./runtime:/runtime
     ports:
-      - "${HA_PORT:-8123}:8123"
+      - "127.0.0.1:${HA_PORT:-8123}:8123"
     restart: unless-stopped
     networks:
       - edgehome
