@@ -1,27 +1,6 @@
-# 可控的虚拟家居实体。default_entity_id 让实体 ID 在首次加载时保持稳定。
+# 迁移说明：客厅主灯已改由 device-simulator 通过 MQTT Discovery 提供。
+# 其余模板实体是后续设备迁移前的兼容项，不得用于 MQTT 主灯的状态或控制。
 - light:
-    - name: 客厅主灯
-      unique_id: edgehome_living_room_main
-      default_entity_id: light.edgehome_living_room_main
-      state: "{{ is_state('input_boolean.edgehome_living_room_main_power', 'on') }}"
-      level: "{{ (states('input_number.edgehome_living_room_main_brightness') | float(0) * 255 / 100) | round(0) }}"
-      turn_on:
-        - action: input_boolean.turn_on
-          target:
-            entity_id: input_boolean.edgehome_living_room_main_power
-      turn_off:
-        - action: input_boolean.turn_off
-          target:
-            entity_id: input_boolean.edgehome_living_room_main_power
-      set_level:
-        - action: input_boolean.turn_on
-          target:
-            entity_id: input_boolean.edgehome_living_room_main_power
-        - action: input_number.set_value
-          target:
-            entity_id: input_number.edgehome_living_room_main_brightness
-          data:
-            value: "{{ (brightness | int(0) * 100 / 255) | round(0) }}"
     - name: 客厅氛围灯
       unique_id: edgehome_living_room_ambient
       default_entity_id: light.edgehome_living_room_ambient
@@ -194,3 +173,28 @@
       default_entity_id: binary_sensor.edgehome_window
       device_class: window
       state: "{{ is_state('input_boolean.edgehome_window_open_state', 'on') }}"
+- button:
+    - name: EdgeHome 演示：重置环境
+      unique_id: edgehome_demo_reset_environment
+      default_entity_id: button.edgehome_demo_reset_environment
+      press:
+        - action: script.turn_on
+          target:
+            entity_id: script.edgehome_reset_demo_environment
+    - name: EdgeHome 演示：注入窗帘卡住
+      unique_id: edgehome_demo_inject_curtain_stuck
+      default_entity_id: button.edgehome_demo_inject_curtain_stuck
+      press:
+        - action: rest_command.edgehome_set_curtain_fault
+          data:
+            mode: stuck
+            delay_ms: 0
+    - name: EdgeHome 演示：清除窗帘故障
+      unique_id: edgehome_demo_clear_curtain_fault
+      default_entity_id: button.edgehome_demo_clear_curtain_fault
+      press:
+        - action: rest_command.edgehome_set_curtain_fault
+          data:
+            # 引号避免 YAML 将 none 当作空值，确保模拟器收到明确的故障清除指令。
+            mode: "none"
+            delay_ms: 0

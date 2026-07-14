@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import Literal, List, Tuple, Any
 import logging
+from uuid import uuid4
 
 from homeassistant.components.conversation import ConversationInput, ConversationResult, ConversationEntity
 from homeassistant.components.conversation.models import AbstractConversationAgent
@@ -285,11 +286,25 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
 
         if self._edgehome_coordinator is None:
             self._edgehome_coordinator = EdgeHomeCoordinator(self.hass)
-        result = await self._edgehome_coordinator.async_handle_with_dialogue(user_input.text, user_input.conversation_id)
+        # Home Assistant's REST endpoint permits an omitted conversation_id. Give
+        # EdgeHome a fresh local id so clarification and protected-device state
+        # never receive None or leak into another one-shot request.
+        conversation_id = user_input.conversation_id or f"edgehome-{uuid4().hex}"
+        user_id = getattr(user_input.context, "user_id", None) if user_input.context is not None else None
+        result = await self._edgehome_coordinator.async_handle_with_dialogue(
+            user_input.text,
+            conversation_id,
+            user_id=user_id,
+            assistant_id=user_input.agent_id,
+        )
         if result.handled:
             intent_response = intent.IntentResponse(language=user_input.language)
             intent_response.async_set_speech(result.speech or "请求已由 EdgeHome 处理。")
-            return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
+            intent_response.async_set_card(
+                title="EdgeHome 决策与执行路径",
+                content=self._edgehome_coordinator.record_trace(result),
+            )
+            return ConversationResult(response=intent_response, conversation_id=conversation_id)
 
         if not self.runtime_options.get(CONF_EDGEHOME_PLANNING_ENABLED, DEFAULT_EDGEHOME_PLANNING_ENABLED):
             return None
@@ -297,15 +312,26 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent, LocalLLMEntit
         planning_text = result.planning_text or user_input.text
         planned_result = await self._edgehome_coordinator.async_handle_complex(
             planning_text,
-            user_input.conversation_id,
+            conversation_id,
             user_input.agent_id,
             self.runtime_options,
             planner,
+            user_id=user_id,
         )
         if not planned_result.handled:
             return None
-        await self._edgehome_coordinator.async_remember_completed(user_input.conversation_id, planned_result.completed_plan)
+        await self._edgehome_coordinator.async_remember_completed(
+            conversation_id,
+            planned_result.completed_plan or planned_result.planned_plan,
+            planned_result.execution_report,
+            user_id=user_id,
+            assistant_id=user_input.agent_id,
+        )
 
         intent_response = intent.IntentResponse(language=user_input.language)
         intent_response.async_set_speech(planned_result.speech or "请求已由 EdgeHome 处理。")
-        return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
+        intent_response.async_set_card(
+            title="EdgeHome 决策与执行路径",
+            content=self._edgehome_coordinator.record_trace(planned_result),
+        )
+        return ConversationResult(response=intent_response, conversation_id=conversation_id)

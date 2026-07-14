@@ -1,0 +1,272 @@
+[
+  {
+    "id": "complex-001",
+    "task_type": "complex_planning",
+    "text": "请晚饭后看电影，请把客厅调整舒适，空调温度不得低于 25 度。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-002",
+    "task_type": "complex_planning",
+    "text": "麻烦我明早出差一天，请关闭不必要的演示设备，但冰箱与路由器必须保持运行。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-003",
+    "task_type": "complex_planning",
+    "text": "现在请一个小时后准备睡觉：先调整卧室灯光和空调，再关闭客厅演示设备。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-004",
+    "task_type": "complex_planning",
+    "text": "能否晚饭后看电影，请把客厅调整舒适，空调温度不得低于 25 度。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-005",
+    "task_type": "complex_planning",
+    "text": "请帮我我明早出差一天，请关闭不必要的演示设备，但冰箱与路由器必须保持运行。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-006",
+    "task_type": "complex_planning",
+    "text": "请一个小时后准备睡觉：先调整卧室灯光和空调，再关闭客厅演示设备。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-007",
+    "task_type": "complex_planning",
+    "text": "麻烦晚饭后看电影，请把客厅调整舒适，空调温度不得低于 25 度。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-008",
+    "task_type": "complex_planning",
+    "text": "现在请我明早出差一天，请关闭不必要的演示设备，但冰箱与路由器必须保持运行。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-009",
+    "task_type": "complex_planning",
+    "text": "能否一个小时后准备睡觉：先调整卧室灯光和空调，再关闭客厅演示设备。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-010",
+    "task_type": "complex_planning",
+    "text": "请帮我晚饭后看电影，请把客厅调整舒适，空调温度不得低于 25 度。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-011",
+    "task_type": "complex_planning",
+    "text": "请我明早出差一天，请关闭不必要的演示设备，但冰箱与路由器必须保持运行。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-012",
+    "task_type": "complex_planning",
+    "text": "麻烦一个小时后准备睡觉：先调整卧室灯光和空调，再关闭客厅演示设备。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-013",
+    "task_type": "complex_planning",
+    "text": "现在请晚饭后看电影，请把客厅调整舒适，空调温度不得低于 25 度。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-014",
+    "task_type": "complex_planning",
+    "text": "能否我明早出差一天，请关闭不必要的演示设备，但冰箱与路由器必须保持运行。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-015",
+    "task_type": "complex_planning",
+    "text": "请帮我一个小时后准备睡觉：先调整卧室灯光和空调，再关闭客厅演示设备。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-016",
+    "task_type": "complex_planning",
+    "text": "请晚饭后看电影，请把客厅调整舒适，空调温度不得低于 25 度。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-017",
+    "task_type": "complex_planning",
+    "text": "麻烦我明早出差一天，请关闭不必要的演示设备，但冰箱与路由器必须保持运行。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-018",
+    "task_type": "complex_planning",
+    "text": "现在请一个小时后准备睡觉：先调整卧室灯光和空调，再关闭客厅演示设备。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-019",
+    "task_type": "complex_planning",
+    "text": "能否晚饭后看电影，请把客厅调整舒适，空调温度不得低于 25 度。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-020",
+    "task_type": "complex_planning",
+    "text": "请帮我我明早出差一天，请关闭不必要的演示设备，但冰箱与路由器必须保持运行。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-021",
+    "task_type": "complex_planning",
+    "text": "请一个小时后准备睡觉：先调整卧室灯光和空调，再关闭客厅演示设备。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-022",
+    "task_type": "complex_planning",
+    "text": "麻烦晚饭后看电影，请把客厅调整舒适，空调温度不得低于 25 度。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-023",
+    "task_type": "complex_planning",
+    "text": "现在请我明早出差一天，请关闭不必要的演示设备，但冰箱与路由器必须保持运行。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-024",
+    "task_type": "complex_planning",
+    "text": "能否一个小时后准备睡觉：先调整卧室灯光和空调，再关闭客厅演示设备。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-025",
+    "task_type": "complex_planning",
+    "text": "请帮我晚饭后看电影，请把客厅调整舒适，空调温度不得低于 25 度。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-026",
+    "task_type": "complex_planning",
+    "text": "请我明早出差一天，请关闭不必要的演示设备，但冰箱与路由器必须保持运行。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-027",
+    "task_type": "complex_planning",
+    "text": "麻烦一个小时后准备睡觉：先调整卧室灯光和空调，再关闭客厅演示设备。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-028",
+    "task_type": "complex_planning",
+    "text": "现在请晚饭后看电影，请把客厅调整舒适，空调温度不得低于 25 度。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-029",
+    "task_type": "complex_planning",
+    "text": "能否我明早出差一天，请关闭不必要的演示设备，但冰箱与路由器必须保持运行。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "complex-030",
+    "task_type": "complex_planning",
+    "text": "请帮我一个小时后准备睡觉：先调整卧室灯光和空调，再关闭客厅演示设备。",
+    "expected_route": "llm_path",
+    "metadata": {
+      "phase": 13
+    }
+  }
+]

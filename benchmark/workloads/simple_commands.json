@@ -1,0 +1,452 @@
+[
+  {
+    "id": "simple-001",
+    "task_type": "simple_control",
+    "text": "请请把大厅的主照明打开",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-002",
+    "task_type": "simple_control",
+    "text": "麻烦客厅主灯亮度设成 47%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-003",
+    "task_type": "simple_control",
+    "text": "现在请请关掉客厅电视测试设备",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-004",
+    "task_type": "simple_control",
+    "text": "能否将卧室冷气目标设为 26 度",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-005",
+    "task_type": "simple_control",
+    "text": "请帮我读取一下客厅温度传感器状态",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-006",
+    "task_type": "simple_control",
+    "text": "请把客厅窗帘停在 35%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-007",
+    "task_type": "simple_control",
+    "text": "麻烦开启客厅氛围灯",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-008",
+    "task_type": "simple_control",
+    "text": "现在请把卧室主灯关闭",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-009",
+    "task_type": "simple_control",
+    "text": "能否客厅主灯调至 62%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-010",
+    "task_type": "simple_control",
+    "text": "请帮我查看测试插座的当前状态",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-011",
+    "task_type": "simple_control",
+    "text": "请请把大厅的主照明打开",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-012",
+    "task_type": "simple_control",
+    "text": "麻烦客厅主灯亮度设成 47%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-013",
+    "task_type": "simple_control",
+    "text": "现在请请关掉客厅电视测试设备",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-014",
+    "task_type": "simple_control",
+    "text": "能否将卧室冷气目标设为 26 度",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-015",
+    "task_type": "simple_control",
+    "text": "请帮我读取一下客厅温度传感器状态",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-016",
+    "task_type": "simple_control",
+    "text": "请把客厅窗帘停在 35%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-017",
+    "task_type": "simple_control",
+    "text": "麻烦开启客厅氛围灯",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-018",
+    "task_type": "simple_control",
+    "text": "现在请把卧室主灯关闭",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-019",
+    "task_type": "simple_control",
+    "text": "能否客厅主灯调至 62%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-020",
+    "task_type": "simple_control",
+    "text": "请帮我查看测试插座的当前状态",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-021",
+    "task_type": "simple_control",
+    "text": "请请把大厅的主照明打开",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-022",
+    "task_type": "simple_control",
+    "text": "麻烦客厅主灯亮度设成 47%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-023",
+    "task_type": "simple_control",
+    "text": "现在请请关掉客厅电视测试设备",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-024",
+    "task_type": "simple_control",
+    "text": "能否将卧室冷气目标设为 26 度",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-025",
+    "task_type": "simple_control",
+    "text": "请帮我读取一下客厅温度传感器状态",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-026",
+    "task_type": "simple_control",
+    "text": "请把客厅窗帘停在 35%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-027",
+    "task_type": "simple_control",
+    "text": "麻烦开启客厅氛围灯",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-028",
+    "task_type": "simple_control",
+    "text": "现在请把卧室主灯关闭",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-029",
+    "task_type": "simple_control",
+    "text": "能否客厅主灯调至 62%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-030",
+    "task_type": "simple_control",
+    "text": "请帮我查看测试插座的当前状态",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-031",
+    "task_type": "simple_control",
+    "text": "请请把大厅的主照明打开",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-032",
+    "task_type": "simple_control",
+    "text": "麻烦客厅主灯亮度设成 47%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-033",
+    "task_type": "simple_control",
+    "text": "现在请请关掉客厅电视测试设备",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-034",
+    "task_type": "simple_control",
+    "text": "能否将卧室冷气目标设为 26 度",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-035",
+    "task_type": "simple_control",
+    "text": "请帮我读取一下客厅温度传感器状态",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-036",
+    "task_type": "simple_control",
+    "text": "请把客厅窗帘停在 35%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-037",
+    "task_type": "simple_control",
+    "text": "麻烦开启客厅氛围灯",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-038",
+    "task_type": "simple_control",
+    "text": "现在请把卧室主灯关闭",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-039",
+    "task_type": "simple_control",
+    "text": "能否客厅主灯调至 62%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-040",
+    "task_type": "simple_control",
+    "text": "请帮我查看测试插座的当前状态",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-041",
+    "task_type": "simple_control",
+    "text": "请请把大厅的主照明打开",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-042",
+    "task_type": "simple_control",
+    "text": "麻烦客厅主灯亮度设成 47%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-043",
+    "task_type": "simple_control",
+    "text": "现在请请关掉客厅电视测试设备",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-044",
+    "task_type": "simple_control",
+    "text": "能否将卧室冷气目标设为 26 度",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-045",
+    "task_type": "simple_control",
+    "text": "请帮我读取一下客厅温度传感器状态",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-046",
+    "task_type": "simple_control",
+    "text": "请把客厅窗帘停在 35%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-047",
+    "task_type": "simple_control",
+    "text": "麻烦开启客厅氛围灯",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-048",
+    "task_type": "simple_control",
+    "text": "现在请把卧室主灯关闭",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-049",
+    "task_type": "simple_control",
+    "text": "能否客厅主灯调至 62%",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "simple-050",
+    "task_type": "simple_control",
+    "text": "请帮我查看测试插座的当前状态",
+    "expected_route": "fast_path",
+    "metadata": {
+      "phase": 13
+    }
+  }
+]

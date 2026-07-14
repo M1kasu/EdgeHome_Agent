@@ -1,4 +1,37 @@
 services:
+  mqtt:
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./runtime/mosquitto/data:/mosquitto/data
+      - ./runtime/mosquitto/log:/mosquitto/log
+    ports:
+      - "127.0.0.1:1883:1883"
+    restart: unless-stopped
+    networks:
+      - edgehome
+
+  device-simulator:
+    build:
+      context: ../device_simulator
+    depends_on:
+      - mqtt
+    environment:
+      MQTT_HOST: mqtt
+      MQTT_PORT: "1883"
+      DEVICE_CONFIG: /app/config/devices.yaml
+      STATE_DB: /app/data/device_state.db
+      ADMIN_HOST: 0.0.0.0
+      ADMIN_PORT: "8090"
+    volumes:
+      - ../device_simulator/config:/app/config:ro
+      - ./runtime/device-simulator:/app/data
+    ports:
+      - "127.0.0.1:8090:8090"
+    restart: unless-stopped
+    networks:
+      - edgehome
+
   edgehome-agent:
     build:
       context: ..
@@ -6,19 +39,30 @@ services:
     volumes:
       - ./homeassistant:/config
     restart: "no"
+    networks:
+      - edgehome
 
   home-assistant:
     image: ghcr.io/home-assistant/home-assistant:stable
     depends_on:
       edgehome-agent:
         condition: service_completed_successfully
+      mqtt:
+        condition: service_started
     environment:
       TZ: ${TZ}
+      # M1.5：结构化会话状态持久化到宿主机 runtime，容器重启后可恢复。
+      EDGEHOME_CONTEXT_DB_PATH: /runtime/edgehome_context.db
+      # 默认 30 分钟；验收可通过环境变量临时缩短，不改变会话核心逻辑。
+      EDGEHOME_CONTEXT_TTL_SECONDS: ${EDGEHOME_CONTEXT_TTL_SECONDS:-1800}
     volumes:
       - ./homeassistant:/config
+      - ./runtime:/runtime
     ports:
-      - "${HA_PORT:-8123}:8123"
+      - "127.0.0.1:${HA_PORT:-8123}:8123"
     restart: unless-stopped
+    networks:
+      - edgehome
 
   llama-server:
     image: ghcr.io/ggml-org/llama.cpp:server
@@ -39,3 +83,9 @@ services:
     ports:
       - "${MODEL_PORT:-8080}:8080"
     restart: unless-stopped
+    networks:
+      - edgehome
+
+networks:
+  edgehome:
+    name: edgehome

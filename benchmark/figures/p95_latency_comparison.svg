@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420">
+<rect width="100%" height="100%" fill="white"/>
+<text x="40" y="40" font-size="20" font-family="sans-serif">P95 延迟 / P95 latency</text>
+<line x1="60" y1="340" x2="860" y2="340" stroke="black"/>
+<rect x="80" y="219.08" width="110" height="120.92" fill="#377eb8"/><text x="135" y="360" text-anchor="middle" font-size="12">A 全量模型简单任务</text><text x="135" y="211.08" text-anchor="middle" font-size="12">742.00 ms</text>
+<rect x="230" y="334.92" width="110" height="5.08" fill="#377eb8"/><text x="285" y="360" text-anchor="middle" font-size="12">B 双路径简单任务</text><text x="285" y="326.92" text-anchor="middle" font-size="12">31.16 ms</text>
+<rect x="380" y="90.00" width="110" height="250.00" fill="#377eb8"/><text x="435" y="360" text-anchor="middle" font-size="12">B 双路径复杂任务</text><text x="435" y="82.00" text-anchor="middle" font-size="12">1534.08 ms</text>
+</svg>

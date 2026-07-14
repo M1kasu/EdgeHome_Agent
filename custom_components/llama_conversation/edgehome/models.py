@@ -57,6 +57,16 @@ class VerificationRule(StateCondition):
     settle_seconds: float = Field(default=0.0, ge=0.0, le=10.0)
 
 
+class PlanConstraint(BaseModel):
+    """A user, safety, or environment constraint made explicit by the planner."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    statement: str = Field(min_length=1, max_length=160)
+    source: str = Field(default="user", pattern=r"^(user|safety|environment)$")
+    hard: bool = True
+
+
 class PlanStep(BaseModel):
     """A single, registered and auditable operation in a fixed plan."""
 
@@ -65,6 +75,9 @@ class PlanStep(BaseModel):
     id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
     tool: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
+    # Plans execute in topological order; this preserves the generated task graph
+    # and lets the UI show which state read or action enabled each next step.
+    depends_on: list[str] = Field(default_factory=list, max_length=12)
     preconditions: list[StateCondition] = Field(default_factory=list)
     verify: VerificationRule | None = None
     on_failure: OnFailurePolicy = OnFailurePolicy.STOP
@@ -80,6 +93,8 @@ class TaskPlan(BaseModel):
     scene: str | None = Field(default=None, max_length=64)
     need_clarification: bool = False
     clarification_question: str | None = Field(default=None, max_length=300)
+    rationale: str | None = Field(default=None, max_length=240)
+    constraints: list[PlanConstraint] = Field(default_factory=list, max_length=8)
     steps: list[PlanStep] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -112,6 +127,7 @@ class VerificationResult(BaseModel):
     passed: bool
     reason: str | None = None
     snapshot: EntitySnapshot | None = None
+    timed_out: bool = False
 
 
 class StepExecutionResult(BaseModel):

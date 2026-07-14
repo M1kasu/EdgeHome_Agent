@@ -3,10 +3,14 @@ edgehome_reset_demo_environment:
   description: 将全部 edgehome_* 虚拟设备恢复到晚间场景，供每次测试前调用。
   mode: single
   sequence:
+    - action: rest_command.edgehome_set_curtain_fault
+      data:
+        # 引号避免 YAML 将 none 当作空值，确保模拟器收到明确的故障清除指令。
+        mode: "none"
+        delay_ms: 0
     - action: input_boolean.turn_on
       target:
         entity_id:
-          - input_boolean.edgehome_living_room_main_power
           - input_boolean.edgehome_living_room_presence_state
           - input_boolean.edgehome_router_power
           - input_boolean.edgehome_refrigerator_power
@@ -23,11 +27,6 @@ edgehome_reset_demo_environment:
           - input_boolean.edgehome_window_open_state
           - input_boolean.edgehome_simulate_curtain_failure
           - input_boolean.edgehome_security_mode
-    - action: input_number.set_value
-      target:
-        entity_id: input_number.edgehome_living_room_main_brightness
-      data:
-        value: 80
     - action: input_number.set_value
       target:
         entity_id: input_number.edgehome_living_room_ambient_brightness
@@ -61,14 +60,40 @@ edgehome_reset_demo_environment:
     - action: climate.set_temperature
       target:
         entity_id:
-          - climate.edgehome_living_room_ac
           - climate.edgehome_bedroom_ac
       data:
         temperature: 26
     - action: climate.set_hvac_mode
       target:
         entity_id:
-          - climate.edgehome_living_room_ac
           - climate.edgehome_bedroom_ac
       data:
         hvac_mode: "off"
+    # M1--M4 是独立 MQTT 模拟设备；仅复位 HA Helper 无法恢复其 SQLite 状态。
+    # 必须放在模板空调操作之后：最终 MQTT 基线不能被模板设备服务再次覆盖。
+    # 模拟器会从 SQLite 恢复默认状态，并重新发布 availability 与 state。
+    - action: rest_command.edgehome_reset_mqtt_main_light
+    - action: rest_command.edgehome_reset_mqtt_curtain
+    - action: rest_command.edgehome_reset_mqtt_ac
+    - action: rest_command.edgehome_reset_mqtt_tv
+
+edgehome_demo_inject_curtain_stuck:
+  alias: EdgeHome 演示：注入窗帘卡住故障
+  description: 仅用于演示状态回读如何识别窗帘部分失败。
+  mode: single
+  sequence:
+    - action: rest_command.edgehome_set_curtain_fault
+      data:
+        mode: stuck
+        delay_ms: 0
+
+edgehome_demo_clear_curtain_fault:
+  alias: EdgeHome 演示：清除窗帘故障
+  description: 清除演示故障注入，恢复下一次正常设备控制。
+  mode: single
+  sequence:
+    - action: rest_command.edgehome_set_curtain_fault
+      data:
+        # 引号避免 YAML 将 none 当作空值，确保模拟器收到明确的故障清除指令。
+        mode: "none"
+        delay_ms: 0

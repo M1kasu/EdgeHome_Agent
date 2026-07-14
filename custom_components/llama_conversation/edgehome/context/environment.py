@@ -44,7 +44,10 @@ class EnvironmentContextBuilder:
         if cached and cached[0] > now:
             return cached[1].model_copy(update={"cache_hit": True})
 
-        selected = {snapshot.entity_id: snapshot for snapshot in self._task_builder.build(goal).entities}
+        # Preserve the planner's scene hint: named scenes may safely expose
+        # only their registered MQTT capabilities even when the user mentions
+        # a short noun such as "窗帘" rather than the complete friendly name.
+        selected = {snapshot.entity_id: snapshot for snapshot in self._task_builder.build(goal, scene=scene).entities}
         normalized = self._normalize(goal)
         include_away = any(word in normalized for word in self._AWAY_WORDS)
         include_environment = any(word in normalized for word in self._ENVIRONMENT_WORDS)
@@ -79,7 +82,7 @@ class EnvironmentContextBuilder:
         if snapshot.domain in {"person", "device_tracker"}:
             return True
         if snapshot.domain == "binary_sensor":
-            return snapshot.attributes.get("device_class") in {"door", "window", "garage_door"}
+            return snapshot.attributes.get("device_class") in {"door", "window", "garage_door", "presence"}
         return False
 
     @staticmethod

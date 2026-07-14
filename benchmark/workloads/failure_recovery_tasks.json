@@ -1,0 +1,137 @@
+[
+  {
+    "id": "failure-001",
+    "task_type": "failure_recovery",
+    "text": "请在窗帘故障注入开启时关闭客厅窗帘",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-002",
+    "task_type": "failure_recovery",
+    "text": "麻烦客厅窗帘不可用时把它关上",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-003",
+    "task_type": "failure_recovery",
+    "text": "现在请服务返回成功但灯亮度未更新时继续确认状态",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-004",
+    "task_type": "failure_recovery",
+    "text": "能否在窗帘故障注入开启时关闭客厅窗帘",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-005",
+    "task_type": "failure_recovery",
+    "text": "请帮我客厅窗帘不可用时把它关上",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-006",
+    "task_type": "failure_recovery",
+    "text": "请服务返回成功但灯亮度未更新时继续确认状态",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-007",
+    "task_type": "failure_recovery",
+    "text": "麻烦在窗帘故障注入开启时关闭客厅窗帘",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-008",
+    "task_type": "failure_recovery",
+    "text": "现在请客厅窗帘不可用时把它关上",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-009",
+    "task_type": "failure_recovery",
+    "text": "能否服务返回成功但灯亮度未更新时继续确认状态",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-010",
+    "task_type": "failure_recovery",
+    "text": "请帮我在窗帘故障注入开启时关闭客厅窗帘",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-011",
+    "task_type": "failure_recovery",
+    "text": "请客厅窗帘不可用时把它关上",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-012",
+    "task_type": "failure_recovery",
+    "text": "麻烦服务返回成功但灯亮度未更新时继续确认状态",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-013",
+    "task_type": "failure_recovery",
+    "text": "现在请在窗帘故障注入开启时关闭客厅窗帘",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-014",
+    "task_type": "failure_recovery",
+    "text": "能否客厅窗帘不可用时把它关上",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "failure-015",
+    "task_type": "failure_recovery",
+    "text": "请帮我服务返回成功但灯亮度未更新时继续确认状态",
+    "expected_route": "verified_execution",
+    "metadata": {
+      "phase": 13
+    }
+  }
+]

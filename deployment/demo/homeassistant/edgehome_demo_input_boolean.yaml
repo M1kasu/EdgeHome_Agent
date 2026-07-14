@@ -1,7 +1,4 @@
 # 所有 input_boolean 都是模板实体的内部状态，不应暴露给 EdgeHome 对话代理。
-edgehome_living_room_main_power:
-  name: EdgeHome 客厅主灯内部开关
-  initial: true
 edgehome_living_room_ambient_power:
   name: EdgeHome 客厅氛围灯内部开关
   initial: false

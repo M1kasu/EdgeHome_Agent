@@ -101,9 +101,28 @@ class ExposedEntityResolver:
         records = self._registry.for_room(room) if room is not None else self._registry.all()
         return tuple(record.entity_id for record in records)
 
+    def scene_entities(self, scene_name: str, *, protocol: str | None = None) -> tuple[str, ...]:
+        """Return only the registry-backed entities declared for one scene."""
+        if self._registry is None:
+            return ()
+        return tuple(record.entity_id for record in self._registry.for_scene(scene_name, protocol=protocol))
+
     def is_protected(self, entity_id: str) -> bool:
         """Return the explicit protected flag when a production registry is in use."""
         return bool(self._registry and self._registry.is_protected(entity_id))
+
+    def protocol_feedback(self, entity_id: str) -> tuple[str, str | None] | None:
+        """Read a registered device's non-controlling MQTT feedback sensor, if present."""
+        if self._registry is None:
+            return None
+        feedback_entity_id = self._registry.feedback_entity_for(entity_id)
+        if feedback_entity_id is None:
+            return None
+        feedback_state = self.hass.states.get(feedback_entity_id)
+        if feedback_state is None:
+            return None
+        reason = feedback_state.attributes.get("reason")
+        return feedback_state.state, reason if isinstance(reason, str) and reason else None
 
 
 class EntityNameResolver(ExposedEntityResolver):

@@ -29,7 +29,15 @@ def _brightness_plan(entity_id: str = "light.living") -> TaskPlan:
 async def test_dialogue_store_persists_plan_and_consumes_clarification(hass) -> None:
     store = DialogueStateStore(hass)
 
-    state = await store.async_remember_plan("conversation-1", _brightness_plan())
+    state = await store.async_save(
+        store.new_state("conversation-1").model_copy(
+            update={
+                "last_plan": _brightness_plan(),
+                "last_entity_id": "light.living",
+                "last_parameters": {"entity_id": "light.living", "brightness": 50},
+            }
+        )
+    )
     await store.async_set_clarification("conversation-1", "打开灯", "请说明设备名称")
     loaded = await store.async_get("conversation-1")
     pending = await store.async_consume_clarification("conversation-1")
@@ -49,6 +57,7 @@ def test_reference_resolver_copies_target_and_inherits_brightness_slot(hass) -> 
     hass.states.async_set("light.bedroom", "off", {"friendly_name": "卧室灯"})
     resolver = EntityNameResolver(hass, exposure_checker=lambda *_: True)
     state = DialogueState(
+        session_id="a" * 64,
         conversation_id="conversation-1",
         last_plan=_brightness_plan(),
         last_entity_id="light.living",

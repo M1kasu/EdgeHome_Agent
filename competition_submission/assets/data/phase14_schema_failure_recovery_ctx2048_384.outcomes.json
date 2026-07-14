@@ -1,0 +1,10 @@
+[
+  {
+    "id": "complex-010",
+    "model_called": true,
+    "schema_valid": true,
+    "raw_model_output": "{\"goal\": \"adjust living room to comfortable setting\", \"steps\": [{\"id\": \"ACSET01\", \"tool\": \"air conditioner\", \"optional\": true}, {\"id\": \"CURTAIN01\", \"tool\": \"curtain\"}, {\"id\": \"LIGHT01\", \"tool\": \"light\"}, {\"id\": \"TVON\", \"tool\": \"tv\"}, {\"id\": \"SET25\", \"tool\": \"thermostat\", \"optional\": true}, {\"id\": \"MOVIE\", \"tool\": \"movie player\"}]}",
+    "schema_error": null,
+    "success": true
+  }
+]

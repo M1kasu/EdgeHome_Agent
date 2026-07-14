@@ -35,3 +35,15 @@ def test_registry_is_the_per_agent_boundary_for_virtual_security_mode(hass) -> N
     resolver = EntityNameResolver(hass, exposure_checker=lambda *_: False, registry=build_demo_entity_registry())
 
     assert resolver.snapshot("input_boolean.edgehome_security_mode").state == "off"
+
+
+def test_fast_path_builds_verified_climate_plan_without_model(hass) -> None:
+    hass.states.async_set("climate.edgehome_living_room_ac", "cool", {"friendly_name": "客厅空调", "temperature": 24})
+    resolver = EntityNameResolver(hass, exposure_checker=lambda *_: True, registry=build_demo_entity_registry())
+
+    decision = ChineseFastRouter(resolver).route("把客厅空调调到25度")
+
+    assert decision.status == FastRouteStatus.READY
+    assert decision.intent == FastIntent.SET_TEMPERATURE
+    assert decision.plan is not None
+    assert decision.plan.steps[0].arguments["temperature"] == 25

@@ -16,20 +16,54 @@ class EnergyConversationHandler:
         self._store = store
         self._service = service
 
-    async def async_handle(self, text: str, conversation_id: str) -> str | None:
+    async def async_handle(
+        self,
+        text: str,
+        conversation_id: str,
+        *,
+        user_id: str | None = None,
+        assistant_id: str | None = None,
+    ) -> str | None:
         normalized = text.strip().rstrip("。！？?!")
-        if normalized in {"最近一周为什么用电量变高了", "分析最近一周能耗", "分析家庭能耗"}:
+        if normalized in {
+            "查询客厅当前能耗",
+            "查询客厅能耗",
+            "客厅当前能耗",
+            "客厅当前功耗",
+            "查询客厅当前功耗",
+        }:
+            watts = self._service.current_living_room_power_watts()
+            if watts is None:
+                return "客厅 MQTT 功耗计当前没有可用读数，因此无法给出实时功率；未控制任何设备。"
+            return (
+                f"客厅当前可读功率为 {watts:.1f} W，来自客厅电视 MQTT 功耗计。"
+                "这是实时功率而非累计电量；未控制任何设备。"
+            )
+        if normalized in {
+            "最近一周为什么用电量变高了",
+            "最近一周为什么用电量变高",
+            "最近一周为什么用电量增加",
+            "最近一周为什么用电量增加了",
+            "最近一周用电量为什么增加",
+            "分析最近一周能耗",
+            "分析家庭能耗",
+        }:
             analysis = await self._service.analyse_home_energy()
             return self._analysis_speech(analysis.total_kwh, analysis.comparison_delta_kwh, analysis.high_consumption_rank, len(analysis.anomalies))
         if normalized.startswith("帮我制定一个节能方案") or normalized == "制定节能方案":
             plan = await self._service.generate_energy_plan()
-            await self._store.async_set_energy_plan(conversation_id, plan)
+            await self._store.async_set_energy_plan(
+                conversation_id,
+                plan,
+                user_id=user_id,
+                assistant_id=assistant_id,
+            )
             labels = "；".join(f"第{index}条：{item.title}" for index, item in enumerate(plan.recommendations, start=1))
             return f"已生成不影响冰箱和路由器的节能方案：{labels}。这是长期自动化，正在等待确认；请回复要应用的条目并明确确认。"
         if normalized.startswith("调整空调计划为"):
-            return await self._adjust_ac_plan(normalized, conversation_id)
+            return await self._adjust_ac_plan(normalized, conversation_id, user_id=user_id, assistant_id=assistant_id)
         if normalized.startswith("应用"):
-            return await self._apply_selected(normalized, conversation_id)
+            return await self._apply_selected(normalized, conversation_id, user_id=user_id, assistant_id=assistant_id)
         if normalized in {"撤销上一次自动化", "撤销最近自动化"}:
             result = await self._service.automations.async_undo_last()
             return "已撤销最近的 EdgeHome Demo 自动化。" if result.success else "没有可撤销的 EdgeHome Demo 自动化。"
@@ -40,9 +74,16 @@ class EnergyConversationHandler:
             return "当前自动化：" + "、".join(f"{item.name}（{item.id}，{'启用' if item.enabled else '停用'}）" for item in result.automations)
         return None
 
-    async def _adjust_ac_plan(self, text: str, conversation_id: str) -> str:
+    async def _adjust_ac_plan(
+        self,
+        text: str,
+        conversation_id: str,
+        *,
+        user_id: str | None,
+        assistant_id: str | None,
+    ) -> str:
         match = re.fullmatch(r"调整空调计划为\s*(\d{1,3})\s*分钟", text)
-        plan = await self._store.async_get_energy_plan(conversation_id)
+        plan = await self._store.async_get_energy_plan(conversation_id, user_id=user_id, assistant_id=assistant_id)
         if match is None or plan is None:
             return "没有可调整的待确认空调节能方案。"
         minutes = int(match.group(1))
@@ -56,11 +97,23 @@ class EnergyConversationHandler:
         ]
         if recommendations == plan.recommendations:
             return "当前方案没有可调整的空调建议。"
-        await self._store.async_update_energy_plan(conversation_id, plan.model_copy(update={"recommendations": recommendations}))
+        await self._store.async_update_energy_plan(
+            conversation_id,
+            plan.model_copy(update={"recommendations": recommendations}),
+            user_id=user_id,
+            assistant_id=assistant_id,
+        )
         return f"已将客厅测试空调的无人关闭条件调整为 {minutes} 分钟，仍等待确认。"
 
-    async def _apply_selected(self, text: str, conversation_id: str) -> str:
-        plan = await self._store.async_get_energy_plan(conversation_id)
+    async def _apply_selected(
+        self,
+        text: str,
+        conversation_id: str,
+        *,
+        user_id: str | None,
+        assistant_id: str | None,
+    ) -> str:
+        plan = await self._store.async_get_energy_plan(conversation_id, user_id=user_id, assistant_id=assistant_id)
         if plan is None:
             return "没有待确认的节能方案，请先制定方案。"
         selected = _selected_ids(text, plan)

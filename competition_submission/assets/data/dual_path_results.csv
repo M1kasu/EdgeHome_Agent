@@ -1,0 +1,4 @@
+label,requests,successes,success_rate,model_calls,model_call_rate,average_latency_ms,p50_latency_ms,p95_latency_ms,avg_tokens_per_second
+A 全量模型简单任务,50,50,1.0,50,1.0,643.195382,661.5837,742.00356,25.55001
+B 双路径简单任务,50,35,0.7,0,0.0,12.651504,8.57835,31.156415,
+B 双路径复杂任务,30,30,1.0,30,1.0,1427.18298,1422.8977,1534.084655,22.313024

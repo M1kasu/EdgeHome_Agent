@@ -2,6 +2,8 @@ models/
 loras/
 core/
 config/
+!device_simulator/config/
+!device_simulator/config/devices.yaml
 .DS_Store
 data/**/*.json
 data/**/*.jsonl
@@ -13,8 +15,13 @@ notes.txt
 runpod_bootstrap.sh
 *.code-workspace
 .coverage
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 .vscode/
 .python-version
 deployment/.env
 deployment/homeassistant/
 deployment/models/
+deployment/runtime/
+benchmark/runtime/

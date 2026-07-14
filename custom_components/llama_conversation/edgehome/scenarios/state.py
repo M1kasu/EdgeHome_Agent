@@ -60,7 +60,15 @@ class ScenarioStateManager:
         scenario = self._active.get(self._key(conversation_id, name))
         if scenario is None:
             return None
-        steps = [step for index, snapshot in enumerate(scenario.snapshots, start=1) if (step := _restore_step(index, snapshot))]
+        # A climate snapshot can require two independently verified operations:
+        # restore its HVAC mode first, then its target temperature.  Keep those
+        # steps separate so a successful service return is never mistaken for a
+        # fully restored device state.
+        steps = [
+            step
+            for index, snapshot in enumerate(scenario.snapshots, start=1)
+            for step in _restore_steps(index, snapshot)
+        ]
         if not steps:
             return None
         return TaskPlan(goal=f"恢复{name}场景前状态", scene=f"restore_{name}", steps=steps)
@@ -95,45 +103,91 @@ class ScenarioStateManager:
         await self._store.async_save({"scenarios": {key: state.model_dump(mode="json") for key, state in self._active.items()}})
 
 
-def _restore_step(index: int, snapshot: EntitySnapshot) -> PlanStep | None:
+def _restore_steps(index: int, snapshot: EntitySnapshot) -> tuple[PlanStep, ...]:
+    """Build all verified steps required to restore one captured device state."""
     step_id = f"restore_{index}"
     if snapshot.domain == "light":
         if snapshot.state == "off":
-            return PlanStep(
-                id=step_id,
-                tool="turn_off_device",
-                arguments={"entity_id": snapshot.entity_id},
-                verify=VerificationRule(entity_id=snapshot.entity_id, state="off"),
+            return (
+                PlanStep(
+                    id=step_id,
+                    tool="turn_off_device",
+                    arguments={"entity_id": snapshot.entity_id},
+                    verify=VerificationRule(entity_id=snapshot.entity_id, state="off"),
+                ),
             )
         brightness = snapshot.attributes.get("brightness")
         if isinstance(brightness, int):
             percentage = round(brightness * 100 / 255)
-            return PlanStep(
-                id=step_id,
-                tool="set_light_brightness",
-                arguments={"entity_id": snapshot.entity_id, "brightness": percentage},
-                verify=VerificationRule(entity_id=snapshot.entity_id, state="on", attributes={"brightness": brightness}, tolerance=1.0),
+            return (
+                PlanStep(
+                    id=step_id,
+                    tool="set_light_brightness",
+                    arguments={"entity_id": snapshot.entity_id, "brightness": percentage},
+                    verify=VerificationRule(entity_id=snapshot.entity_id, state="on", attributes={"brightness": brightness}, tolerance=1.0),
+                ),
             )
-        return PlanStep(
-            id=step_id,
-            tool="turn_on_device",
-            arguments={"entity_id": snapshot.entity_id},
-            verify=VerificationRule(entity_id=snapshot.entity_id, state="on"),
+        return (
+            PlanStep(
+                id=step_id,
+                tool="turn_on_device",
+                arguments={"entity_id": snapshot.entity_id},
+                verify=VerificationRule(entity_id=snapshot.entity_id, state="on"),
+            ),
         )
     if snapshot.domain in {"switch", "fan"}:
         tool = "turn_on_device" if snapshot.state == "on" else "turn_off_device"
-        return PlanStep(
-            id=step_id,
-            tool=tool,
-            arguments={"entity_id": snapshot.entity_id},
-            verify=VerificationRule(entity_id=snapshot.entity_id, state=snapshot.state),
+        return (
+            PlanStep(
+                id=step_id,
+                tool=tool,
+                arguments={"entity_id": snapshot.entity_id},
+                verify=VerificationRule(entity_id=snapshot.entity_id, state=snapshot.state),
+            ),
         )
     if snapshot.domain == "cover" and isinstance(snapshot.attributes.get("current_position"), int):
         position = snapshot.attributes["current_position"]
-        return PlanStep(
-            id=step_id,
-            tool="control_curtain",
-            arguments={"entity_id": snapshot.entity_id, "position": position},
-            verify=VerificationRule(entity_id=snapshot.entity_id, attributes={"current_position": position}, tolerance=1.0),
+        return (
+            PlanStep(
+                id=step_id,
+                tool="control_curtain",
+                arguments={"entity_id": snapshot.entity_id, "position": position},
+                verify=VerificationRule(entity_id=snapshot.entity_id, attributes={"current_position": position}, tolerance=1.0),
+            ),
         )
-    return None
+    if snapshot.domain == "climate":
+        if snapshot.state == "off":
+            return (
+                PlanStep(
+                    id=step_id,
+                    tool="turn_off_device",
+                    arguments={"entity_id": snapshot.entity_id},
+                    verify=VerificationRule(entity_id=snapshot.entity_id, state="off"),
+                ),
+            )
+        if snapshot.state not in {"cool", "heat"}:
+            return ()
+        steps = [
+            PlanStep(
+                id=f"{step_id}_mode",
+                tool="set_hvac_mode",
+                arguments={"entity_id": snapshot.entity_id, "hvac_mode": snapshot.state},
+                verify=VerificationRule(entity_id=snapshot.entity_id, state=snapshot.state),
+            )
+        ]
+        temperature = snapshot.attributes.get("temperature")
+        if isinstance(temperature, (int, float)) and 16.0 <= temperature <= 30.0:
+            steps.append(
+                PlanStep(
+                    id=f"{step_id}_temperature",
+                    tool="set_temperature",
+                    arguments={"entity_id": snapshot.entity_id, "temperature": float(temperature)},
+                    verify=VerificationRule(
+                        entity_id=snapshot.entity_id,
+                        attributes={"temperature": float(temperature)},
+                        tolerance=0.5,
+                    ),
+                )
+            )
+        return tuple(steps)
+    return ()

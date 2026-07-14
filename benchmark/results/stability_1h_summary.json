@@ -1,0 +1,13 @@
+{
+  "samples": 60,
+  "first_elapsed_seconds": 0.087,
+  "last_elapsed_seconds": 3540.504,
+  "sample_span_seconds": 3540.417,
+  "process_memory_min_mb": 188.109,
+  "process_memory_max_mb": 188.352,
+  "process_memory_delta_mb": 0.2109999999999843,
+  "cpu_percent_max": 75.5,
+  "model_unhealthy_count": 0,
+  "knowledge_failure_count": 0,
+  "energy_failure_count": 0
+}

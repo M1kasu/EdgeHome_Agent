@@ -1,0 +1,4 @@
+label,requests,successes,success_rate,model_calls,model_call_rate,average_latency_ms,p50_latency_ms,p95_latency_ms,avg_tokens_per_second,concurrency,throughput_requests_per_second
+并发 1,12,12,1.0,12,1.0,593.369008,585.3229,712.12455,24.938231,1,1.685292
+并发 2,12,12,1.0,12,1.0,705.011933,720.18185,963.576735,20.563478,2,2.836831
+并发 4,12,12,1.0,12,1.0,1015.397283,992.07775,1378.077125,16.020519,4,3.939345

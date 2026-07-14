@@ -1,7 +1,12 @@
-# EdgeHome Agent
+# EdgeHome Agent：历史入口
 
-EdgeHome 是基于 acon96/home-llm 的增量 Home Assistant 自定义组件扩展。它保留原有 Conversation、模型后端和工具调用能力，并增加中文快速路径、受控复杂规划、多轮状态、环境快照、本地知识检索、能耗分析、安全确认、失败重规划与端侧资源调度。
+项目主入口已统一到根目录 [README](README.md)。
 
-快速开始请阅读 docs/deployment.md；架构和安全边界见 docs/architecture.md 与 docs/safety_design.md。
+请从以下文档开始：
 
-第 12 阶段新增离线 FTS5 本地知识库、合成能耗分析、可确认的 EdgeHome Demo 节能自动化和多轮方案选择。详见 docs/KNOWLEDGE_BASE_DESIGN.md、docs/ENERGY_ANALYSIS_DESIGN.md、docs/ENERGY_AUTOMATION_SAFETY.md 与 docs/PHASE12_USER_GUIDE.md。
+- [部署与启动](docs/deployment.md)
+- [MQTT 独立设备仿真（M1）](docs/MQTT_DEVICE_SIMULATOR.md)
+- [结构化会话状态（M1.5）](docs/EdgeHome%20Dialogue%20State.md)
+- [报告与验收证据](reports/README.md)
+
+本文件保留为旧链接兼容入口，不再维护重复的项目说明。

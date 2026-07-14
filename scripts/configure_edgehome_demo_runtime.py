@@ -40,6 +40,7 @@ _TARGETS: dict[str, tuple[str, str]] = {
     "binary_sensor.edgehome_window": ("全屋", "窗户"),
     "input_boolean.edgehome_security_mode": ("全屋", "安防模式"),
 }
+_PROTECTED_ENTITY_IDS = frozenset({"switch.edgehome_router", "switch.edgehome_refrigerator"})
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -121,11 +122,15 @@ def configure(config_dir: Path, dry_run: bool = False) -> dict[str, Any]:
     if not isinstance(exposed_records, dict):
         raise ValueError("homeassistant.exposed_entities 的 exposed_entities 不是对象")
     for entity_id in _TARGETS:
-        exposed_records[entity_id] = {"assistants": {"conversation": {"should_expose": True}}}
+        # 路由器和冰箱由 EdgeHome 的专属注册表管理；不允许通用 LLM 控制链路绕过二次确认。
+        exposed_records[entity_id] = {
+            "assistants": {"conversation": {"should_expose": entity_id not in _PROTECTED_ENTITY_IDS}}
+        }
 
     summary = {
         "areas": {name: known_area_ids[name] for name in _AREAS},
-        "exposed_entities": sorted(_TARGETS),
+        "exposed_entities": sorted(set(_TARGETS) - _PROTECTED_ENTITY_IDS),
+        "protected_entities": sorted(_PROTECTED_ENTITY_IDS),
         "missing_entities": missing,
     }
     if dry_run:

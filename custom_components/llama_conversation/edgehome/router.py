@@ -6,6 +6,7 @@ from collections.abc import Container
 
 from .entity_resolver import EntityNameResolver
 from .errors import EntityResolutionError
+from .light import brightness_verification
 from .models import PlanStep, TaskPlan, VerificationRule
 from .understanding.intent_classifier import ChineseIntentClassifier
 from .understanding.models import FastIntent, FastRouteDecision, FastRouteStatus
@@ -104,12 +105,7 @@ def _step_for(intent: FastIntent, entity_id: str, value: float | None) -> PlanSt
             id="fast_1",
             tool="set_light_brightness",
             arguments={"entity_id": entity_id, "brightness": brightness},
-            verify=VerificationRule(
-                entity_id=entity_id,
-                state="on",
-                attributes={"brightness": round(brightness * 255 / 100)},
-                tolerance=1.0,
-            ),
+            verify=brightness_verification(entity_id, brightness),
         )
     if intent == FastIntent.SET_TEMPERATURE and value is not None:
         return PlanStep(

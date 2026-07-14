@@ -8,6 +8,13 @@ from dataclasses import dataclass
 from .errors import EntityResolutionError
 
 
+_ROOM_ALIASES: dict[str, tuple[str, ...]] = {
+    "living_room": ("客厅", "大厅"),
+    "bedroom": ("卧室",),
+    "home": ("全屋", "家里"),
+}
+
+
 @dataclass(frozen=True, slots=True)
 class RegisteredEntity:
     """One device that EdgeHome may name, read, or control."""
@@ -18,6 +25,9 @@ class RegisteredEntity:
     device_type: str
     aliases: tuple[str, ...]
     protected: bool = False
+    feedback_entity_id: str | None = None
+    protocol: str = "template"
+    scene_names: frozenset[str] = frozenset()
 
     @property
     def domain(self) -> str:
@@ -50,6 +60,19 @@ class EdgeHomeEntityRegistry:
         record = self.get(entity_id)
         return bool(record and record.protected)
 
+    def feedback_entity_for(self, entity_id: str) -> str | None:
+        """Return the optional read-only protocol-feedback entity for a device."""
+        record = self.get(entity_id)
+        return record.feedback_entity_id if record else None
+
+    def for_scene(self, scene_name: str, *, protocol: str | None = None) -> tuple[RegisteredEntity, ...]:
+        """Return the explicitly assigned devices for one named scene."""
+        return tuple(
+            record
+            for record in self._by_id.values()
+            if scene_name in record.scene_names and (protocol is None or record.protocol == protocol)
+        )
+
     def resolve_query(self, query: str, allowed_domains: Container[str] | None = None) -> str:
         """Choose a unique longest alias match or return a stable clarification error."""
         normalized_query = _normalize(query)
@@ -60,7 +83,11 @@ class EdgeHomeEntityRegistry:
             for name in record.all_names():
                 normalized_name = _normalize(name)
                 if len(normalized_name) >= 2 and normalized_name in normalized_query:
-                    matches.append((len(normalized_name), record.entity_id))
+                    room_bonus = max(
+                        (len(_normalize(alias)) for alias in _ROOM_ALIASES.get(record.room, ()) if _normalize(alias) in normalized_query),
+                        default=0,
+                    )
+                    matches.append((len(normalized_name) + room_bonus, record.entity_id))
 
         if not matches:
             raise EntityResolutionError("entity_name_not_found", "未找到已注册的 EdgeHome 测试设备")
@@ -75,11 +102,47 @@ def build_demo_entity_registry() -> EdgeHomeEntityRegistry:
     """Return the only entities enabled during the virtual-device validation phase."""
     return EdgeHomeEntityRegistry(
         (
-            RegisteredEntity("客厅主灯", "light.edgehome_living_room_main", "living_room", "light", ("客厅灯", "大厅主灯", "主灯")),
+            RegisteredEntity(
+                "客厅主灯",
+                "light.edgehome_living_room_main",
+                "living_room",
+                "light",
+                ("客厅灯", "大厅主灯", "大厅灯", "客厅主照明", "客厅大灯", "大灯", "主灯"),
+                feedback_entity_id="sensor.edgehome_living_room_main_feedback",
+                protocol="mqtt",
+                scene_names=frozenset({"movie", "leaving"}),
+            ),
             RegisteredEntity("客厅氛围灯", "light.edgehome_living_room_ambient", "living_room", "light", ("氛围灯", "客厅灯带")),
-            RegisteredEntity("客厅电视", "switch.edgehome_living_room_tv", "living_room", "switch", ("电视", "客厅 TV")),
-            RegisteredEntity("客厅空调", "climate.edgehome_living_room_ac", "living_room", "climate", ("客厅 AC", "客厅冷气")),
-            RegisteredEntity("客厅窗帘", "cover.edgehome_living_room_curtain", "living_room", "cover", ("窗帘", "客厅帘子")),
+            RegisteredEntity(
+                "客厅电视",
+                "switch.edgehome_living_room_tv",
+                "living_room",
+                "switch",
+                ("电视", "客厅 TV"),
+                feedback_entity_id="sensor.edgehome_living_room_tv_feedback",
+                protocol="mqtt",
+                scene_names=frozenset({"movie", "leaving"}),
+            ),
+            RegisteredEntity(
+                "客厅空调",
+                "climate.edgehome_living_room_ac",
+                "living_room",
+                "climate",
+                ("客厅 AC", "客厅冷气"),
+                feedback_entity_id="sensor.edgehome_living_room_ac_feedback",
+                protocol="mqtt",
+                scene_names=frozenset({"movie", "leaving"}),
+            ),
+            RegisteredEntity(
+                "客厅窗帘",
+                "cover.edgehome_living_room_curtain",
+                "living_room",
+                "cover",
+                ("窗帘", "客厅帘子"),
+                feedback_entity_id="sensor.edgehome_living_room_curtain_feedback",
+                protocol="mqtt",
+                scene_names=frozenset({"movie", "leaving"}),
+            ),
             RegisteredEntity("客厅温度", "sensor.edgehome_living_room_temperature", "living_room", "sensor", ("客厅室温",)),
             RegisteredEntity("客厅光照", "sensor.edgehome_living_room_illuminance", "living_room", "sensor", ("客厅亮度", "客厅照度")),
             RegisteredEntity("客厅有人", "binary_sensor.edgehome_living_room_presence", "living_room", "binary_sensor", ("客厅在场", "客厅有人吗")),
@@ -90,8 +153,24 @@ def build_demo_entity_registry() -> EdgeHomeEntityRegistry:
             RegisteredEntity("路由器", "switch.edgehome_router", "home", "switch", ("网络", "网络设备"), protected=True),
             RegisteredEntity("冰箱", "switch.edgehome_refrigerator", "home", "switch", ("电冰箱",), protected=True),
             RegisteredEntity("测试插座", "switch.edgehome_test_socket", "home", "switch", ("插座", "测试电源")),
-            RegisteredEntity("窗户", "binary_sensor.edgehome_window", "home", "binary_sensor", ("窗",)),
-            RegisteredEntity("安防模式", "input_boolean.edgehome_security_mode", "home", "input_boolean", ("安防", "安全模式")),
+            RegisteredEntity(
+                "窗户",
+                "binary_sensor.edgehome_window",
+                "home",
+                "binary_sensor",
+                ("窗",),
+                protocol="safety_sensor",
+                scene_names=frozenset({"leaving"}),
+            ),
+            RegisteredEntity(
+                "安防模式",
+                "input_boolean.edgehome_security_mode",
+                "home",
+                "input_boolean",
+                ("安防", "安全模式"),
+                protocol="safety_policy",
+                scene_names=frozenset({"leaving"}),
+            ),
         )
     )
 

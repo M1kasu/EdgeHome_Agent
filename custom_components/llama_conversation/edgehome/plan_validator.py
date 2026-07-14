@@ -48,6 +48,19 @@ class PlanValidator:
                 issues.append(PlanValidationIssue(step.id, "duplicate_step_id", "步骤 ID 不能重复"))
                 continue
             seen_step_ids.add(step.id)
+            for dependency in step.depends_on:
+                if dependency == step.id:
+                    issues.append(PlanValidationIssue(step.id, "self_dependency", "步骤不能依赖自身"))
+                elif dependency not in seen_step_ids:
+                    issues.append(
+                        PlanValidationIssue(
+                            step.id,
+                            "invalid_step_dependency",
+                            "步骤依赖必须指向当前计划中已出现的前置步骤",
+                        )
+                    )
+            if len(set(step.depends_on)) != len(step.depends_on):
+                issues.append(PlanValidationIssue(step.id, "duplicate_step_dependency", "步骤依赖不能重复"))
             normalized = self._validate_step(step, issues)
             if normalized:
                 normalized_steps.append(normalized)

@@ -1,0 +1,5 @@
+{
+  "concurrency": 4,
+  "requests": 12,
+  "workload": "independent_read_only_model_queries"
+}

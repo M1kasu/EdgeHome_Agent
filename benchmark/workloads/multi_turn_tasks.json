@@ -1,0 +1,262 @@
+[
+  {
+    "id": "multi-001",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 36%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-002",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 37%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-003",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 38%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-004",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 39%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-005",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 40%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-006",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 41%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-007",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 42%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-008",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 43%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-009",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 44%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-010",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 45%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-011",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 46%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-012",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 47%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-013",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 48%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-014",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 49%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-015",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 50%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-016",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 51%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-017",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 52%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-018",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 53%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-019",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 54%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  },
+  {
+    "id": "multi-020",
+    "task_type": "multi_turn",
+    "expected_route": "dialogue_state",
+    "turns": [
+      "请把客厅主灯调暗到 35%",
+      "卧室的也照这个设置执行",
+      "查询刚才的操作结果"
+    ],
+    "metadata": {
+      "phase": 13
+    }
+  }
+]

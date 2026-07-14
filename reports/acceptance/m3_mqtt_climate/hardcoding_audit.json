@@ -1,0 +1,54 @@
+{
+  "scanner": "scripts/audit_hardcoding.py",
+  "production_roots": [
+    "custom_components/llama_conversation/edgehome",
+    "device_simulator/edgehome_simulator"
+  ],
+  "acceptance_input_count": 36,
+  "errors": 0,
+  "warnings": 6,
+  "findings": [
+    {
+      "severity": "warning",
+      "kind": "direct_state_write",
+      "file": "custom_components/llama_conversation/edgehome/coordinator.py",
+      "line": 566,
+      "detail": "diagnostic trace"
+    },
+    {
+      "severity": "warning",
+      "kind": "exact_text_branch",
+      "file": "custom_components/llama_conversation/edgehome/coordinator.py",
+      "line": 164,
+      "detail": "text.strip() == '确认关闭受保护设备'"
+    },
+    {
+      "severity": "warning",
+      "kind": "exact_text_branch",
+      "file": "custom_components/llama_conversation/edgehome/energy/conversation.py",
+      "line": 28,
+      "detail": "normalized in {'最近一周为什么用电量变高了', '最近一周为什么用电量变高', '最近一周为什么用电量增加', '最近一周为什么用电量增加了', '最近一周用电量为什么增加', '分析最近一周能耗', '分析家庭能耗'}"
+    },
+    {
+      "severity": "warning",
+      "kind": "exact_text_branch",
+      "file": "custom_components/llama_conversation/edgehome/energy/conversation.py",
+      "line": 39,
+      "detail": "normalized.startswith('帮我制定一个节能方案') or normalized == '制定节能方案'"
+    },
+    {
+      "severity": "warning",
+      "kind": "exact_text_branch",
+      "file": "custom_components/llama_conversation/edgehome/energy/conversation.py",
+      "line": 53,
+      "detail": "normalized in {'撤销上一次自动化', '撤销最近自动化'}"
+    },
+    {
+      "severity": "warning",
+      "kind": "exact_text_branch",
+      "file": "custom_components/llama_conversation/edgehome/energy/conversation.py",
+      "line": 127,
+      "detail": "re.search(f'第{word}条[^，。；]*?(?:不要|不应用|先不)', text)"
+    }
+  ]
+}

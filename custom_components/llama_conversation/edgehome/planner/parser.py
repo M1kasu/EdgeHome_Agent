@@ -50,15 +50,29 @@ class StructuredPlanParser:
         try:
             return ParsedPlan(status=PlanParseStatus.ACCEPTED, plan=self._validator.validate(plan))
         except PlanValidationError as error:
-            codes = ",".join(issue.code for issue in error.issues)
-            return ParsedPlan(status=PlanParseStatus.INVALID_PLAN, reason=codes)
+            details = "; ".join(
+                f"{issue.code}: {issue.message}" for issue in error.issues[:4]
+            )
+            return ParsedPlan(status=PlanParseStatus.INVALID_PLAN, reason=details)
 
     @staticmethod
     def _decode(payload: str | dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(payload, dict):
             return payload
+        normalized = payload.strip()
         try:
-            decoded = json.loads(payload)
+            decoded = json.loads(normalized)
         except json.JSONDecodeError:
-            return None
+            # Small edge models occasionally add a short acknowledgement or a
+            # Markdown fence despite the JSON-only instruction.  Extract one
+            # complete object, then still apply the same strict schema and
+            # plan validator.  This is a parser recovery, never execution of
+            # free-form text or a model tool call.
+            start = normalized.find("{")
+            if start < 0:
+                return None
+            try:
+                decoded, _ = json.JSONDecoder().raw_decode(normalized[start:])
+            except json.JSONDecodeError:
+                return None
         return decoded if isinstance(decoded, dict) else None

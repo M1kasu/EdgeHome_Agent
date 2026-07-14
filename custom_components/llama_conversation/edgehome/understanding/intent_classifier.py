@@ -14,13 +14,16 @@ class ChineseIntentClassifier:
         r"然后|再把|并且|同时|以及|全部|所有|定时|分钟后|小时后|天后|明天|今晚|早上|如果|当.+(?:时|后)|、|；|;"
     )
     _QUERY_WORDS = re.compile(r"状态|查询|查看|看看|多少|几度|吗|么|？|\?")
-    _BRIGHTNESS_WORDS = re.compile(r"亮度|调亮|调暗|明亮")
-    _LIGHT_PERCENT_COMMAND = re.compile(r"(?:灯|灯光|光).*(?:调到|设为|设置).*(?:%|％|百分之)")
+    _BRIGHTNESS_WORDS = re.compile(r"亮度|调亮|调暗|调高|调低|提高|降低|明亮")
+    _LIGHT_PERCENT_COMMAND = re.compile(
+        r"(?:灯|灯光|照明|光).*(?:调到|调至|设为|设置|改成|调成|降到|升到|提高|降低|调高|调低|开到|开至|亮度).*(?:%|％|百分之|成|一半|分之)"
+    )
     _TEMPERATURE_WORDS = re.compile(r"温度|几度|制冷|制热")
+    _AC_TEMPERATURE_COMMAND = re.compile(r"(?:空调|ac).*(?:\d{1,3}(?:\.\d+)?\s*度|调到|调为|设为)", re.IGNORECASE)
     _CURTAIN_WORDS = re.compile(r"窗帘|帘子|遮阳帘")
     _SECURITY_WORDS = re.compile(r"安防|安全模式")
     _OFF_WORDS = re.compile(r"关闭|关掉|关上|熄灭|停止|停掉")
-    _ON_WORDS = re.compile(r"打开|开启|开灯|点亮|启动")
+    _ON_WORDS = re.compile(r"打开|开启|开灯|点亮|启动|开(?:一下|吧)?")
 
     def classify(self, text: str) -> FastIntentMatch:
         """Return an explicit intent only when the request has one safe interpretation."""
@@ -33,7 +36,7 @@ class ChineseIntentClassifier:
             return FastIntentMatch(intent=FastIntent.QUERY_STATE, confidence=0.98, reason="匹配状态查询词")
         if self._BRIGHTNESS_WORDS.search(normalized) or self._LIGHT_PERCENT_COMMAND.search(normalized):
             return FastIntentMatch(intent=FastIntent.SET_BRIGHTNESS, confidence=0.98, reason="匹配亮度控制词")
-        if self._TEMPERATURE_WORDS.search(normalized):
+        if self._TEMPERATURE_WORDS.search(normalized) or self._AC_TEMPERATURE_COMMAND.search(normalized):
             return FastIntentMatch(intent=FastIntent.SET_TEMPERATURE, confidence=0.98, reason="匹配温度控制词")
         if self._SECURITY_WORDS.search(normalized) and self._ON_WORDS.search(normalized):
             return FastIntentMatch(intent=FastIntent.ACTIVATE_SECURITY, confidence=0.98, reason="匹配安防模式开启词")

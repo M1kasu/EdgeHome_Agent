@@ -1,0 +1,23 @@
+[
+  {
+    "id": "complex-010",
+    "task_type": "complex_planning",
+    "text": "请帮我晚饭后看电影，请把客厅调整舒适，空调温度不得低于 25 度。",
+    "expected_route": "llm_path",
+    "metadata": {"source": "phase13_schema_invalid", "phase": 14}
+  },
+  {
+    "id": "complex-019",
+    "task_type": "complex_planning",
+    "text": "能否晚饭后看电影，请把客厅调整舒适，空调温度不得低于 25 度。",
+    "expected_route": "llm_path",
+    "metadata": {"source": "phase13_schema_invalid", "phase": 14}
+  },
+  {
+    "id": "complex-025",
+    "task_type": "complex_planning",
+    "text": "请帮我晚饭后看电影，请把客厅调整舒适，空调温度不得低于 25 度。",
+    "expected_route": "llm_path",
+    "metadata": {"source": "phase13_schema_invalid", "phase": 14}
+  }
+]

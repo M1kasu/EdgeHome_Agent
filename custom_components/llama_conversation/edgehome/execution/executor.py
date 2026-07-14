@@ -30,6 +30,22 @@ from .verifier import StateVerifier
 class FixedPlanExecutor:
     """Run one validated plan in order, with bounded retries and fresh state reads."""
 
+    # The Docker MQTT light owns its state and publishes feedback after a bounded
+    # device delay. Poll that feedback rather than treating the service return as
+    # completion or issuing a duplicate command while the first one is pending.
+    _DEVICE_FEEDBACK_SETTLE_SECONDS = {
+        "light.edgehome_living_room_main": 1.0,
+        "cover.edgehome_living_room_curtain": 0.2,
+        "climate.edgehome_living_room_ac": 0.5,
+        "switch.edgehome_living_room_tv": 0.5,
+    }
+    _DEVICE_FEEDBACK_TIMEOUT_SECONDS = {
+        "light.edgehome_living_room_main": 3.0,
+        "cover.edgehome_living_room_curtain": 5.0,
+        "climate.edgehome_living_room_ac": 3.0,
+        "switch.edgehome_living_room_tv": 3.0,
+    }
+
     def __init__(
         self,
         hass: HomeAssistant,
@@ -160,6 +176,16 @@ class FixedPlanExecutor:
             started_at = datetime.now(timezone.utc)
             try:
                 before = self.resolver.snapshot(entity_id, definition.allowed_domains)
+                if before.state in {"unavailable", "unknown"}:
+                    return self._failure(
+                        step,
+                        attempts - 1,
+                        "device_unavailable",
+                        f"设备当前不可用（状态：{before.state}）",
+                        state_before=before,
+                        state_after=before,
+                        started_at=started_at,
+                    )
                 domain = definition.service_domain or before.domain
                 service_data = definition.build_service_data(arguments)
                 async with asyncio.timeout(definition.timeout_seconds):
@@ -183,16 +209,20 @@ class FixedPlanExecutor:
                         started_at=started_at,
                         completed_at=datetime.now(timezone.utc),
                     )
+                feedback = self.resolver.protocol_feedback(entity_id)
+                failure_code, failure_reason, terminal_feedback = self._feedback_failure(verification, feedback)
                 last_result = self._failure(
                     step,
                     attempts,
-                    "verification_failed",
-                    verification.reason or "设备状态未达到预期",
+                    failure_code,
+                    failure_reason,
                     state_before=before,
                     state_after=after,
                     verification=verification,
                     started_at=started_at,
                 )
+                if terminal_feedback:
+                    return last_result
             except TimeoutError:
                 last_result = self._failure(
                     step,
@@ -218,7 +248,37 @@ class FixedPlanExecutor:
     async def _verify_step(self, step: PlanStep) -> VerificationResult:
         if step.verify is None:
             return VerificationResult(passed=False, reason="关键步骤缺少验证规则")
-        return await self.verifier.async_verify(step.verify)
+        rule = step.verify
+        if rule.settle_seconds == 0:
+            settle_seconds = self._DEVICE_FEEDBACK_SETTLE_SECONDS.get(rule.entity_id)
+            if settle_seconds is not None:
+                rule = rule.model_copy(update={"settle_seconds": settle_seconds})
+        feedback_timeout = self._DEVICE_FEEDBACK_TIMEOUT_SECONDS.get(rule.entity_id)
+        if feedback_timeout is not None:
+            return await self.verifier.async_verify_within(rule, feedback_timeout)
+        return await self.verifier.async_verify(rule)
+
+    @staticmethod
+    def _feedback_failure(
+        verification: VerificationResult,
+        feedback: tuple[str, str | None] | None,
+    ) -> tuple[str, str, bool]:
+        """Map a device-published terminal failure to an honest executor result."""
+        if feedback is not None:
+            status, detail = feedback
+            terminal = {
+                "rejected": ("device_rejected", "设备拒绝执行命令"),
+                "ack_without_state_change": ("state_not_changed", "设备已确认但状态没有变化"),
+                "invalid_state": ("invalid_device_state", "设备上报了无效状态"),
+                "offline": ("device_unavailable", "设备当前不可用"),
+                "stuck": ("device_stuck", "设备移动中卡住"),
+            }.get(status)
+            if terminal is not None:
+                code, default_reason = terminal
+                return code, f"{default_reason}：{detail}" if detail else default_reason, True
+        if verification.timed_out:
+            return "feedback_timeout", verification.reason or "等待设备反馈超时", True
+        return "verification_failed", verification.reason or "设备状态未达到预期", False
 
     @staticmethod
     def _task_status(results: list[StepExecutionResult], needs_replan: bool) -> TaskStatus:

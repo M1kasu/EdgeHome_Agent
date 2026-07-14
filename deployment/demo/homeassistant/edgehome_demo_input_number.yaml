@@ -1,10 +1,4 @@
 # 这些数值 helper 驱动模板灯、传感器和窗帘；不直接暴露给 Agent。
-edgehome_living_room_main_brightness:
-  name: EdgeHome 客厅主灯内部亮度
-  min: 0
-  max: 100
-  step: 1
-  initial: 80
 edgehome_living_room_ambient_brightness:
   name: EdgeHome 客厅氛围灯内部亮度
   min: 0

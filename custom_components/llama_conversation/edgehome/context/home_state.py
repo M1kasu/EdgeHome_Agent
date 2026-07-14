@@ -33,6 +33,9 @@ class TaskHomeStateBuilder:
         matches: list[EntitySnapshot] = []
         registered = self._resolver.registered_entities()
         candidates = registered or tuple(state.entity_id for state in self._resolver.hass.states.async_all())
+        # M5 scenes are allowed to see only their explicitly registered MQTT
+        # devices.  This supplies a current baseline for dynamic no-op removal.
+        scene_entities = set(self._resolver.scene_entities(scene, protocol="mqtt")) if scene else set()
         for entity_id in candidates:
             if not registered and not self._resolver._exposure_checker(self._resolver.hass, "conversation", entity_id):
                 continue
@@ -40,7 +43,7 @@ class TaskHomeStateBuilder:
                 snapshot = self._resolver.snapshot(entity_id)
             except EdgeHomeError:
                 continue
-            if any(name in query for name in self._names(snapshot) if len(name) >= 2):
+            if entity_id in scene_entities or any(name in query for name in self._names(snapshot) if len(name) >= 2):
                 matches.append(snapshot)
 
         return TaskHomeStateSnapshot(

@@ -1,0 +1,11 @@
+module,enabled,measurement,task_completion_rate,dangerous_action_rate,average_latency_ms,tool_accuracy_rate,failure_recovery_rate,source
+fast_path,false,simple_model_route,,,643.195382,,,dual_path_results.csv
+fast_path,true,simple_fast_route,0.7,,12.651504,,,dual_path_results.csv
+execution_verification,false,fault_injected_execution,0.9,0.1,0.005416,0.9,0.0,baseline_comparison.csv
+execution_verification,true,fault_injected_execution,1.0,0.0,0.067096,1.0,1.0,baseline_comparison.csv
+knowledge_retrieval,true,local_knowledge_workloads,0.95,0.0,15.498809999600052,,,knowledge_workloads.csv
+scene_state,,not_measured_no_schema_valid_model,,,,,,
+structured_plan_validation,,not_measured_no_schema_valid_model,,,,,,
+safety_conflict_detection,,not_measured_no_schema_valid_model,,,,,,
+failure_replanning,,covered_with_execution_verification_probe,,,,,,baseline_comparison.csv
+resource_aware_scheduling,true,decision_probe,,0.0,,,,resource_scheduler_decisions.json

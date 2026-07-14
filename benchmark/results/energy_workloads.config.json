@@ -1,0 +1,4 @@
+{
+  "model_used": false,
+  "workload": "benchmark\\workloads\\energy_tasks.json"
+}
