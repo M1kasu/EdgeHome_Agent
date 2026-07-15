@@ -34,6 +34,39 @@ class TaskStatus(StrEnum):
     NEEDS_REPLAN = "needs_replan"
 
 
+class RiskLevel(StrEnum):
+    """Risk level used by planning, UI evidence, and acceptance reports."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class GoalType(StrEnum):
+    """A structured goal family inferred before device planning."""
+
+    DEVICE_CONTROL = "device_control"
+    SCENE = "scene"
+    SAFETY = "safety"
+    ENERGY = "energy"
+    QUERY = "query"
+    SCHEDULE = "schedule"
+    UNKNOWN = "unknown"
+
+
+class ConstraintType(StrEnum):
+    """Machine-checkable constraint category."""
+
+    PROHIBITION = "prohibition"
+    MIN_VALUE = "min_value"
+    MAX_VALUE = "max_value"
+    RANGE = "range"
+    REQUIREMENT = "requirement"
+    PREFERENCE = "preference"
+    SAFETY = "safety"
+
+
 class StateCondition(BaseModel):
     """A state that must match before a step may run."""
 
@@ -65,6 +98,69 @@ class PlanConstraint(BaseModel):
     statement: str = Field(min_length=1, max_length=160)
     source: str = Field(default="user", pattern=r"^(user|safety|environment)$")
     hard: bool = True
+    constraint_type: ConstraintType | None = None
+    scope: str | None = Field(default=None, max_length=64)
+    target: str | None = Field(default=None, max_length=128)
+    operator: str | None = Field(default=None, max_length=32)
+    value: str | int | float | bool | None = None
+    priority: int = Field(default=50, ge=0, le=100)
+    conflict_policy: str = Field(default="clarify", pattern=r"^(clarify|reject|prefer_user|prefer_safety)$")
+
+
+class GoalConstraint(PlanConstraint):
+    """A typed constraint attached to the user goal rather than one plan."""
+
+
+class GoalPreference(BaseModel):
+    """Soft preference extracted from the user or environment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    statement: str = Field(min_length=1, max_length=160)
+    target: str | None = Field(default=None, max_length=128)
+    weight: int = Field(default=50, ge=0, le=100)
+
+
+class GoalSpec(BaseModel):
+    """The auditable target that the planner must satisfy before building steps."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    raw_goal: str = Field(min_length=1, max_length=300)
+    goal_type: GoalType = GoalType.UNKNOWN
+    scene: str | None = Field(default=None, max_length=64)
+    target_rooms: list[str] = Field(default_factory=list, max_length=8)
+    target_devices: list[str] = Field(default_factory=list, max_length=16)
+    desired_outcomes: list[str] = Field(default_factory=list, max_length=12)
+    constraints: list[GoalConstraint] = Field(default_factory=list, max_length=16)
+    preferences: list[GoalPreference] = Field(default_factory=list, max_length=8)
+    forbidden_actions: list[str] = Field(default_factory=list, max_length=16)
+    protected_entities: list[str] = Field(default_factory=list, max_length=8)
+    risk_tolerance: RiskLevel = RiskLevel.MEDIUM
+    requires_confirmation: bool = False
+
+
+class RiskAssessment(BaseModel):
+    """Deterministic safety summary for a candidate plan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    level: RiskLevel = RiskLevel.LOW
+    reasons: list[str] = Field(default_factory=list, max_length=12)
+    blocked: bool = False
+
+
+class PlanScore(BaseModel):
+    """Compact score shown in UI and acceptance evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    goal_satisfaction: int = Field(default=0, ge=0, le=100)
+    safety: int = Field(default=0, ge=0, le=100)
+    comfort: int = Field(default=0, ge=0, le=100)
+    energy: int = Field(default=0, ge=0, le=100)
+    feasibility: int = Field(default=0, ge=0, le=100)
+    total: int = Field(default=0, ge=0, le=100)
 
 
 class PlanStep(BaseModel):
@@ -82,6 +178,11 @@ class PlanStep(BaseModel):
     verify: VerificationRule | None = None
     on_failure: OnFailurePolicy = OnFailurePolicy.STOP
     optional: bool = False
+    reason: str | None = Field(default=None, max_length=200)
+    expected_outcome: str | None = Field(default=None, max_length=200)
+    constraint_refs: list[str] = Field(default_factory=list, max_length=8)
+    risk_level: RiskLevel = RiskLevel.LOW
+    evidence_required: list[str] = Field(default_factory=list, max_length=8)
 
 
 class TaskPlan(BaseModel):
@@ -95,6 +196,9 @@ class TaskPlan(BaseModel):
     clarification_question: str | None = Field(default=None, max_length=300)
     rationale: str | None = Field(default=None, max_length=240)
     constraints: list[PlanConstraint] = Field(default_factory=list, max_length=8)
+    goal_spec: GoalSpec | None = None
+    risk_assessment: RiskAssessment | None = None
+    plan_score: PlanScore | None = None
     steps: list[PlanStep] = Field(min_length=1)
 
     @model_validator(mode="after")

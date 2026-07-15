@@ -14,11 +14,12 @@ from ...const import CONF_ENABLE_STREAMING, CONF_MAX_TOKENS, CONF_RESPONSE_JSON_
 from ...entity import LocalLLMClient
 from ..context.environment import EnvironmentContextBuilder
 from ..context.home_state import TaskHomeStateBuilder
-from ..models import EntitySnapshot, TaskPlan
+from ..models import EntitySnapshot, GoalSpec, TaskPlan
 from ..tools.registry import ToolRegistry
 from .context_budget import PlanningContextBudgeter
 from .demo_scenes import DemoScenePlanFactory
 from .draft import DraftCompileError, ModelDraftCompiler, ModelPlanDraft
+from .goal_spec import GoalSpecBuilder
 from .goal_guard import GoalConstraintGuard
 from .parser import ParsedPlan, PlanParseStatus, StructuredPlanParser
 from .templates import SceneName, SceneTemplateLibrary
@@ -89,6 +90,7 @@ class LLMTaskPlanner:
         self._demo_scene_factory = demo_scene_factory or DemoScenePlanFactory()
         self._goal_guard = GoalConstraintGuard()
         self._draft_compiler = ModelDraftCompiler()
+        self._goal_spec_builder = GoalSpecBuilder()
 
     async def async_plan(self, request: PlanningRequest, runtime_options: dict[str, Any]) -> PlanningResult:
         """Request JSON from the existing backend without exposing its Home Assistant tool API."""
@@ -96,6 +98,8 @@ class LLMTaskPlanner:
         scene = template.name.value if template else None
         snapshot = self._state_builder.build(request.goal, scene=scene)
         budget = self._context_budgeter.trim(snapshot)
+        goal_spec = self._goal_spec_builder.build(request.goal, scene, snapshot.entities)
+        budget.payload["goal_spec"] = goal_spec.model_dump(mode="json")
         read_only_domains = self._goal_guard.read_only_domains(request.goal, snapshot.entities)
         prompt = self._build_prompt(
             request.goal,
@@ -140,7 +144,7 @@ class LLMTaskPlanner:
                 model_attempts=1,
             )
 
-        parsed = self._parse_model_response(response.response or "", snapshot.entities)
+        parsed = self._with_goal_spec(self._parse_model_response(response.response or "", snapshot.entities), goal_spec)
         if parsed.status == PlanParseStatus.ACCEPTED and parsed.plan is not None:
             sanitization = self._goal_guard.sanitize(parsed.plan, request.goal, snapshot.entities)
             if sanitization.removed_step_ids and sanitization.plan.steps:
@@ -148,7 +152,7 @@ class LLMTaskPlanner:
                 if sanitized.status == PlanParseStatus.ACCEPTED and sanitized.plan is not None:
                     return PlanningResult(
                         status=PlanningStatus.ACCEPTED,
-                        plan=sanitized.plan,
+                        plan=self._ensure_goal_spec(sanitized.plan, goal_spec),
                         scene=scene,
                         context_entities=snapshot.entities,
                         source=PlanningSource.MODEL_SANITIZED,
@@ -162,7 +166,7 @@ class LLMTaskPlanner:
         if parsed.status == PlanParseStatus.ACCEPTED and parsed.plan is not None and first_constraint_error is None:
             return PlanningResult(
                 status=PlanningStatus.ACCEPTED,
-                plan=parsed.plan,
+                plan=self._ensure_goal_spec(parsed.plan, goal_spec),
                 scene=scene,
                 context_entities=snapshot.entities,
                 source=PlanningSource.MODEL,
@@ -324,7 +328,8 @@ class LLMTaskPlanner:
                 f"任务相关状态快照：{json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))}",
                 f"唯一可用 entity_id（必须逐字复制，不能简写或自造）：{json.dumps(entity_ids, ensure_ascii=False)}",
                 f"可用语义设备键（仅可使用下列键，系统会映射到同一行的已暴露实体）：{json.dumps(capabilities, ensure_ascii=False)}",
-                "输出字段：goal、scene、need_clarification、clarification_question、rationale、constraints、steps。",
+                "输出字段：goal、scene、need_clarification、clarification_question、rationale、goal_spec、constraints、steps。",
+                "可以省略 goal_spec；系统会用本地抽取结果补齐。goal_spec 中的禁止项和保护设备不能被步骤违反。",
                 "每个 step 仅含 id、action、entity_id、room、value、depends_on、on_failure、optional。"
                 "action 只能是 read_home、read_room、read_device、turn_on、turn_off、set_brightness、"
                 "set_temperature、set_hvac_mode、set_curtain_position、enable_security_mode。",
@@ -360,6 +365,16 @@ class LLMTaskPlanner:
         except (ValueError, DraftCompileError) as error:
             return ParsedPlan(status=PlanParseStatus.INVALID_PLAN, reason=str(error))
         return self._parser.parse(compiled.model_dump(mode="json"))
+
+    def _with_goal_spec(self, parsed: ParsedPlan, goal_spec: GoalSpec) -> ParsedPlan:
+        """Attach the trusted local GoalSpec when a model omitted it."""
+        if parsed.plan is None:
+            return parsed
+        return parsed.model_copy(update={"plan": self._ensure_goal_spec(parsed.plan, goal_spec)})
+
+    def _ensure_goal_spec(self, plan: TaskPlan, goal_spec: GoalSpec) -> TaskPlan:
+        constraints = plan.constraints or self._goal_spec_builder.as_plan_constraints(goal_spec)
+        return plan.model_copy(update={"goal_spec": plan.goal_spec or goal_spec, "constraints": constraints})
 
     def _normalize_draft_entities(self, draft: ModelPlanDraft, entities: list[EntitySnapshot]) -> ModelPlanDraft:
         """Resolve a model semantic key only when this snapshot exposes exactly one target."""

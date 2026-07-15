@@ -9,7 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..light import brightness_verification
-from ..models import OnFailurePolicy, PlanConstraint, PlanStep, TaskPlan, VerificationRule
+from ..models import GoalSpec, OnFailurePolicy, PlanConstraint, PlanStep, TaskPlan, VerificationRule
 
 
 class DraftAction(StrEnum):
@@ -52,6 +52,7 @@ class ModelPlanDraft(BaseModel):
     need_clarification: bool = False
     clarification_question: str | None = Field(default=None, max_length=300)
     rationale: str | None = Field(default=None, max_length=240)
+    goal_spec: GoalSpec | None = None
     constraints: list[PlanConstraint] = Field(default_factory=list, max_length=8)
     steps: list[ModelDraftStep] = Field(min_length=1, max_length=12)
 
@@ -72,6 +73,7 @@ class ModelDraftCompiler:
             need_clarification=draft.need_clarification,
             clarification_question=draft.clarification_question,
             rationale=draft.rationale,
+            goal_spec=draft.goal_spec,
             constraints=draft.constraints,
             steps=steps,
         )

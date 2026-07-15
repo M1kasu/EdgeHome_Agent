@@ -101,6 +101,8 @@ async def test_llm_planner_accepts_valid_json_but_exposes_only_relevant_snapshot
     assert result.plan.steps[1].tool == "get_device_state"
     assert result.plan.steps[2].tool == "turn_on_device"
     assert result.plan.steps[2].depends_on == ["preflight_turn_on_living"]
+    assert result.plan.goal_spec is not None
+    assert result.plan.goal_spec.goal_type == "device_control"
     assert client.options["enable_streaming"] is False
     assert "response_json_schema" in client.options
     assert client.options["tool_call_prefix"] == "<edgehome_planning_tool_disabled>"
@@ -274,6 +276,8 @@ async def test_llm_planner_repairs_a_plan_that_breaks_an_explicit_user_prohibiti
     assert result.model_attempts == 1
     assert result.plan is not None
     assert all(step.tool not in {"set_hvac_mode", "turn_off_device"} for step in result.plan.steps)
+    assert result.plan.goal_spec is not None
+    assert "禁止控制climate" in result.plan.goal_spec.forbidden_actions
     assert '"climate"' in client.calls[0][0].content
     assert client.options[CONF_MAX_TOKENS] == 512
     assert len(client.calls) == 1
