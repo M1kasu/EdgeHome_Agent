@@ -1,25 +1,31 @@
-# EdgeHome Agent
+# 智家端脑 EdgeHome / EdgeHome Agent
 
-EdgeHome Agent 是一个本地 Docker 智能家居演示项目：Home Assistant 是唯一服务调用边界，EdgeHome 只生成经白名单、安全规则和状态回读验证的固定计划。四个设备由独立 MQTT 模拟器和 SQLite 驱动，不是 Home Assistant Helper 假状态。
+EdgeHome Agent 是一个本地 Docker 智能家居智能体项目：用户表达生活目标后，系统先抽取 `GoalSpec` 和结构化约束，再读取统一 `HomeStateSnapshot`，由本地模型或受限目标策略生成 `TaskPlan`。计划必须经过工具白名单、安全规则、风险评分和状态回读验证，最终只通过 Home Assistant 调用设备服务。
+
+四个核心设备由独立 MQTT 模拟器和 SQLite 驱动，不是 Home Assistant Helper 假状态。Home Assistant 是唯一服务调用边界；EdgeHome 不直接改 HA 实体状态，不把模型文字、HTTP 200 或 MQTT ACK 冒充为执行成功。
 
 ```mermaid
 flowchart LR
     U["Assist / REST"] --> HA["Home Assistant"]
-    HA --> EH["EdgeHome 计划、校验与记忆"]
-    EH --> SVC["HA 服务调用"]
+    HA --> GS["GoalSpec / 约束抽取"]
+    GS --> HS["HomeStateSnapshot 环境感知"]
+    HS --> EH["EdgeHome 规划、评分、安全校验"]
+    EH --> SVC["HA 白名单服务调用"]
     SVC --> MQ["Mosquitto"]
     MQ --> SIM["device-simulator + SQLite"]
     SIM --> MQ --> HA
 ```
 
-控制成功的唯一标准是：模拟器通过 MQTT 上报目标状态，且 Home Assistant 回读验证通过。HTTP 200、服务返回或模型文字都不等于控制成功。
+控制成功的唯一标准是：模拟器通过 MQTT 上报目标状态，且 Home Assistant 回读验证通过。
 
 ## 当前边界
 
+- 已实现目标驱动改造：`GoalSpec`、统一环境快照、目标策略观影/离家、计划风险评分、工作台证据面板。
 - 已有本地 MQTT 验收：主灯、窗帘、空调、电视、动态观影、离家保护、故障恢复和重启恢复。
+- 新增目标智能体验收框架：`scripts/accept_goal_agent.py`，本地策略证据写入 `reports/goal_agent_acceptance/`。
 - 路由器与冰箱是受保护设备，离家场景不会关闭它们。
 - 项目使用 Docker 数字设备模拟器；没有宣称控制真实物理设备。
-- PR #12 保持 Draft。脚本通过只表示本地集成验证，不能替代独立外部验收。
+- 本地脚本通过只表示集成验证和外部验收准备就绪，不能替代独立第三方黑盒验收。
 
 ## 1. 环境要求
 
@@ -105,7 +111,8 @@ python .\scripts\configure_mqtt_integration.py --url http://127.0.0.1:8123 --bro
 完成上述配置后，打开 [EdgeHome 工作台](http://127.0.0.1:8123/edgehome-workbench)。正常用户从右上角 **Assist** 输入指令；工作台将同屏展示：
 
 - MQTT Discovery 设备的真实状态；
-- Agent 最近一次记录的处理路径、结构化计划和逐步状态回读；
+- Agent 最近一次记录的处理路径、目标画像、结构化计划、风险评估、计划评分和逐步状态回读；
+- 每个计划步骤的执行原因、预期结果和所需证据；
 - 路由器、冰箱的受保护状态；
 - 仅用于本地演示的“重置环境 / 注入窗帘卡住 / 清除窗帘故障”按钮。
 
@@ -132,7 +139,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\reset_demo.ps1
 
 ## 5. 验收命令
 
-所有 API 验收脚本都要求当前终端已设置 `HA_TOKEN`。一次只运行一个重启类脚本。
+目标智能体验收框架可先离线运行，不要求 `HA_TOKEN`：
+
+```powershell
+python .\scripts\accept_goal_agent.py
+```
+
+它会生成：
+
+- `reports/goal_agent_acceptance/goal_specs.jsonl`
+- `reports/goal_agent_acceptance/plans.jsonl`
+- `reports/goal_agent_acceptance/test_results.jsonl`
+- `reports/goal_agent_acceptance/acceptance_summary.md`
+
+这些文件记录目标抽取、动态观影/离家策略、受保护设备风险评分和占位的 MQTT/HA 证据文件。注意：这仍然是本地目标策略验收框架，不是独立外部黑盒验收。
+
+下面的 API 验收脚本要求当前终端已设置 `HA_TOKEN`。一次只运行一个重启类脚本。
 
 ```powershell
 # M1 / M1.5
@@ -172,5 +194,6 @@ M8 会依次重启 Home Assistant、MQTT 和模拟器，页面短暂不可访问
 |`deployment/`|Compose、Mosquitto、可提交的演示 YAML 模板。|
 |`scripts/`|初始化、健康检查、配置流和黑盒验收。|
 |`reports/acceptance/`|脱敏验收证据。|
+|`reports/goal_agent_acceptance/`|目标驱动验收框架输出的 GoalSpec、计划、风险和结果证据。|
 
 绝不提交 `deployment/.env`、`deployment/homeassistant/`、`deployment/runtime/`、模型、Token、浏览器会话或真实用户数据。更多设计和报告见 [`docs`](docs) 与 [`reports`](reports)。
