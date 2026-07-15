@@ -103,6 +103,8 @@ async def test_llm_planner_accepts_valid_json_but_exposes_only_relevant_snapshot
     assert result.plan.steps[2].depends_on == ["preflight_turn_on_living"]
     assert result.plan.goal_spec is not None
     assert result.plan.goal_spec.goal_type == "device_control"
+    assert result.plan.risk_assessment is not None
+    assert result.plan.plan_score is not None
     assert client.options["enable_streaming"] is False
     assert "response_json_schema" in client.options
     assert client.options["tool_call_prefix"] == "<edgehome_planning_tool_disabled>"

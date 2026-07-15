@@ -605,6 +605,10 @@ class EdgeHomeCoordinator:
                     "entity_id": str(step.arguments.get("entity_id", "")),
                     "arguments": step.arguments,
                     "depends_on": list(step.depends_on),
+                    "reason": step.reason,
+                    "expected_outcome": step.expected_outcome,
+                    "risk_level": step.risk_level.value,
+                    "evidence_required": list(step.evidence_required),
                 }
                 for step in plan.steps
             ]
@@ -624,6 +628,9 @@ class EdgeHomeCoordinator:
             "goal": plan.goal if plan is not None else None,
             "planning_rationale": plan.rationale if plan is not None else None,
             "planning_constraints": [constraint.model_dump(mode="json") for constraint in plan.constraints] if plan is not None else [],
+            "goal_spec": plan.goal_spec.model_dump(mode="json") if plan is not None and plan.goal_spec is not None else None,
+            "risk_assessment": plan.risk_assessment.model_dump(mode="json") if plan is not None and plan.risk_assessment is not None else None,
+            "plan_score": plan.plan_score.model_dump(mode="json") if plan is not None and plan.plan_score is not None else None,
             "plan_steps": plan_steps,
             "step_results": execution_steps,
             "speech": result.speech,
@@ -644,6 +651,10 @@ class EdgeHomeCoordinator:
                 lines.append(f"规划说明：{plan.rationale}")
             if plan.constraints:
                 lines.append("显式约束：" + "；".join(constraint.statement for constraint in plan.constraints))
+            if plan.risk_assessment:
+                lines.append("风险评估：" + plan.risk_assessment.level.value + "；" + "；".join(plan.risk_assessment.reasons))
+            if plan.plan_score:
+                lines.append(f"计划评分：{plan.plan_score.total}/100")
             lines.append("计划步骤：")
             lines.extend(self._trace_plan_step(step) for step in plan_steps)
         if execution_steps:

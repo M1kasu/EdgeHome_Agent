@@ -23,6 +23,7 @@ from .goal_spec import GoalSpecBuilder
 from .goal_scenes import GoalDrivenScenePlanner
 from .goal_guard import GoalConstraintGuard
 from .parser import ParsedPlan, PlanParseStatus, StructuredPlanParser
+from .scoring import PlanEvaluator
 from .templates import SceneName, SceneTemplateLibrary
 
 
@@ -94,6 +95,7 @@ class LLMTaskPlanner:
         self._goal_guard = GoalConstraintGuard()
         self._draft_compiler = ModelDraftCompiler()
         self._goal_spec_builder = GoalSpecBuilder()
+        self._plan_evaluator = PlanEvaluator()
 
     async def async_plan(self, request: PlanningRequest, runtime_options: dict[str, Any]) -> PlanningResult:
         """Request JSON from the existing backend without exposing its Home Assistant tool API."""
@@ -156,7 +158,7 @@ class LLMTaskPlanner:
                 if sanitized.status == PlanParseStatus.ACCEPTED and sanitized.plan is not None:
                     return PlanningResult(
                         status=PlanningStatus.ACCEPTED,
-                        plan=self._ensure_goal_spec(sanitized.plan, goal_spec),
+                        plan=self._finalize_plan(sanitized.plan, goal_spec, snapshot.entities),
                         scene=scene,
                         context_entities=snapshot.entities,
                         source=PlanningSource.MODEL_SANITIZED,
@@ -170,7 +172,7 @@ class LLMTaskPlanner:
         if parsed.status == PlanParseStatus.ACCEPTED and parsed.plan is not None and first_constraint_error is None:
             return PlanningResult(
                 status=PlanningStatus.ACCEPTED,
-                plan=self._ensure_goal_spec(parsed.plan, goal_spec),
+                plan=self._finalize_plan(parsed.plan, goal_spec, snapshot.entities),
                 scene=scene,
                 context_entities=snapshot.entities,
                 source=PlanningSource.MODEL,
@@ -209,7 +211,7 @@ class LLMTaskPlanner:
         if repaired.status == PlanParseStatus.ACCEPTED and repaired.plan is not None and repaired_constraint_error is None:
             return PlanningResult(
                 status=PlanningStatus.ACCEPTED,
-                plan=self._ensure_goal_spec(repaired.plan, goal_spec),
+                plan=self._finalize_plan(repaired.plan, goal_spec, snapshot.entities),
                 scene=scene,
                 context_entities=snapshot.entities,
                 source=PlanningSource.MODEL_REPAIRED,
@@ -268,7 +270,7 @@ class LLMTaskPlanner:
             if parsed_policy.status == PlanParseStatus.ACCEPTED and parsed_policy.plan is not None:
                 return PlanningResult(
                     status=PlanningStatus.ACCEPTED,
-                    plan=self._ensure_goal_spec(parsed_policy.plan, goal_spec),
+                    plan=self._finalize_plan(parsed_policy.plan, goal_spec, context_entities),
                     reason=f"本地模型计划未通过校验，已使用目标驱动策略规划：{model_reason}",
                     scene=scene.value,
                     context_entities=context_entities,
@@ -294,7 +296,7 @@ class LLMTaskPlanner:
             delayed_plan = delayed.plan
         return PlanningResult(
             status=PlanningStatus.ACCEPTED,
-            plan=parsed.plan,
+            plan=self._plan_evaluator.evaluate(parsed.plan, context_entities),
             reason=f"本地模型计划未通过校验，已使用受限虚拟场景计划：{model_reason}",
             scene=scene.value,
             context_entities=context_entities,
@@ -395,6 +397,9 @@ class LLMTaskPlanner:
     def _ensure_goal_spec(self, plan: TaskPlan, goal_spec: GoalSpec) -> TaskPlan:
         constraints = plan.constraints or self._goal_spec_builder.as_plan_constraints(goal_spec)
         return plan.model_copy(update={"goal_spec": plan.goal_spec or goal_spec, "constraints": constraints})
+
+    def _finalize_plan(self, plan: TaskPlan, goal_spec: GoalSpec, entities: list[EntitySnapshot]) -> TaskPlan:
+        return self._plan_evaluator.evaluate(self._ensure_goal_spec(plan, goal_spec), entities)
 
     def _normalize_draft_entities(self, draft: ModelPlanDraft, entities: list[EntitySnapshot]) -> ModelPlanDraft:
         """Resolve a model semantic key only when this snapshot exposes exactly one target."""
