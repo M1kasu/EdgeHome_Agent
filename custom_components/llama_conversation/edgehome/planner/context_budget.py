@@ -39,6 +39,29 @@ class PlanningContextBudgeter:
         }
         if isinstance(snapshot, EnvironmentContextSnapshot):
             payload["captured_at"] = snapshot.captured_at.isoformat()
+            payload["snapshot_id"] = snapshot.snapshot_id
+            payload["stale_after"] = snapshot.stale_after.isoformat() if snapshot.stale_after else None
+            if snapshot.home_state is not None:
+                payload["home_state"] = {
+                    "snapshot_id": snapshot.home_state.snapshot_id,
+                    "source": snapshot.home_state.source,
+                    "rooms": snapshot.home_state.rooms,
+                    "environment": snapshot.home_state.environment,
+                    "safety": snapshot.home_state.safety,
+                    "energy": snapshot.home_state.energy,
+                    "availability": snapshot.home_state.availability,
+                    "device_capability_summary": [
+                        capability.model_dump(mode="json")
+                        for capability in snapshot.home_state.device_capability_summary[: self._max_entities]
+                    ],
+                }
+        elif snapshot.home_state is not None:
+            payload["snapshot_id"] = snapshot.home_state.snapshot_id
+            payload["home_state"] = {
+                "snapshot_id": snapshot.home_state.snapshot_id,
+                "rooms": snapshot.home_state.rooms,
+                "availability": snapshot.home_state.availability,
+            }
         while entities and self._serialized_length(payload) > self._max_characters:
             entities.pop()
         dropped = len(snapshot.entities) - len(entities)

@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..entity_resolver import EntityNameResolver
 from ..models import EntitySnapshot
-from .home_state import TaskHomeStateBuilder
+from .home_state import HomeStateSnapshot, TaskHomeStateBuilder, build_home_state_snapshot
 
 
 class EnvironmentContextSnapshot(BaseModel):
@@ -20,6 +20,10 @@ class EnvironmentContextSnapshot(BaseModel):
     scene: str | None = None
     entities: list[EntitySnapshot] = Field(default_factory=list)
     captured_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    stale_after: datetime | None = None
+    snapshot_id: str | None = None
+    source: str = "home_assistant"
+    home_state: HomeStateSnapshot | None = None
     cache_hit: bool = False
 
 
@@ -47,7 +51,8 @@ class EnvironmentContextBuilder:
         # Preserve the planner's scene hint: named scenes may safely expose
         # only their registered MQTT capabilities even when the user mentions
         # a short noun such as "窗帘" rather than the complete friendly name.
-        selected = {snapshot.entity_id: snapshot for snapshot in self._task_builder.build(goal, scene=scene).entities}
+        task_snapshot = self._task_builder.build(goal, scene=scene)
+        selected = {snapshot.entity_id: snapshot for snapshot in task_snapshot.entities}
         normalized = self._normalize(goal)
         include_away = any(word in normalized for word in self._AWAY_WORDS)
         include_environment = any(word in normalized for word in self._ENVIRONMENT_WORDS)
@@ -64,7 +69,17 @@ class EnvironmentContextBuilder:
             elif include_environment and self._is_environment_relevant(snapshot):
                 selected.setdefault(snapshot.entity_id, snapshot)
 
-        context = EnvironmentContextSnapshot(goal=goal.strip(), scene=scene, entities=list(selected.values()))
+        entities = list(selected.values())
+        home_state = build_home_state_snapshot(goal, scene, entities, ttl_seconds=self._cache_seconds)
+        context = EnvironmentContextSnapshot(
+            goal=goal.strip(),
+            scene=scene,
+            entities=entities,
+            captured_at=home_state.captured_at,
+            stale_after=home_state.stale_after,
+            snapshot_id=home_state.snapshot_id,
+            home_state=home_state,
+        )
         self._cache[key] = (now + timedelta(seconds=self._cache_seconds), context)
         return context
 

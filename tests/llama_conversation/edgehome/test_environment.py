@@ -23,6 +23,10 @@ def test_environment_context_selects_relevant_entities_and_invalidates_cache(has
     refreshed = builder.build("客厅灯和温度怎么样")
 
     assert {entity.entity_id for entity in first.entities} == {"light.living", "sensor.temperature"}
+    assert first.snapshot_id is not None
+    assert first.home_state is not None
+    assert first.home_state.availability["light.living"] is True
+    assert "sensor.temperature" in first.home_state.environment
     assert cached.cache_hit is True
     assert next(entity for entity in cached.entities if entity.entity_id == "light.living").state == "off"
     assert refreshed.cache_hit is False
