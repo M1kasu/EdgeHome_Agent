@@ -1,0 +1,6 @@
+{"test_id":"movie_a_day_hot","dry_run":true,"planning_result":"plan_ready","passed":true,"reason":["满足本用例的目标、状态与约束要求"]}
+{"test_id":"movie_b_night_cool","dry_run":true,"planning_result":"plan_ready","passed":true,"reason":["满足本用例的目标、状态与约束要求"]}
+{"test_id":"movie_c_user_forbids_ac","dry_run":true,"planning_result":"plan_ready","passed":true,"reason":["满足本用例的目标、状态与约束要求"]}
+{"test_id":"movie_d_min_light","dry_run":true,"planning_result":"plan_ready","passed":true,"reason":["满足本用例的目标、状态与约束要求"]}
+{"test_id":"movie_e_bedroom_no_living","dry_run":true,"planning_result":"safe_clarification","passed":true,"reason":["满足本用例的目标、状态与约束要求"]}
+{"test_id":"movie_f_min_temperature","dry_run":true,"planning_result":"plan_ready","passed":true,"reason":["满足本用例的目标、状态与约束要求"]}

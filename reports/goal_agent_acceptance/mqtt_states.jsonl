@@ -1,0 +1,6 @@
+{"test_id":"movie_a_day_hot","dry_run":true,"note":"No live MQTT state is produced by this dry-run showcase."}
+{"test_id":"movie_b_night_cool","dry_run":true,"note":"No live MQTT state is produced by this dry-run showcase."}
+{"test_id":"movie_c_user_forbids_ac","dry_run":true,"note":"No live MQTT state is produced by this dry-run showcase."}
+{"test_id":"movie_d_min_light","dry_run":true,"note":"No live MQTT state is produced by this dry-run showcase."}
+{"test_id":"movie_e_bedroom_no_living","dry_run":true,"note":"No live MQTT state is produced by this dry-run showcase."}
+{"test_id":"movie_f_min_temperature","dry_run":true,"note":"No live MQTT state is produced by this dry-run showcase."}

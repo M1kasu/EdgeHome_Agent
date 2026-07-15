@@ -143,6 +143,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\reset_demo.ps1
 
 ```powershell
 python .\scripts\accept_goal_agent.py
+python .\scripts\accept_dynamic_planning_evidence.py
 ```
 
 它会生成：
@@ -151,8 +152,10 @@ python .\scripts\accept_goal_agent.py
 - `reports/goal_agent_acceptance/plans.jsonl`
 - `reports/goal_agent_acceptance/test_results.jsonl`
 - `reports/goal_agent_acceptance/acceptance_summary.md`
+- `reports/DYNAMIC_PLANNING_EVIDENCE.md`
+- `reports/TRADITIONAL_VS_EDGEHOME.md`
 
-这些文件记录目标抽取、动态观影/离家策略、受保护设备风险评分和占位的 MQTT/HA 证据文件。注意：这仍然是本地目标策略验收框架，不是独立外部黑盒验收。
+这些文件记录目标抽取、动态观影/离家策略、受保护设备风险评分，以及“同一目标在不同状态/约束下生成不同计划”的对照证据。注意：这仍然是本地目标策略验收框架，不是独立外部黑盒验收；实时 MQTT 执行仍以 M1–M8 脚本为准。
 
 下面的 API 验收脚本要求当前终端已设置 `HA_TOKEN`。一次只运行一个重启类脚本。
 

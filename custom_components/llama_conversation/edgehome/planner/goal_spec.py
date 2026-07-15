@@ -85,6 +85,8 @@ class GoalSpecBuilder:
     @staticmethod
     def _target_rooms(normalized: str, scene: str | None) -> list[str]:
         rooms = [room for room, aliases in _ROOM_ALIASES if any(alias in normalized for alias in aliases)]
+        if "bedroom" in rooms and GoalSpecBuilder._forbids_living_room(normalized):
+            rooms = [room for room in rooms if room != "living_room"]
         if not rooms and scene in {"movie", "leaving"}:
             rooms.append("living_room" if scene == "movie" else "home")
         return rooms
@@ -121,6 +123,19 @@ class GoalSpecBuilder:
     @staticmethod
     def _constraints(goal: str, normalized: str) -> list[GoalConstraint]:
         constraints: list[GoalConstraint] = []
+        if GoalSpecBuilder._forbids_living_room(normalized):
+            constraints.append(
+                GoalConstraint(
+                    statement="禁止控制客厅设备",
+                    constraint_type=ConstraintType.PROHIBITION,
+                    target="room:living_room",
+                    operator="not_control",
+                    source="user",
+                    hard=True,
+                    priority=100,
+                    conflict_policy="reject",
+                )
+            )
         for match in _NEGATION.finditer(normalized):
             fragment = normalized[match.start() : match.start() + 30]
             clause_end = _CLAUSE_END.search(fragment)
@@ -140,7 +155,7 @@ class GoalSpecBuilder:
                         conflict_policy="reject",
                     )
                 )
-        min_brightness = re.search(r"(主灯|灯光|照明|灯)[^。；，,]{0,16}(不低于|至少|最低)\s*(\d{1,3})\s*(%|％|成|百分之)?", goal)
+        min_brightness = re.search(r"(主灯|灯光|照明|灯)[^。；，,]{0,16}(不要低于|不能低于|不得低于|别低于|不低于|至少|最低)\s*(\d{1,3})\s*(%|％|成|百分之)?", goal)
         if min_brightness is not None:
             raw_value = int(min_brightness.group(3))
             value = raw_value * 10 if min_brightness.group(4) == "成" and raw_value <= 10 else raw_value
@@ -157,10 +172,28 @@ class GoalSpecBuilder:
                         priority=90,
                     )
                 )
+        min_temperature = re.search(r"(空调|室温|温度)[^。；，,]{0,16}(不要低于|不能低于|不得低于|别低于|不低于|至少|最低)\s*(\d{2}(?:\.\d+)?)\s*(?:度|℃)?", goal)
+        if min_temperature is not None:
+            value = float(min_temperature.group(3))
+            if 16.0 <= value <= 30.0:
+                constraints.append(
+                    GoalConstraint(
+                        statement=f"空调温度不低于{value:g}℃",
+                        constraint_type=ConstraintType.MIN_VALUE,
+                        target="climate",
+                        operator=">=",
+                        value=value,
+                        source="user",
+                        hard=True,
+                        priority=90,
+                    )
+                )
         return constraints[:16]
 
     @staticmethod
     def _constraint_target(fragment: str) -> str | None:
+        if any(alias in fragment for alias in ("客厅", "大厅")) and any(token in fragment for token in ("动", "控制", "调整", "处理")):
+            return "room:living_room"
         for domain, aliases in _DEVICE_ALIASES.items():
             if any(alias in fragment for alias in aliases):
                 return domain
@@ -185,3 +218,10 @@ class GoalSpecBuilder:
         if any(token in normalized for token in ("离家", "安全", "安防")):
             return RiskLevel.LOW
         return RiskLevel.MEDIUM
+
+    @staticmethod
+    def _forbids_living_room(normalized: str) -> bool:
+        return bool(
+            re.search(r"(客厅|大厅)(设备|家电|东西)?(不要|别|不许|不能|不得|无需|不用).{0,8}(动|控制|调整|处理)", normalized)
+            or re.search(r"(客厅|大厅)(设备|家电|东西)?保持(现在|原样|不变)", normalized)
+        )

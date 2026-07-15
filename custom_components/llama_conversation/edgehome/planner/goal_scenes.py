@@ -43,7 +43,12 @@ class GoalDrivenScenePlanner:
         return None
 
     def _movie(self, goal: str, goal_spec: GoalSpec, snapshots: list[EntitySnapshot]) -> TaskPlan:
-        if goal_spec.target_rooms and "bedroom" in goal_spec.target_rooms and "living_room" not in goal_spec.target_rooms:
+        if (
+            goal_spec.target_rooms
+            and "bedroom" in goal_spec.target_rooms
+            and "living_room" not in goal_spec.target_rooms
+            or self._is_forbidden(goal_spec, "room:living_room")
+        ):
             return TaskPlan(
                 goal=goal,
                 scene=SceneName.MOVIE.value,
@@ -77,7 +82,7 @@ class GoalDrivenScenePlanner:
         illuminance = self._first_numeric(snapshots, "illuminance")
         room_temperature = self._first_numeric(snapshots, "temperature")
         target_brightness = self._movie_brightness(goal, goal_spec, illuminance)
-        target_temperature = self._movie_temperature(goal, room_temperature)
+        target_temperature = self._movie_temperature(goal, goal_spec, room_temperature)
         skip_climate = self._is_forbidden(goal_spec, "climate")
 
         steps = [self._read_room("movie_read_living", "living_room")]
@@ -103,7 +108,7 @@ class GoalDrivenScenePlanner:
             )
         if self._state(current.get(tv_id)) != "on":
             steps.append(self._on_step("movie_enable_tv", tv_id, reason="观影目标需要打开影音设备。"))
-        if not skip_climate:
+        if not skip_climate and target_temperature is not None:
             if self._state(current.get(climate_id)) != "cool":
                 steps.append(self._hvac_mode_step("movie_enable_ac", climate_id, "cool", reason="当前室温或舒适目标需要制冷。"))
             if not self._temperature_matches(current.get(climate_id), target_temperature):
@@ -237,15 +242,26 @@ class GoalDrivenScenePlanner:
         return max(value, minimum or 0)
 
     @staticmethod
-    def _movie_temperature(goal: str, room_temperature: float | None) -> float:
+    def _movie_temperature(goal: str, goal_spec: GoalSpec, room_temperature: float | None) -> float | None:
         explicit = re.search(r"(?:空调|制冷|温度)[^。；，,]*?(\d{2}(?:\.\d+)?)\s*(?:度|℃)", goal)
+        minimum = next(
+            (
+                float(constraint.value)
+                for constraint in goal_spec.constraints
+                if constraint.constraint_type == ConstraintType.MIN_VALUE and constraint.target == "climate" and isinstance(constraint.value, (int, float))
+            ),
+            None,
+        )
         if explicit is not None and 16.0 <= float(explicit.group(1)) <= 30.0:
-            return float(explicit.group(1))
+            value = float(explicit.group(1))
+            return max(value, minimum) if minimum is not None else value
         if room_temperature is not None and room_temperature >= 29:
-            return 25.0
-        if room_temperature is not None and room_temperature <= 24:
-            return 26.5
-        return 25.5
+            value = 25.0
+        elif room_temperature is not None and room_temperature >= 27:
+            value = 26.0
+        else:
+            return None
+        return max(value, minimum) if minimum is not None else value
 
     @staticmethod
     def _safety_blockers(snapshots: list[EntitySnapshot]) -> list[str]:
