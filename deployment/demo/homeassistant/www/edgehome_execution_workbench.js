@@ -6,7 +6,7 @@
  * 不在前端预置任何执行结果或设备数据。
  */
 
-const EDGEHOME_WORKBENCH_VERSION = "20260714-19";
+const EDGEHOME_WORKBENCH_VERSION = "20260715-01";
 
 const SHORTCUTS = [
   { label: "观影场景", prompt: "帮我准备客厅观影场景" },
@@ -437,7 +437,10 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
           .map(([key, value]) => `${key}=${typeof value === "object" ? JSON.stringify(value) : value}`)
           .join("，");
         const dependencyText = dependencies.length ? `依赖：${dependencies.join(" → ")}` : "起始步骤";
-        const detail = [target, compilerPreflight ? "控制前强制读取同一设备状态" : dependencyText, argumentText].filter(Boolean).join(" · ");
+        const reason = step?.reason ? `原因：${step.reason}` : "";
+        const expected = step?.expected_outcome ? `预期：${step.expected_outcome}` : "";
+        const evidence = asArray(step?.evidence_required).length ? `证据：${asArray(step.evidence_required).join(" / ")}` : "";
+        const detail = [target, compilerPreflight ? "控制前强制读取同一设备状态" : dependencyText, argumentText, reason, expected, evidence].filter(Boolean).join(" · ");
         return `<div class="list-row">
           <b>${index + 1}</b><span><strong>${escapeHtml(tool)}</strong><small>${escapeHtml(detail)}</small></span>
         </div>`;
@@ -445,7 +448,29 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
       .join("");
   }
 
-  _constraintRows(constraints, rationale, repairReason) {
+  _goalEvidence(goalSpec, riskAssessment, planScore) {
+    const desired = asArray(goalSpec?.desired_outcomes);
+    const rooms = asArray(goalSpec?.target_rooms);
+    const devices = asArray(goalSpec?.target_devices);
+    const targetLine = [
+      goalSpec?.goal_type ? `类型：${goalSpec.goal_type}` : "",
+      rooms.length ? `空间：${rooms.join("、")}` : "",
+      devices.length ? `设备：${devices.join("、")}` : "",
+    ].filter(Boolean).join(" · ");
+    const scoreLine = planScore?.total !== undefined
+      ? `<div class="score-strip"><span>计划评分</span><strong>${escapeHtml(planScore.total)}/100</strong><em>安全 ${escapeHtml(planScore.safety)} · 可行 ${escapeHtml(planScore.feasibility)}</em></div>`
+      : "";
+    const riskLine = riskAssessment?.level
+      ? `<div class="risk-strip ${escapeHtml(riskAssessment.level)}"><span>风险评估</span><strong>${escapeHtml(riskAssessment.level)}</strong><em>${escapeHtml(asArray(riskAssessment.reasons).join("；") || "未发现额外风险")}</em></div>`
+      : "";
+    if (!goalSpec && !scoreLine && !riskLine) return "";
+    return `<div class="goal-evidence">
+      <div class="goal-row"><ha-icon icon="mdi:target"></ha-icon><span><strong>目标画像</strong><small>${escapeHtml(targetLine || "等待目标抽取")}</small>${desired.length ? `<small>期望：${escapeHtml(desired.join("；"))}</small>` : ""}</span></div>
+      ${scoreLine}${riskLine}
+    </div>`;
+  }
+
+  _constraintRows(constraints, rationale, repairReason, goalSpec, riskAssessment, planScore) {
     const rationaleRow = rationale
       ? `<p class="decision-copy">${escapeHtml(rationale)}</p>`
       : '<div class="empty-copy">本轮未提供额外规划说明。</div>';
@@ -455,7 +480,7 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
         .join("")
       : '<div class="empty-copy">未提取到需要额外执行的显式约束。</div>';
     const repair = repairReason ? `<p class="repair-copy">模型计划曾被拦截并修复：${escapeHtml(repairReason)}</p>` : "";
-    return `${rationaleRow}<div class="constraint-list">${constraintRows}</div>${repair}`;
+    return `${this._goalEvidence(goalSpec, riskAssessment, planScore)}${rationaleRow}<div class="constraint-list">${constraintRows}</div>${repair}`;
   }
 
   _resultRows(results) {
@@ -523,6 +548,9 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
     const planningRationale = this._attribute(trace, "planning_rationale", "");
     const planningConstraints = asArray(this._attribute(trace, "planning_constraints", []));
     const planningRepairReason = this._attribute(trace, "planning_repair_reason", "");
+    const goalSpec = this._attribute(trace, "goal_spec", null);
+    const riskAssessment = this._attribute(trace, "risk_assessment", null);
+    const planScore = this._attribute(trace, "plan_score", null);
     const goal = this._attribute(trace, "goal", "—");
     const speech = this._attribute(trace, "speech", "发起请求后，这里会保留智能体的真实回复。");
     const updatedAt = this._attribute(trace, "updated_at", null);
@@ -596,6 +624,13 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
         .constraint-list { margin-top: 10px; }
         .constraint-row { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-top: 1px solid var(--divider-color, #e5eaf1); }
         .constraint-row ha-icon { color: var(--primary-color, #03a9f4); --mdc-icon-size: 17px; } .constraint-row span { flex: 1; color: var(--primary-text-color, #1f2937); font-size: 12px; line-height: 1.45; } .constraint-row em { color: var(--secondary-text-color, #64748b); font-size: 10px; font-style: normal; }
+        .goal-evidence { display: grid; gap: 8px; margin-bottom: 10px; }
+        .goal-row { display: flex; gap: 9px; align-items: flex-start; padding: 10px; border-radius: 10px; background: var(--secondary-background-color, #f6f8fb); }
+        .goal-row ha-icon { color: var(--primary-color, #03a9f4); --mdc-icon-size: 18px; }
+        .goal-row span { min-width: 0; flex: 1; } .goal-row strong { display: block; font-size: 12px; } .goal-row small { display: block; margin-top: 3px; color: var(--secondary-text-color, #64748b); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+        .score-strip, .risk-strip { display: grid; grid-template-columns: 72px auto 1fr; gap: 8px; align-items: center; padding: 9px 10px; border-radius: 10px; background: var(--secondary-background-color, #f6f8fb); }
+        .score-strip span, .risk-strip span { color: var(--secondary-text-color, #64748b); font-size: 10px; } .score-strip strong, .risk-strip strong { font-size: 12px; } .score-strip em, .risk-strip em { min-width: 0; color: var(--secondary-text-color, #64748b); font-size: 10px; font-style: normal; overflow-wrap: anywhere; }
+        .risk-strip.low strong { color: var(--success-color, #16805c); } .risk-strip.medium strong { color: var(--warning-color, #b26a00); } .risk-strip.high strong, .risk-strip.critical strong { color: var(--error-color, #c62828); }
         .repair-copy { margin: 10px 0 0; color: var(--warning-color, #b26a00); font-size: 11px; line-height: 1.5; }
         .empty-copy { padding: 8px 0 3px; color: var(--secondary-text-color, #64748b); font-size: 12px; line-height: 1.55; }
         .device-row > ha-icon { color: var(--primary-color, #03a9f4); --mdc-icon-size: 19px; } .device-row > span { min-width: 0; flex: 1; color: var(--primary-text-color, #1f2937); font-size: 12px; font-weight: 600; } .device-row > small { color: var(--secondary-text-color, #64748b); font-size: 11px; text-align: right; }
@@ -636,7 +671,7 @@ class EdgeHomeExecutionWorkbench extends HTMLElement {
 
           <div class="right-column">
             <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:source-branch"></ha-icon>任务规划 DAG</div><span class="card-note">${steps.length} 步</span></div><div class="panel-body">${this._planRows(steps)}</div></section>
-            <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:shield-search"></ha-icon>约束与规划证据</div><span class="card-note">模型输出先校验后执行</span></div><div class="panel-body">${this._constraintRows(planningConstraints, planningRationale, planningRepairReason)}</div></section>
+            <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:shield-search"></ha-icon>约束与规划证据</div><span class="card-note">目标画像 · 风险 · 评分</span></div><div class="panel-body">${this._constraintRows(planningConstraints, planningRationale, planningRepairReason, goalSpec, riskAssessment, planScore)}</div></section>
             <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:transmission-tower"></ha-icon>执行与 MQTT 回读</div><span class="card-note">${mqttResults.length ? `${verifiedCount}/${mqttResults.length} 已验证` : "本地读取"}</span></div><div class="panel-body">${this._resultRows(mqttResults)}</div></section>
             <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:devices"></ha-icon>设备状态面板</div><span class="card-note">独立 MQTT 模拟设备</span></div><div class="panel-body">${this._deviceRows()}</div></section>
             <section class="card"><div class="card-head"><div class="card-title"><ha-icon icon="mdi:chart-line"></ha-icon>环境与能耗</div><span class="card-note">实时实体状态</span></div><div class="panel-body"><div class="metric-grid">${this._environmentRows()}</div></div></section>

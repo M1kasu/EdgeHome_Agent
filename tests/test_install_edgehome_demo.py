@@ -48,6 +48,10 @@ def test_installer_adds_workbench_assets(tmp_path: Path) -> None:
     assert "恢复初始状态" in frontend
     assert "任务规划 DAG" in frontend
     assert "约束与规划证据" in frontend
+    assert "目标画像" in frontend
+    assert "risk_assessment" in frontend
+    assert "plan_score" in frontend
+    assert "expected_outcome" in frontend
     assert "planning_source_label" in frontend
     assert "安全预读（编译器）" in frontend
     assert "LOCAL_READ_TOOLS" in frontend
