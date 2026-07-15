@@ -1,4 +1,4 @@
-"""模型不可用时只允许模板场景降级。"""
+"""模型不可用时只允许受限目标场景降级。"""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ class _NoModel:
 
 
 @pytest.mark.asyncio
-async def test_template_fallback_uses_only_registered_movie_plan(hass) -> None:
+async def test_goal_policy_fallback_uses_registered_movie_state(hass) -> None:
     hass.states.async_set("light.edgehome_living_room_main", "off")
     hass.states.async_set("light.edgehome_living_room_ambient", "off")
     hass.states.async_set("switch.edgehome_living_room_tv", "off")
@@ -31,11 +31,13 @@ async def test_template_fallback_uses_only_registered_movie_plan(hass) -> None:
     result = await planner.async_template_fallback(PlanningRequest(goal="我要看电影", agent_id="test"), "memory_warning")
 
     assert result.status == PlanningStatus.ACCEPTED
-    assert result.source == PlanningSource.DEMO_SCENE_FALLBACK
+    assert result.source == PlanningSource.GOAL_POLICY
+    assert result.plan is not None
+    assert result.plan.goal_spec is not None
 
 
 @pytest.mark.asyncio
-async def test_explicit_scene_constraints_never_fall_back_to_a_generic_template(hass) -> None:
+async def test_explicit_scene_constraints_use_goal_policy_not_generic_template(hass) -> None:
     hass.states.async_set("light.edgehome_living_room_main", "off")
     hass.states.async_set("switch.edgehome_living_room_tv", "off")
     hass.states.async_set("climate.edgehome_living_room_ac", "off")
@@ -49,6 +51,13 @@ async def test_explicit_scene_constraints_never_fall_back_to_a_generic_template(
         {},
     )
 
-    assert result.status == PlanningStatus.UNAVAILABLE
-    assert result.source is None
+    assert result.status == PlanningStatus.ACCEPTED
+    assert result.source == PlanningSource.GOAL_POLICY
     assert result.model_attempts == 1
+    assert result.plan is not None
+    climate_controls = {
+        step.tool
+        for step in result.plan.steps
+        if step.arguments.get("entity_id") == "climate.edgehome_living_room_ac"
+    }
+    assert climate_controls.isdisjoint({"turn_on_device", "turn_off_device", "set_hvac_mode", "set_temperature"})

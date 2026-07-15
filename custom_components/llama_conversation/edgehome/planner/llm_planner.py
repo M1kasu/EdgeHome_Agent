@@ -20,6 +20,7 @@ from .context_budget import PlanningContextBudgeter
 from .demo_scenes import DemoScenePlanFactory
 from .draft import DraftCompileError, ModelDraftCompiler, ModelPlanDraft
 from .goal_spec import GoalSpecBuilder
+from .goal_scenes import GoalDrivenScenePlanner
 from .goal_guard import GoalConstraintGuard
 from .parser import ParsedPlan, PlanParseStatus, StructuredPlanParser
 from .templates import SceneName, SceneTemplateLibrary
@@ -39,6 +40,7 @@ class PlanningSource(StrEnum):
     MODEL = "model"
     MODEL_REPAIRED = "model_repaired"
     MODEL_SANITIZED = "model_sanitized"
+    GOAL_POLICY = "goal_policy"
     DEMO_SCENE_FALLBACK = "demo_scene_fallback"
 
 
@@ -88,6 +90,7 @@ class LLMTaskPlanner:
         self._templates = templates or SceneTemplateLibrary()
         self._context_budgeter = context_budgeter or PlanningContextBudgeter()
         self._demo_scene_factory = demo_scene_factory or DemoScenePlanFactory()
+        self._goal_scene_planner = GoalDrivenScenePlanner()
         self._goal_guard = GoalConstraintGuard()
         self._draft_compiler = ModelDraftCompiler()
         self._goal_spec_builder = GoalSpecBuilder()
@@ -133,6 +136,7 @@ class LLMTaskPlanner:
                 request.goal,
                 template.name if template else None,
                 snapshot.entities,
+                goal_spec,
                 type(error).__name__,
                 model_attempts=1,
             )
@@ -187,6 +191,7 @@ class LLMTaskPlanner:
                 request.goal,
                 template.name if template else None,
                 snapshot.entities,
+                goal_spec,
                 f"repair_{type(error).__name__}",
                 model_attempts=2,
                 repair_reason=repair_reason,
@@ -204,7 +209,7 @@ class LLMTaskPlanner:
         if repaired.status == PlanParseStatus.ACCEPTED and repaired.plan is not None and repaired_constraint_error is None:
             return PlanningResult(
                 status=PlanningStatus.ACCEPTED,
-                plan=repaired.plan,
+                plan=self._ensure_goal_spec(repaired.plan, goal_spec),
                 scene=scene,
                 context_entities=snapshot.entities,
                 source=PlanningSource.MODEL_REPAIRED,
@@ -216,6 +221,7 @@ class LLMTaskPlanner:
             request.goal,
             template.name if template else None,
             snapshot.entities,
+            goal_spec,
             final_reason,
             model_attempts=2,
             repair_reason=repair_reason,
@@ -233,7 +239,8 @@ class LLMTaskPlanner:
         template = self._templates.match(request.goal)
         scene = template.name.value if template else None
         snapshot = self._state_builder.build(request.goal, scene=scene)
-        fallback = self._scene_fallback(request.goal, template.name if template else None, snapshot.entities, reason)
+        goal_spec = self._goal_spec_builder.build(request.goal, scene, snapshot.entities)
+        fallback = self._scene_fallback(request.goal, template.name if template else None, snapshot.entities, goal_spec, reason)
         return fallback or PlanningResult(
             status=PlanningStatus.UNAVAILABLE,
             reason=reason,
@@ -246,18 +253,31 @@ class LLMTaskPlanner:
         goal: str,
         scene: SceneName | None,
         context_entities: list[EntitySnapshot],
+        goal_spec: GoalSpec,
         model_reason: str,
         *,
         model_attempts: int = 0,
         repair_reason: str | None = None,
     ) -> PlanningResult | None:
-        """Use a versioned virtual-demo template only after the model output was rejected."""
+        """Use a constrained goal policy, then legacy demo template if needed."""
         if scene is None:
             return None
-        # A deterministic demo template is useful for a plain scene request,
-        # but it must never silently replace a model plan that carried an
-        # explicit preference, prohibition, target, or safety boundary.  Such
-        # a request either receives a validated model plan or no device action.
+        policy_draft = self._goal_scene_planner.build(goal, goal_spec, scene, context_entities)
+        if policy_draft is not None:
+            parsed_policy = self._parser.parse(policy_draft.plan.model_dump(mode="json"))
+            if parsed_policy.status == PlanParseStatus.ACCEPTED and parsed_policy.plan is not None:
+                return PlanningResult(
+                    status=PlanningStatus.ACCEPTED,
+                    plan=self._ensure_goal_spec(parsed_policy.plan, goal_spec),
+                    reason=f"本地模型计划未通过校验，已使用目标驱动策略规划：{model_reason}",
+                    scene=scene.value,
+                    context_entities=context_entities,
+                    source=PlanningSource.GOAL_POLICY,
+                    model_attempts=model_attempts,
+                    repair_reason=repair_reason,
+                )
+        # Legacy templates are retained only as a clearly marked demo fallback
+        # for plain scenes the goal policy does not support.
         if self._has_explicit_goal_constraints(goal):
             return None
         draft = self._demo_scene_factory.build(goal, scene, context_entities)

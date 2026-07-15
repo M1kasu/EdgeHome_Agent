@@ -692,6 +692,7 @@ class EdgeHomeCoordinator:
             "model": "本地模型自主规划",
             "model_repaired": "本地模型修复后规划",
             "model_sanitized": "本地模型规划（安全收缩）",
+            "goal_policy": "目标驱动安全策略",
             "demo_scene_fallback": "安全模板降级",
         }.get(source, "未使用模型规划")
 

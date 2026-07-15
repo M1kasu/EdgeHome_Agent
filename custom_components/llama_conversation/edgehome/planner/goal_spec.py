@@ -28,6 +28,7 @@ _DEVICE_ALIASES: dict[str, tuple[str, ...]] = {
 }
 _PROTECTED_ALIASES = ("冰箱", "路由器", "refrigerator", "fridge", "router", "nas", "服务器")
 _NEGATION = re.compile(r"(不要|别|禁止|不得|无需|不需要|不用)")
+_CLAUSE_END = re.compile(r"[。；，,！？!?]")
 _CONTROL_VERBS = re.compile(r"(打开|开启|启动|关闭|关掉|关上|调到|调成|设置|设为|拉到|全部断电|关闭所有)")
 
 
@@ -122,6 +123,9 @@ class GoalSpecBuilder:
         constraints: list[GoalConstraint] = []
         for match in _NEGATION.finditer(normalized):
             fragment = normalized[match.start() : match.start() + 30]
+            clause_end = _CLAUSE_END.search(fragment)
+            if clause_end is not None:
+                fragment = fragment[: clause_end.start()]
             target = GoalSpecBuilder._constraint_target(fragment)
             if target is not None:
                 constraints.append(

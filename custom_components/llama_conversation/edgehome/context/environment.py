@@ -54,8 +54,8 @@ class EnvironmentContextBuilder:
         task_snapshot = self._task_builder.build(goal, scene=scene)
         selected = {snapshot.entity_id: snapshot for snapshot in task_snapshot.entities}
         normalized = self._normalize(goal)
-        include_away = any(word in normalized for word in self._AWAY_WORDS)
-        include_environment = any(word in normalized for word in self._ENVIRONMENT_WORDS)
+        include_away = scene == "leaving" or any(word in normalized for word in self._AWAY_WORDS)
+        include_environment = scene == "movie" or any(word in normalized for word in self._ENVIRONMENT_WORDS)
 
         for state in self._resolver.hass.states.async_all():
             if len(selected) >= self._max_entities:
