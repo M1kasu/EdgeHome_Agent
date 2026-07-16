@@ -20,6 +20,16 @@ class PlanPriority(str, Enum):
     ENTERTAINMENT = "entertainment"
 
 
+class ExecutionStatus(str, Enum):
+    SUCCESS = "success"
+    PARTIAL_SUCCESS = "partial_success"
+    EXECUTION_FAILED = "execution_failed"
+    VALIDATION_FAILED = "validation_failed"
+    DEVICE_UNAVAILABLE = "device_unavailable"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+
+
 @dataclass(frozen=True)
 class HouseholdMember:
     member_id: str
@@ -122,6 +132,7 @@ class ActionResult:
     entity_id: str
     capability: str
     expected_value: object
+    status: ExecutionStatus
     success: bool
     before: DeviceState | None
     after: DeviceState | None
@@ -131,6 +142,7 @@ class ActionResult:
 @dataclass(frozen=True)
 class ExecutionReport:
     plan_id: str
+    status: ExecutionStatus
     executed: bool
     verified: bool
     results: tuple[ActionResult, ...]

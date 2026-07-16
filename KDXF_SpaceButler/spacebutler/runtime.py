@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from .models import ActionResult, DeviceState, ExecutionReport, PlanAction, ServicePlan
+from .models import ActionResult, DeviceState, ExecutionReport, ExecutionStatus, PlanAction, ServicePlan
 
 
 class InMemoryHomeRuntime:
@@ -23,20 +23,55 @@ class InMemoryHomeRuntime:
                 entity_id=action.entity_id,
                 capability=action.capability,
                 expected_value=action.value,
+                status=ExecutionStatus.DEVICE_UNAVAILABLE,
                 success=False,
                 before=None,
                 after=None,
                 message="entity not found",
+            )
+        if before.attributes.get("available") is False:
+            return ActionResult(
+                entity_id=action.entity_id,
+                capability=action.capability,
+                expected_value=action.value,
+                status=ExecutionStatus.DEVICE_UNAVAILABLE,
+                success=False,
+                before=before,
+                after=before,
+                message="device unavailable",
             )
         if before.protected:
             return ActionResult(
                 entity_id=action.entity_id,
                 capability=action.capability,
                 expected_value=action.value,
+                status=ExecutionStatus.CANCELLED,
                 success=False,
                 before=before,
                 after=before,
                 message="protected entity requires external confirmation",
+            )
+        if before.attributes.get("reject_commands") is True:
+            return ActionResult(
+                entity_id=action.entity_id,
+                capability=action.capability,
+                expected_value=action.value,
+                status=ExecutionStatus.EXECUTION_FAILED,
+                success=False,
+                before=before,
+                after=before,
+                message="device rejected command",
+            )
+        if before.attributes.get("ack_without_state_change") is True:
+            return ActionResult(
+                entity_id=action.entity_id,
+                capability=action.capability,
+                expected_value=action.value,
+                status=ExecutionStatus.SUCCESS,
+                success=True,
+                before=before,
+                after=before,
+                message="command acknowledged but state did not change",
             )
         after = self._apply(before, action)
         self._devices[action.entity_id] = after
@@ -44,6 +79,7 @@ class InMemoryHomeRuntime:
             entity_id=action.entity_id,
             capability=action.capability,
             expected_value=action.value,
+            status=ExecutionStatus.SUCCESS,
             success=True,
             before=before,
             after=after,
@@ -69,9 +105,12 @@ class InMemoryHomeRuntime:
 
 def execute_and_verify(runtime: InMemoryHomeRuntime, plan: ServicePlan) -> ExecutionReport:
     results = tuple(runtime.execute(action) for action in plan.actions)
-    verified = bool(results) and all(_verify_result(result) for result in results)
+    verified_results = tuple(_verify_result(result) for result in results)
+    verified = bool(results) and all(verified_results)
+    status = _report_status(results, verified_results)
     return ExecutionReport(
         plan_id=plan.plan_id,
+        status=status,
         executed=all(result.success for result in results),
         verified=verified,
         results=results,
@@ -91,3 +130,17 @@ def _verify_result(result: ActionResult) -> bool:
     if result.capability == "set_brightness":
         return result.after.state == "on" and result.after.attributes.get("brightness") == result.expected_value
     return result.after == result.before
+
+
+def _report_status(results: tuple[ActionResult, ...], verified_results: tuple[bool, ...]) -> ExecutionStatus:
+    if not results:
+        return ExecutionStatus.CANCELLED
+    if any(result.status == ExecutionStatus.DEVICE_UNAVAILABLE for result in results):
+        return ExecutionStatus.DEVICE_UNAVAILABLE
+    if any(result.status == ExecutionStatus.EXECUTION_FAILED for result in results):
+        return ExecutionStatus.EXECUTION_FAILED
+    if all(verified_results):
+        return ExecutionStatus.SUCCESS
+    if any(result.success for result in results):
+        return ExecutionStatus.VALIDATION_FAILED
+    return ExecutionStatus.EXECUTION_FAILED

@@ -5,6 +5,7 @@ import unittest
 from spacebutler import (
     DeviceState,
     EnvironmentState,
+    ExecutionStatus,
     HouseholdMember,
     InMemoryHomeRuntime,
     MemberRole,
@@ -156,6 +157,56 @@ class SpaceButlerAgentTest(unittest.TestCase):
         plans = agent.observe_and_plan(snapshot)
 
         self.assertFalse(any(plan.plan_id == "empty_room_open_window_energy_guard" for plan in plans))
+
+    def test_command_ack_without_state_change_is_validation_failed(self) -> None:
+        agent = SpaceButlerAgent()
+        devices = (
+            DeviceState(
+                "climate.living_room_ac",
+                "climate",
+                "living_room",
+                "cool",
+                {"power_w": 1000, "ack_without_state_change": True},
+            ),
+            DeviceState("window.living_room_window", "window", "living_room", "open"),
+        )
+        snapshot = SpatialSnapshot(
+            scene="daily",
+            time_of_day="afternoon",
+            members=(),
+            environment=EnvironmentState(27, 34, 62, 500, 18),
+            devices=devices,
+            rooms=(RoomState("living_room", occupied=False, unoccupied_minutes=25, window_state="open", power_w=1000),),
+        )
+
+        plan = self._plan(agent.observe_and_plan(snapshot), "empty_room_open_window_energy_guard")
+        report = execute_and_verify(InMemoryHomeRuntime(devices), plan)
+
+        self.assertTrue(report.executed)
+        self.assertFalse(report.verified)
+        self.assertEqual(report.status, ExecutionStatus.VALIDATION_FAILED)
+
+    def test_device_unavailable_is_not_reported_as_success(self) -> None:
+        agent = SpaceButlerAgent()
+        devices = (
+            DeviceState("climate.living_room_ac", "climate", "living_room", "cool", {"power_w": 1000, "available": False}),
+            DeviceState("window.living_room_window", "window", "living_room", "open"),
+        )
+        snapshot = SpatialSnapshot(
+            scene="daily",
+            time_of_day="afternoon",
+            members=(),
+            environment=EnvironmentState(27, 34, 62, 500, 18),
+            devices=devices,
+            rooms=(RoomState("living_room", occupied=False, unoccupied_minutes=25, window_state="open", power_w=1000),),
+        )
+
+        plan = self._plan(agent.observe_and_plan(snapshot), "empty_room_open_window_energy_guard")
+        report = execute_and_verify(InMemoryHomeRuntime(devices), plan)
+
+        self.assertFalse(report.executed)
+        self.assertFalse(report.verified)
+        self.assertEqual(report.status, ExecutionStatus.DEVICE_UNAVAILABLE)
 
     @staticmethod
     def _plan(plans, plan_id):

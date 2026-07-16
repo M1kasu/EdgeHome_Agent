@@ -2,7 +2,7 @@
 
 当前分支：根目录仓库初始化中；目标分支 `agent/kdxf-continuous-optimization`
 
-当前提交：待提交
+当前提交：以 `git rev-parse HEAD` 输出为准（状态文件随提交 amend 会改变哈希）
 
 当前阶段：IMPLEMENTING
 
@@ -13,12 +13,14 @@
 - 中风险确认：首次触发需要用户确认。
 - 执行回读：本地 runtime 执行后读取设备状态。
 - 反馈学习：用户说“以后这种情况直接执行”后，下一次同类场景自动执行。
+- 假成功防护：命令 ACK 但状态不变会返回 `validation_failed`，设备不可用会返回 `device_unavailable`。
 - 多成员温度偏好调和原型。
 - 夜间老人安全照明原型。
 
 真实验证能力：
 - `python scripts\run_iteration.py` 通过。
 - `python scripts\accept_empty_room_open_window_energy.py` 返回 PASS。
+- `python scripts\accept_false_success_prevention.py` 返回 PASS。
 - 硬编码审计 `python scripts\audit_hardcoding.py` 返回 PASS。
 
 未验证能力：
@@ -35,11 +37,11 @@
 
 最近一次完整测试结果：
 - `scripts/run_iteration.py` PASS。
-- 报告目录：`reports/iterations/iteration_20260716_060242/`。
+- 报告目录：`reports/iterations/iteration_20260716_060559/`。
 
 当前赛事评分：
-- 初赛自评：58/100。
-- 决赛自评：38/100。
+- 初赛自评：60/100。
+- 决赛自评：40/100。
 - 评分依据见 `competition/SCORECARD_CURRENT.md`。
 
 阻塞问题：

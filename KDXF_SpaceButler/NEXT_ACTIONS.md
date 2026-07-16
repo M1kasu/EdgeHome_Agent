@@ -9,8 +9,8 @@ python scripts\run_iteration.py
 
 下一步优先级：
 
-1. 实现执行结果状态枚举和假成功防护测试：命令返回 success 但状态不变必须失败。
-2. 增加本地故障注入：设备离线、设备拒绝、响应延迟。
+1. 增加本地故障注入：设备拒绝、响应延迟、非关键步骤失败后的 partial_success。
+2. 将 `scripts/run_iteration.py` 输出补齐 `failures.json` 和 `scorecard.json`。
 3. Docker Desktop 启动后运行：
 
 ```powershell
@@ -24,4 +24,3 @@ docker version
 ```text
 CONTINUE_FROM_NEXT_ACTIONS
 ```
-

@@ -16,6 +16,7 @@ def main() -> int:
         ["python", "-m", "compileall", "-q", "spacebutler", "scripts", "tests"],
         ["python", "-m", "unittest", "discover", "-s", "tests", "-v"],
         ["python", "scripts\\accept_empty_room_open_window_energy.py"],
+        ["python", "scripts\\accept_false_success_prevention.py"],
         ["python", "scripts\\audit_hardcoding.py"],
     ]
     results = []
@@ -51,4 +52,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

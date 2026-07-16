@@ -1,0 +1,57 @@
+[
+  {
+    "command": [
+      "python",
+      "-m",
+      "compileall",
+      "-q",
+      "spacebutler",
+      "scripts",
+      "tests"
+    ],
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests",
+      "-v"
+    ],
+    "returncode": 0,
+    "stdout": "",
+    "stderr": "test_command_ack_without_state_change_is_validation_failed (test_spacebutler_agent.SpaceButlerAgentTest.test_command_ack_without_state_change_is_validation_failed) ... ok\ntest_device_unavailable_is_not_reported_as_success (test_spacebutler_agent.SpaceButlerAgentTest.test_device_unavailable_is_not_reported_as_success) ... ok\ntest_empty_living_room_open_window_turns_off_running_ac (test_spacebutler_agent.SpaceButlerAgentTest.test_empty_living_room_open_window_turns_off_running_ac) ... ok\ntest_energy_feedback_changes_next_trigger_to_auto_execute (test_spacebutler_agent.SpaceButlerAgentTest.test_energy_feedback_changes_next_trigger_to_auto_execute) ... ok\ntest_energy_guard_respects_learned_30_minute_threshold (test_spacebutler_agent.SpaceButlerAgentTest.test_energy_guard_respects_learned_30_minute_threshold) ... ok\ntest_multi_member_conflict_generates_confirmable_compromise (test_spacebutler_agent.SpaceButlerAgentTest.test_multi_member_conflict_generates_confirmable_compromise) ... ok\ntest_night_elder_safety_plan_has_safety_priority (test_spacebutler_agent.SpaceButlerAgentTest.test_night_elder_safety_plan_has_safety_priority) ... ok\ntest_open_window_energy_guard_does_not_trigger_when_room_occupied (test_spacebutler_agent.SpaceButlerAgentTest.test_open_window_energy_guard_does_not_trigger_when_room_occupied) ... ok\ntest_return_home_uses_explicit_temperature_preference (test_spacebutler_agent.SpaceButlerAgentTest.test_return_home_uses_explicit_temperature_preference) ... ok\n\n----------------------------------------------------------------------\nRan 9 tests in 0.001s\n\nOK\n"
+  },
+  {
+    "command": [
+      "python",
+      "scripts\\accept_empty_room_open_window_energy.py"
+    ],
+    "returncode": 0,
+    "stdout": "{\n  \"acceptance\": \"PASS\",\n  \"scenario\": \"客厅无人、空调运行、窗户打开\",\n  \"first_response\": {\n    \"status\": \"needs_confirmation\",\n    \"message\": \"无人开窗空调节能保护：空间状态显示房间连续无人、窗户打开、空调仍在运行且功率偏高；默认先建议并等待确认，除非用户已明确授权以后自动执行。\",\n    \"plan\": {\n      \"plan_id\": \"empty_room_open_window_energy_guard\",\n      \"title\": \"无人开窗空调节能保护\",\n      \"priority\": \"energy\",\n      \"proactive\": true,\n      \"target_members\": [],\n      \"actions\": [\n        {\n          \"entity_id\": \"climate.living_room_ac\",\n          \"capability\": \"turn_off\",\n          \"value\": \"off\",\n          \"reason\": \"客厅连续无人23分钟，窗户打开，空调功率约1050W，继续运行会造成明显能源浪费\"\n        }\n      ],\n      \"explanation\": \"空间状态显示房间连续无人、窗户打开、空调仍在运行且功率偏高；默认先建议并等待确认，除非用户已明确授权以后自动执行。\",\n      \"requires_confirmation\": true\n    },\n    \"report\": null,\n    \"learned\": null\n  },\n  \"confirmed_response\": {\n    \"status\": \"executed\",\n    \"message\": \"all action targets reached expected state\",\n    \"plan\": {\n      \"plan_id\": \"empty_room_open_window_energy_guard\",\n      \"title\": \"无人开窗空调节能保护\",\n      \"priority\": \"energy\",\n      \"proactive\": true,\n      \"target_members\": [],\n      \"actions\": [\n        {\n          \"entity_id\": \"climate.living_room_ac\",\n          \"capability\": \"turn_off\",\n          \"value\": \"off\",\n          \"reason\": \"客厅连续无人23分钟，窗户打开，空调功率约1050W，继续运行会造成明显能源浪费\"\n        }\n      ],\n      \"explanation\": \"空间状态显示房间连续无人、窗户打开、空调仍在运行且功率偏高；默认先建议并等待确认，除非用户已明确授权以后自动执行。\",\n      \"requires_confirmation\": true\n    },\n    \"report\": {\n      \"plan_id\": \"empty_room_open_window_energy_guard\",\n      \"status\": \"success\",\n      \"executed\": true,\n      \"verified\": true,\n      \"results\": [\n        {\n          \"entity_id\": \"climate.living_room_ac\",\n          \"capability\": \"turn_off\",\n          \"expected_value\": \"off\",\n          \"status\": \"success\",\n          \"success\": true,\n          \"before\": {\n            \"entity_id\": \"climate.living_room_ac\",\n            \"domain\": \"climate\",\n            \"room\": \"living_room\",\n            \"state\": \"cool\",\n            \"attributes\": {\n              \"temperature\": 24,\n              \"power_w\": 1050\n            },\n            \"protected\": false\n          },\n          \"after\": {\n            \"entity_id\": \"climate.living_room_ac\",\n            \"domain\": \"climate\",\n            \"room\": \"living_room\",\n            \"state\": \"off\",\n            \"attributes\": {\n              \"temperature\": 24,\n              \"power_w\": 1050\n            },\n            \"protected\": false\n          },\n          \"message\": \"executed\"\n        }\n      ],\n      \"verification_summary\": \"all action targets reached expected state\"\n    },\n    \"learned\": null\n  },\n  \"learned_response\": {\n    \"status\": \"learned\",\n    \"message\": \"已记录这条节能偏好。\",\n    \"plan\": null,\n    \"report\": null,\n    \"learned\": \"learned_auto_execute\"\n  },\n  \"second_response_after_learning\": {\n    \"status\": \"executed\",\n    \"message\": \"all action targets reached expected state\",\n    \"plan\": {\n      \"plan_id\": \"empty_room_open_window_energy_guard\",\n      \"title\": \"无人开窗空调节能保护\",\n      \"priority\": \"energy\",\n      \"proactive\": true,\n      \"target_members\": [],\n      \"actions\": [\n        {\n          \"entity_id\": \"climate.living_room_ac\",\n          \"capability\": \"turn_off\",\n          \"value\": \"off\",\n          \"reason\": \"客厅连续无人23分钟，窗户打开，空调功率约1050W，继续运行会造成明显能源浪费\"\n        }\n      ],\n      \"explanation\": \"空间状态显示房间连续无人、窗户打开、空调仍在运行且功率偏高；默认先建议并等待确认，除非用户已明确授权以后自动执行。\",\n      \"requires_confirmation\": false\n    },\n    \"report\": {\n      \"plan_id\": \"empty_room_open_window_energy_guard\",\n      \"status\": \"success\",\n      \"executed\": true,\n      \"verified\": true,\n      \"results\": [\n        {\n          \"entity_id\": \"climate.living_room_ac\",\n          \"capability\": \"turn_off\",\n          \"expected_value\": \"off\",\n          \"status\": \"success\",\n          \"success\": true,\n          \"before\": {\n            \"entity_id\": \"climate.living_room_ac\",\n            \"domain\": \"climate\",\n            \"room\": \"living_room\",\n            \"state\": \"cool\",\n            \"attributes\": {\n              \"temperature\": 24,\n              \"power_w\": 1050\n            },\n            \"protected\": false\n          },\n          \"after\": {\n            \"entity_id\": \"climate.living_room_ac\",\n            \"domain\": \"climate\",\n            \"room\": \"living_room\",\n            \"state\": \"off\",\n            \"attributes\": {\n              \"temperature\": 24,\n              \"power_w\": 1050\n            },\n            \"protected\": false\n          },\n          \"message\": \"executed\"\n        }\n      ],\n      \"verification_summary\": \"all action targets reached expected state\"\n    },\n    \"learned\": null\n  },\n  \"report\": {\n    \"plan_id\": \"empty_room_open_window_energy_guard\",\n    \"status\": \"success\",\n    \"executed\": true,\n    \"verified\": true,\n    \"results\": [\n      {\n        \"entity_id\": \"climate.living_room_ac\",\n        \"capability\": \"turn_off\",\n        \"expected_value\": \"off\",\n        \"status\": \"success\",\n        \"success\": true,\n        \"before\": {\n          \"entity_id\": \"climate.living_room_ac\",\n          \"domain\": \"climate\",\n          \"room\": \"living_room\",\n          \"state\": \"cool\",\n          \"attributes\": {\n            \"temperature\": 24,\n            \"power_w\": 1050\n          },\n          \"protected\": false\n        },\n        \"after\": {\n          \"entity_id\": \"climate.living_room_ac\",\n          \"domain\": \"climate\",\n          \"room\": \"living_room\",\n          \"state\": \"off\",\n          \"attributes\": {\n            \"temperature\": 24,\n            \"power_w\": 1050\n          },\n          \"protected\": false\n        },\n        \"message\": \"executed\"\n      }\n    ],\n    \"verification_summary\": \"all action targets reached expected state\"\n  },\n  \"final_ac_state\": {\n    \"entity_id\": \"climate.living_room_ac\",\n    \"domain\": \"climate\",\n    \"room\": \"living_room\",\n    \"state\": \"off\",\n    \"attributes\": {\n      \"temperature\": 24,\n      \"power_w\": 1050\n    },\n    \"protected\": false\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "python",
+      "scripts\\accept_false_success_prevention.py"
+    ],
+    "returncode": 0,
+    "stdout": "{\n  \"acceptance\": \"PASS\",\n  \"scenario\": \"command acknowledged but state unchanged\",\n  \"response\": {\n    \"status\": \"execution_failed\",\n    \"message\": \"verification failed\",\n    \"plan\": {\n      \"plan_id\": \"empty_room_open_window_energy_guard\",\n      \"title\": \"无人开窗空调节能保护\",\n      \"priority\": \"energy\",\n      \"proactive\": true,\n      \"target_members\": [],\n      \"actions\": [\n        {\n          \"entity_id\": \"climate.living_room_ac\",\n          \"capability\": \"turn_off\",\n          \"value\": \"off\",\n          \"reason\": \"客厅连续无人25分钟，窗户打开，空调功率约1050W，继续运行会造成明显能源浪费\"\n        }\n      ],\n      \"explanation\": \"空间状态显示房间连续无人、窗户打开、空调仍在运行且功率偏高；默认先建议并等待确认，除非用户已明确授权以后自动执行。\",\n      \"requires_confirmation\": true\n    },\n    \"report\": {\n      \"plan_id\": \"empty_room_open_window_energy_guard\",\n      \"status\": \"validation_failed\",\n      \"executed\": true,\n      \"verified\": false,\n      \"results\": [\n        {\n          \"entity_id\": \"climate.living_room_ac\",\n          \"capability\": \"turn_off\",\n          \"expected_value\": \"off\",\n          \"status\": \"success\",\n          \"success\": true,\n          \"before\": {\n            \"entity_id\": \"climate.living_room_ac\",\n            \"domain\": \"climate\",\n            \"room\": \"living_room\",\n            \"state\": \"cool\",\n            \"attributes\": {\n              \"temperature\": 24,\n              \"power_w\": 1050,\n              \"ack_without_state_change\": true\n            },\n            \"protected\": false\n          },\n          \"after\": {\n            \"entity_id\": \"climate.living_room_ac\",\n            \"domain\": \"climate\",\n            \"room\": \"living_room\",\n            \"state\": \"cool\",\n            \"attributes\": {\n              \"temperature\": 24,\n              \"power_w\": 1050,\n              \"ack_without_state_change\": true\n            },\n            \"protected\": false\n          },\n          \"message\": \"command acknowledged but state did not change\"\n        }\n      ],\n      \"verification_summary\": \"verification failed\"\n    },\n    \"learned\": null\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "python",
+      "scripts\\audit_hardcoding.py"
+    ],
+    "returncode": 0,
+    "stdout": "{\n  \"findings\": [],\n  \"passed\": true\n}\n",
+    "stderr": ""
+  }
+]
