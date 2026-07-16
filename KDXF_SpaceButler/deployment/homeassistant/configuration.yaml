@@ -1,0 +1,16 @@
+default_config:
+
+homeassistant:
+  name: SpaceButler Home
+  unit_system: metric
+  time_zone: Asia/Shanghai
+
+input_boolean:
+  spacebutler_living_room_presence:
+    name: SpaceButler Living Room Presence
+  spacebutler_living_room_window_open:
+    name: SpaceButler Living Room Window Open
+
+logger:
+  default: warning
+

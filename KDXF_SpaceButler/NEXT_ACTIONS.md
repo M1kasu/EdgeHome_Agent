@@ -1,6 +1,6 @@
 # Next Actions
 
-继续执行前先运行：
+继续执行前运行：
 
 ```powershell
 cd E:\code\znjj\KDXF_SpaceButler
@@ -8,16 +8,10 @@ python scripts\run_iteration.py
 ```
 
 下一步优先级：
-
-1. 增加本地故障注入：设备拒绝、响应延迟、非关键步骤失败后的 partial_success。
-2. 将 `scripts/run_iteration.py` 输出补齐 `failures.json` 和 `scorecard.json`。
-3. Docker Desktop 启动后运行：
-
-```powershell
-docker version
-```
-
-4. Docker 可用后迁移 `EdgeHome_Agent/device_simulator` 和 `deployment/docker-compose.yml` 的最小子集。
+1. 将 `HouseholdMemory` 持久化到 SQLite，验证 Agent 重建后仍保留“同类场景自动执行”。
+2. 增加 MQTT Broker、设备模拟器和 Home Assistant 的逐项重启恢复外部门禁。
+3. 接入边缘模型双路由，并保持所有模型计划都经过确定性验证和执行回读。
+4. 实现紧凑的演示工作台，展示空间状态、触发理由、计划、确认、执行和学习结果。
 
 继续标记：
 

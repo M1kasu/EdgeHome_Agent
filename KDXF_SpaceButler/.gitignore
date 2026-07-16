@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+deployment/homeassistant/.storage/
+deployment/homeassistant/.cloud/
+deployment/homeassistant/blueprints/
+deployment/homeassistant/tts/
+deployment/homeassistant/.ha_run.lock
+deployment/homeassistant/*.db*
+deployment/homeassistant/*.log*
+deployment/homeassistant/.HA_VERSION
+deployment/runtime/

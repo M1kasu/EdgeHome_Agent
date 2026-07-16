@@ -1,49 +1,43 @@
 # Project State
 
-当前分支：根目录仓库初始化中；目标分支 `agent/kdxf-continuous-optimization`
+当前分支：`agent/kdxf-continuous-optimization`
 
-当前提交：以 `git rev-parse HEAD` 输出为准（状态文件随提交 amend 会改变哈希）
+当前提交：以 `git rev-parse HEAD` 输出为准。
 
-当前阶段：IMPLEMENTING
+当前阶段：P0_EXTERNAL_ACCEPTED_CONTINUING
 
 已完成能力：
 - 读取 KDXF 真实赛题文档并建立评分矩阵。
-- SpaceButler 核心 Agent 内核。
-- 舒适节能主动服务：连续无人、窗户打开、空调运行、功率偏高。
-- 中风险确认：首次触发需要用户确认。
-- 执行回读：本地 runtime 执行后读取设备状态。
-- 反馈学习：用户说“以后这种情况直接执行”后，下一次同类场景自动执行。
-- 假成功防护：命令 ACK 但状态不变会返回 `validation_failed`，设备不可用会返回 `device_unavailable`。
-- 多成员温度偏好调和原型。
-- 夜间老人安全照明原型。
+- SpaceButler 核心 Agent、空间快照、主动服务和结构化偏好记忆。
+- “客厅连续无人、窗户打开、空调运行、功率偏高”主动节能闭环。
+- 首次确认、执行回读、用户反馈学习及后续自动执行。
+- Home Assistant REST 执行适配器、MQTT Discovery、SQLite 设备状态和独立 Docker Compose。
+- 假成功防护：ACK 不变、拒绝、延迟和离线均不会被报告为验证成功。
+- 本地超时与多动作 `partial_success` 语义。
+- 多成员温度偏好调和和夜间老人安全照明原型。
 
 真实验证能力：
-- `python scripts\run_iteration.py` 通过。
-- `python scripts\accept_empty_room_open_window_energy.py` 返回 PASS。
-- `python scripts\accept_false_success_prevention.py` 返回 PASS。
-- 硬编码审计 `python scripts\audit_hardcoding.py` 返回 PASS。
+- `python scripts\run_iteration.py` PASS，11 项单元测试和 3 类本地故障黑盒通过。
+- `python scripts\run_external_acceptance.py` PASS。
+- 外部边界：独立进程 -> Home Assistant REST -> MQTT -> device-simulator -> SQLite -> MQTT/HA 回读。
+- 外部用例：正常确认执行、反馈改变下次行为、ACK 不变、拒绝、延迟、离线，共 6/6 通过。
+- 外部证据：`reports/external/external_20260716_063457/`。
 
-未验证能力：
-- Home Assistant -> MQTT -> device-simulator -> SQLite -> MQTT state -> HA 回读真实链路。
-- Docker 环境测试。
-- Home Assistant 黑盒测试。
-- MQTT Broker 中断、HA 重启、设备离线等故障矩阵。
-- 边缘 llama.cpp 双路由。
-- 完整 UI 工作台。
+未完成或未验证能力：
+- MQTT Broker、Home Assistant、设备模拟器逐项重启恢复矩阵。
+- 家庭偏好记忆 SQLite 持久化与重启恢复。
+- 边缘 llama.cpp 双路由和模型输出计划验证。
+- 面向现场演示的完整 UI 工作台。
+- 真实团队信息、现场答辩和外部商业数据。
 
 当前 Docker 状态：
-- Docker CLI 可用。
-- Docker Desktop daemon 未运行：`failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`。
+- Docker Desktop daemon 正常运行。
+- `spacebutler-mqtt`、`spacebutler-device-simulator`、`spacebutler-home-assistant` 容器正常运行。
+- Home Assistant：`http://127.0.0.1:8900`。
 
-最近一次完整测试结果：
-- `scripts/run_iteration.py` PASS。
-- 报告目录：`reports/iterations/iteration_20260716_060559/`。
+当前赛事保守自评：
+- 初赛：74/100。
+- 决赛：50/100。
+- 首个 P0 场景已通过外部验收，不代表整个参赛项目已完成或赛事方已验收。
 
-当前赛事评分：
-- 初赛自评：60/100。
-- 决赛自评：40/100。
-- 评分依据见 `competition/SCORECARD_CURRENT.md`。
-
-阻塞问题：
-- Docker daemon 未运行，无法完成 Docker/HA/MQTT 真实黑盒验收。
-- 根目录 `.git` 原为空目录，需要初始化后才能按要求创建分支和提交。
+阻塞问题：无工程阻塞；团队资料和真实商业信息最终需要用户提供。

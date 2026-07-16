@@ -6,13 +6,17 @@
 | `spacebutler/services.py` | `EdgeHome_Agent/edgehome/energy` 和场景策略经验 | `1de1d6a0cdab344321b75b87bf8de9a959d03bdd` | 新写主动服务规则 | 从用户命令驱动改为事件驱动 | 连续无人+开窗+功率高节能机会检测 |
 | `spacebutler/memory.py` | 旧项目会话/上下文记忆设计经验 | `1de1d6a0cdab344321b75b87bf8de9a959d03bdd` | 新写结构化偏好记忆 | 添加 sample_count/confidence/source 时间字段 | 反馈改变后续行为 |
 | `scripts/accept_empty_room_open_window_energy.py` | 旧项目 `scripts/accept_*.py` 验收风格 | `1de1d6a0cdab344321b75b87bf8de9a959d03bdd` | 新写黑盒验收 | 聚焦 SpaceMind 舒适节能 Demo | 建议-确认-执行-回读-学习链路 |
+| `device_simulator/` | `EdgeHome_Agent/device_simulator` | `1de1d6a0cdab344321b75b87bf8de9a959d03bdd` | 迁移并改名 | 协议主题、Discovery ID、镜像包名改为 SpaceButler | 新 Agent 外部执行底座 |
+| `deployment/docker-compose.yml` | `EdgeHome_Agent/deployment/docker-compose.yml` | `1de1d6a0cdab344321b75b87bf8de9a959d03bdd` | 提取最小子集 | 仅保留 HA、MQTT、设备模拟器并使用独立端口 | 可重复的新项目外部门禁 |
+| `spacebutler/home_assistant.py` | 旧项目 HA 执行边界经验 | `1de1d6a0cdab344321b75b87bf8de9a959d03bdd` | 新写 | ServicePlan 直接映射 HA REST，执行后轮询回读 | HA 空间快照适配器和状态验证 |
+| `scripts/accept_ha_mqtt_energy_external.py` | 旧项目外部验收风格 | `1de1d6a0cdab344321b75b87bf8de9a959d03bdd` | 新写 | 四路交叉验证和 4 类真实故障 | 6 个 P0 外部场景用例 |
 
-## 待迁移：第一批演示闭环
+## 已迁移：第一批演示闭环
 
-- 迁移 `device_simulator`，保留 MQTT Discovery、SQLite 状态和故障注入能力。
-- 迁移 `deployment/docker-compose.yml`，改名服务为 `spacebutler-*`。
-- 新增 `ServicePlan -> TaskPlan` 适配层。
-- 迁移执行后状态回读验证。
+- 已迁移 `device_simulator`，保留 MQTT Discovery、SQLite 状态和故障注入能力。
+- 已迁移最小 `deployment/docker-compose.yml`，服务名为 `spacebutler-*`。
+- 新增 `ServicePlan -> Home Assistant REST` 适配层。
+- 已完成执行后 HA/MQTT/管理 API/SQLite 四路状态回读验证。
 
 ## 第二批：SpaceMind 场景
 

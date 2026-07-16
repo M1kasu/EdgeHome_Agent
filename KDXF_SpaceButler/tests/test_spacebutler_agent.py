@@ -9,7 +9,10 @@ from spacebutler import (
     HouseholdMember,
     InMemoryHomeRuntime,
     MemberRole,
+    PlanAction,
+    PlanPriority,
     RoomState,
+    ServicePlan,
     SpaceButlerSession,
     SpaceButlerAgent,
     SpatialSnapshot,
@@ -207,6 +210,57 @@ class SpaceButlerAgentTest(unittest.TestCase):
         self.assertFalse(report.executed)
         self.assertFalse(report.verified)
         self.assertEqual(report.status, ExecutionStatus.DEVICE_UNAVAILABLE)
+
+    def test_response_delay_beyond_budget_is_timeout(self) -> None:
+        devices = (
+            DeviceState(
+                "climate.living_room_ac",
+                "climate",
+                "living_room",
+                "cool",
+                {"response_delay_ms": 2_500},
+            ),
+        )
+        plan = ServicePlan(
+            plan_id="timeout_plan",
+            title="timeout",
+            priority=PlanPriority.ENERGY,
+            proactive=True,
+            target_members=("household",),
+            actions=(PlanAction("climate.living_room_ac", "turn_off", True, "energy"),),
+            explanation="timeout acceptance",
+        )
+
+        report = execute_and_verify(InMemoryHomeRuntime(devices, command_timeout_ms=500), plan)
+
+        self.assertFalse(report.executed)
+        self.assertFalse(report.verified)
+        self.assertEqual(report.status, ExecutionStatus.TIMEOUT)
+
+    def test_multi_action_plan_reports_partial_success(self) -> None:
+        devices = (
+            DeviceState("climate.living_room_ac", "climate", "living_room", "cool"),
+            DeviceState("light.living_room_main", "light", "living_room", "on", {"available": False}),
+        )
+        plan = ServicePlan(
+            plan_id="partial_plan",
+            title="partial",
+            priority=PlanPriority.ENERGY,
+            proactive=True,
+            target_members=("household",),
+            actions=(
+                PlanAction("climate.living_room_ac", "turn_off", True, "energy"),
+                PlanAction("light.living_room_main", "turn_off", True, "energy"),
+            ),
+            explanation="partial acceptance",
+        )
+
+        report = execute_and_verify(InMemoryHomeRuntime(devices), plan)
+
+        self.assertFalse(report.executed)
+        self.assertFalse(report.verified)
+        self.assertEqual(report.status, ExecutionStatus.PARTIAL_SUCCESS)
+        self.assertEqual(report.verification_summary, "1/2 action targets verified")
 
     @staticmethod
     def _plan(plans, plan_id):

@@ -1,0 +1,55 @@
+name: spacebutler
+
+services:
+  spacebutler-mqtt:
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./runtime/mosquitto/data:/mosquitto/data
+      - ./runtime/mosquitto/log:/mosquitto/log
+    ports:
+      - "127.0.0.1:${SPACEBUTLER_MQTT_PORT:-1884}:1883"
+    restart: unless-stopped
+    networks:
+      - spacebutler
+
+  spacebutler-device-simulator:
+    build:
+      context: ../device_simulator
+    depends_on:
+      - spacebutler-mqtt
+    environment:
+      MQTT_HOST: spacebutler-mqtt
+      MQTT_PORT: "1883"
+      DEVICE_CONFIG: /app/config/devices.yaml
+      STATE_DB: /app/data/device_state.db
+      ADMIN_HOST: 0.0.0.0
+      ADMIN_PORT: "8090"
+    volumes:
+      - ../device_simulator/config:/app/config:ro
+      - ./runtime/device-simulator:/app/data
+    ports:
+      - "127.0.0.1:${SPACEBUTLER_SIMULATOR_PORT:-8091}:8090"
+    restart: unless-stopped
+    networks:
+      - spacebutler
+
+  spacebutler-home-assistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    depends_on:
+      - spacebutler-mqtt
+      - spacebutler-device-simulator
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ./homeassistant:/config
+    ports:
+      - "127.0.0.1:${SPACEBUTLER_HA_PORT:-8900}:8123"
+    restart: unless-stopped
+    networks:
+      - spacebutler
+
+networks:
+  spacebutler:
+    name: spacebutler
+

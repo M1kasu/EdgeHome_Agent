@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from .agent import SpaceButlerAgent
 from .models import ExecutionReport, ServicePlan, SpatialSnapshot
-from .runtime import InMemoryHomeRuntime, execute_and_verify
+from .runtime import HomeRuntime, execute_and_verify
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,7 @@ class InteractionResponse:
 class SpaceButlerSession:
     """Small stateful shell around the Agent for black-box scenario acceptance."""
 
-    def __init__(self, agent: SpaceButlerAgent, runtime: InMemoryHomeRuntime) -> None:
+    def __init__(self, agent: SpaceButlerAgent, runtime: HomeRuntime) -> None:
         self._agent = agent
         self._runtime = runtime
         self._pending_plan: ServicePlan | None = None
