@@ -1,4 +1,16 @@
 devices:
+  bedroom_reading_light:
+    type: light
+    name: 卧室阅读灯
+    room: bedroom
+    initial_state:
+      power: "OFF"
+      brightness: 0
+    capabilities:
+      brightness: true
+    behavior:
+      command_delay_ms: 120
+      failure_rate: 0
   living_room_main_light:
     type: light
     name: 客厅主灯

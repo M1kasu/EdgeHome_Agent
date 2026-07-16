@@ -41,6 +41,12 @@ class HomeAssistantClient:
             raise HomeAssistantRequestError(f"invalid state response for {entity_id}")
         return response
 
+    def states(self) -> list[dict[str, Any]]:
+        response = self._request("GET", "/api/states")
+        if not isinstance(response, list) or not all(isinstance(item, dict) for item in response):
+            raise HomeAssistantRequestError("invalid Home Assistant states response")
+        return response
+
     def call_service(self, domain: str, service: str, data: dict[str, object]) -> object:
         return self._request("POST", f"/api/services/{domain}/{service}", data)
 

@@ -129,6 +129,7 @@ def main() -> int:
         and any("accept_restart_recovery_external.py" in command for command in command_lines)
         and any("accept_edge_llm_routing_external.py" in command for command in command_lines)
         and any("accept_workbench_external.py" in command for command in command_lines)
+        and any("accept_dynamic_device_external.py" in command for command in command_lines)
     )
     (report_dir / "test_results.json").write_text(
         json.dumps(results, ensure_ascii=False, indent=2),
@@ -281,7 +282,16 @@ def _run_workbench_gate(environment: dict[str, str]) -> list[dict[str, object]]:
                             timeout=120,
                             environment=workbench_environment,
                         )
-                        return [startup_result, acceptance]
+                        results = [startup_result, acceptance]
+                        if acceptance["returncode"] == 0:
+                            results.append(
+                                _run(
+                                    [sys.executable, str(ROOT / "scripts" / "accept_dynamic_device_external.py")],
+                                    timeout=240,
+                                    environment=workbench_environment,
+                                )
+                            )
+                        return results
             except OSError:
                 pass
             time.sleep(0.5)

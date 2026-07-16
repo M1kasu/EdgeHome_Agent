@@ -10,6 +10,7 @@ import logging
 import os
 from pathlib import Path
 import random
+import re
 import signal
 import threading
 import time
@@ -26,6 +27,13 @@ from .store import DeviceStateStore
 _LOGGER = logging.getLogger(__name__)
 _HA_BIRTH_TOPIC = "homeassistant/status"
 _FAULT_DELAY_MS = 5_000
+_DEVICE_TYPES = frozenset({"light", "curtain", "climate", "switch"})
+_LEGACY_OBJECT_IDS = {
+    "living_room_main_light": "living_room_main",
+    "living_room_curtain": "living_room_curtain",
+    "living_room_ac": "living_room_ac",
+    "living_room_tv": "living_room_tv",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,11 +65,11 @@ class LightDevice:
 
     @property
     def discovery_topic(self) -> str:
-        return "homeassistant/light/spacebutler_living_room_main/config"
+        return f"homeassistant/light/spacebutler_{_entity_object_id(self)}/config"
 
     @property
     def feedback_discovery_topic(self) -> str:
-        return "homeassistant/sensor/spacebutler_living_room_main_feedback/config"
+        return f"homeassistant/sensor/spacebutler_{_entity_object_id(self)}_feedback/config"
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,11 +106,11 @@ class CurtainDevice:
 
     @property
     def discovery_topic(self) -> str:
-        return "homeassistant/cover/spacebutler_living_room_curtain/config"
+        return f"homeassistant/cover/spacebutler_{_entity_object_id(self)}/config"
 
     @property
     def feedback_discovery_topic(self) -> str:
-        return "homeassistant/sensor/spacebutler_living_room_curtain_feedback/config"
+        return f"homeassistant/sensor/spacebutler_{_entity_object_id(self)}_feedback/config"
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,11 +146,11 @@ class ClimateDevice:
 
     @property
     def discovery_topic(self) -> str:
-        return "homeassistant/climate/spacebutler_living_room_ac/config"
+        return f"homeassistant/climate/spacebutler_{_entity_object_id(self)}/config"
 
     @property
     def feedback_discovery_topic(self) -> str:
-        return "homeassistant/sensor/spacebutler_living_room_ac_feedback/config"
+        return f"homeassistant/sensor/spacebutler_{_entity_object_id(self)}_feedback/config"
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,15 +182,15 @@ class SwitchDevice:
 
     @property
     def discovery_topic(self) -> str:
-        return "homeassistant/switch/spacebutler_living_room_tv/config"
+        return f"homeassistant/switch/spacebutler_{_entity_object_id(self)}/config"
 
     @property
     def feedback_discovery_topic(self) -> str:
-        return "homeassistant/sensor/spacebutler_living_room_tv_feedback/config"
+        return f"homeassistant/sensor/spacebutler_{_entity_object_id(self)}_feedback/config"
 
     @property
     def power_discovery_topic(self) -> str:
-        return "homeassistant/sensor/spacebutler_living_room_tv_power/config"
+        return f"homeassistant/sensor/spacebutler_{_entity_object_id(self)}_power/config"
 
 
 SimulatedDevice = LightDevice | CurtainDevice | ClimateDevice | SwitchDevice
@@ -200,12 +208,15 @@ class DeviceSimulator:
         self._mqtt_port = mqtt_port
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="spacebutler-device-simulator")
         self._client.on_connect = self._on_connect
+        self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
         first_device = next(iter(devices.values()))
         self._client.will_set(first_device.availability_topic, "offline", qos=1, retain=True)
         self._server: ThreadingHTTPServer | None = None
         self._availability_announced_offline = False
         self._shutdown_requested = False
+        self._connected = False
+        self._lock = threading.RLock()
 
         for device in devices.values():
             self._store.ensure_device(device.device_id, device.initial_state)
@@ -254,16 +265,33 @@ class DeviceSimulator:
         if self._availability_announced_offline:
             return
         self._availability_announced_offline = True
-        for device in self._devices.values():
+        with self._lock:
+            devices = tuple(self._devices.values())
+        for device in devices:
             self._client.publish(device.availability_topic, "offline", qos=1, retain=True)
-        _LOGGER.info("Published retained offline availability for %d simulated devices", len(self._devices))
+        _LOGGER.info("Published retained offline availability for %d simulated devices", len(devices))
 
     def device_records(self) -> list[dict[str, Any]]:
-        return [self._require_record(device_id) for device_id in self._devices]
+        definitions = {item["device_id"]: item for item in self._store.definitions()}
+        with self._lock:
+            devices = tuple(sorted(self._devices.values(), key=lambda item: (item.room, item.name, item.device_id)))
+        return [
+            _device_record(
+                device,
+                self._require_record(device.device_id),
+                definitions.get(device.device_id, {}).get("source", "configured"),
+            )
+            for device in devices
+        ]
 
     def device_record(self, device_id: str) -> dict[str, Any]:
-        self._require_device(device_id)
-        return self._require_record(device_id)
+        device = self._require_device(device_id)
+        definitions = {item["device_id"]: item for item in self._store.definitions()}
+        return _device_record(
+            device,
+            self._require_record(device_id),
+            definitions.get(device_id, {}).get("source", "configured"),
+        )
 
     def event_records(self, limit: int) -> list[dict[str, Any]]:
         return self._store.events(limit)
@@ -288,7 +316,36 @@ class DeviceSimulator:
         self._publish_availability(device, True)
         self._publish_state(device, record["state"], None)
         self._publish_feedback(device, "ok", request_id=None)
-        return record
+        return self.device_record(device_id)
+
+    def add_device(self, payload: dict[str, Any]) -> dict[str, Any]:
+        device_id, definition = _normalize_device_definition(payload)
+        device = _device_from_definition(device_id, definition)
+        with self._lock:
+            if device_id in self._devices:
+                raise ValueError(f"device already exists: {device_id}")
+            self._store.save_definition(device_id, definition, source="runtime")
+            self._store.ensure_device(device_id, device.initial_state)
+            self._store.append_event(
+                device_id,
+                "device_registered",
+                {"definition": definition, "entity_id": _entity_id(device)},
+            )
+            self._devices[device_id] = device
+            if self._connected:
+                self._subscribe_device(device)
+                self._publish_device(device)
+        return self.device_record(device_id)
+
+    def remove_device(self, device_id: str) -> dict[str, Any]:
+        with self._lock:
+            device = self._require_device(device_id)
+            removed = self._store.delete_device(device_id)
+            if self._connected:
+                self._unpublish_device(device)
+                self._unsubscribe_device(device)
+            del self._devices[device_id]
+        return removed
 
     def _on_connect(
         self,
@@ -303,24 +360,37 @@ class DeviceSimulator:
             return
         _LOGGER.info("Connected to MQTT broker at %s:%s", self._mqtt_host, self._mqtt_port)
         self._availability_announced_offline = False
+        self._connected = True
         self._client.subscribe(_HA_BIRTH_TOPIC, qos=1)
-        for device in self._devices.values():
-            self._client.subscribe(device.command_topic, qos=1)
-            if isinstance(device, CurtainDevice):
-                self._client.subscribe(device.set_position_topic, qos=1)
-            if isinstance(device, ClimateDevice):
-                self._client.subscribe(device.temperature_command_topic, qos=1)
+        with self._lock:
+            devices = tuple(self._devices.values())
+        for device in devices:
+            self._subscribe_device(device)
         self._publish_discovery_and_states()
+
+    def _on_disconnect(
+        self,
+        _client: mqtt.Client,
+        _userdata: Any,
+        _flags: mqtt.DisconnectFlags,
+        reason_code: mqtt.ReasonCode,
+        _properties: mqtt.Properties | None,
+    ) -> None:
+        self._connected = False
+        if not self._shutdown_requested:
+            _LOGGER.warning("Disconnected from MQTT broker: %s", reason_code)
 
     def _on_message(self, _client: mqtt.Client, _userdata: Any, message: mqtt.MQTTMessage) -> None:
         if message.topic == _HA_BIRTH_TOPIC:
             if message.payload.decode("utf-8", errors="replace").strip().lower() == "online":
                 self._publish_discovery_and_states()
             return
+        with self._lock:
+            devices = tuple(self._devices.values())
         device = next(
             (
                 candidate
-                for candidate in self._devices.values()
+                for candidate in devices
                 if candidate.command_topic == message.topic
                 or isinstance(candidate, CurtainDevice) and candidate.set_position_topic == message.topic
                 or isinstance(candidate, ClimateDevice) and candidate.temperature_command_topic == message.topic
@@ -508,27 +578,55 @@ class DeviceSimulator:
         self._publish_feedback(device, "ok", request_id=command_id)
 
     def _publish_discovery_and_states(self) -> None:
-        for device in self._devices.values():
-            record = self._require_record(device.device_id)
-            discovery = (
-                _light_discovery(device)
-                if isinstance(device, LightDevice)
-                else _curtain_discovery(device)
-                if isinstance(device, CurtainDevice)
-                else _climate_discovery(device)
-                if isinstance(device, ClimateDevice)
-                else _switch_discovery(device)
-            )
-            self._publish_payload(device.discovery_topic, discovery, retain=True)
-            self._publish_payload(device.feedback_discovery_topic, _feedback_discovery(device), retain=True)
-            if isinstance(device, SwitchDevice):
-                self._publish_payload(device.power_discovery_topic, _power_discovery(device), retain=True)
-            self._publish_availability(device, record["online"])
-            if record["online"]:
-                self._publish_state(device, record["state"], record["last_command_id"])
-                self._publish_feedback(device, "ok", request_id=record["last_command_id"])
-            else:
-                self._publish_feedback(device, "offline", reason="device_offline", request_id=record["last_command_id"])
+        with self._lock:
+            devices = tuple(self._devices.values())
+        for device in devices:
+            self._publish_device(device)
+
+    def _publish_device(self, device: SimulatedDevice) -> None:
+        record = self._require_record(device.device_id)
+        discovery = (
+            _light_discovery(device)
+            if isinstance(device, LightDevice)
+            else _curtain_discovery(device)
+            if isinstance(device, CurtainDevice)
+            else _climate_discovery(device)
+            if isinstance(device, ClimateDevice)
+            else _switch_discovery(device)
+        )
+        self._publish_payload(device.discovery_topic, discovery, retain=True)
+        self._publish_payload(device.feedback_discovery_topic, _feedback_discovery(device), retain=True)
+        if isinstance(device, SwitchDevice):
+            self._publish_payload(device.power_discovery_topic, _power_discovery(device), retain=True)
+        self._publish_availability(device, record["online"])
+        if record["online"]:
+            self._publish_state(device, record["state"], record["last_command_id"])
+            self._publish_feedback(device, "ok", request_id=record["last_command_id"])
+        else:
+            self._publish_feedback(device, "offline", reason="device_offline", request_id=record["last_command_id"])
+
+    def _unpublish_device(self, device: SimulatedDevice) -> None:
+        self._client.publish(device.availability_topic, "offline", qos=1, retain=True)
+        topics = [device.discovery_topic, device.feedback_discovery_topic]
+        if isinstance(device, SwitchDevice):
+            topics.append(device.power_discovery_topic)
+        for topic in topics:
+            self._client.publish(topic, "", qos=1, retain=True)
+
+    def _subscribe_device(self, device: SimulatedDevice) -> None:
+        self._client.subscribe(device.command_topic, qos=1)
+        if isinstance(device, CurtainDevice):
+            self._client.subscribe(device.set_position_topic, qos=1)
+        if isinstance(device, ClimateDevice):
+            self._client.subscribe(device.temperature_command_topic, qos=1)
+
+    def _unsubscribe_device(self, device: SimulatedDevice) -> None:
+        topics = [device.command_topic]
+        if isinstance(device, CurtainDevice):
+            topics.append(device.set_position_topic)
+        if isinstance(device, ClimateDevice):
+            topics.append(device.temperature_command_topic)
+        self._client.unsubscribe(topics)
 
     def _publish_availability(self, device: SimulatedDevice, online: bool) -> None:
         self._client.publish(device.availability_topic, "online" if online else "offline", qos=1, retain=True)
@@ -572,8 +670,9 @@ class DeviceSimulator:
         self._client.publish(topic, json.dumps(payload, ensure_ascii=False, separators=(",", ":")), qos=1, retain=retain)
 
     def _require_device(self, device_id: str) -> SimulatedDevice:
-        if device := self._devices.get(device_id):
-            return device
+        with self._lock:
+            if device := self._devices.get(device_id):
+                return device
         raise KeyError(f"unknown device: {device_id}")
 
     def _require_record(self, device_id: str) -> dict[str, Any]:
@@ -582,11 +681,82 @@ class DeviceSimulator:
         raise KeyError(f"device state is missing: {device_id}")
 
 
-def _light_discovery(device: LightDevice) -> dict[str, Any]:
+def _device_type(device: SimulatedDevice) -> str:
+    if isinstance(device, LightDevice):
+        return "light"
+    if isinstance(device, CurtainDevice):
+        return "curtain"
+    if isinstance(device, ClimateDevice):
+        return "climate"
+    return "switch"
+
+
+def _entity_object_id(device: SimulatedDevice) -> str:
+    return _LEGACY_OBJECT_IDS.get(device.device_id, device.device_id)
+
+
+def _entity_id(device: SimulatedDevice) -> str:
+    domain = "cover" if isinstance(device, CurtainDevice) else _device_type(device)
+    return f"{domain}.spacebutler_{_entity_object_id(device)}"
+
+
+def _feedback_entity_id(device: SimulatedDevice) -> str:
+    return f"sensor.spacebutler_{_entity_object_id(device)}_feedback"
+
+
+def _discovery_device(device: SimulatedDevice) -> dict[str, Any]:
     return {
+        "identifiers": [f"spacebutler_simulator_{device.device_id}"],
         "name": device.name,
-        "unique_id": "spacebutler_mqtt_living_room_main",
-        "default_entity_id": "light.spacebutler_living_room_main",
+        "manufacturer": "SpaceButler Simulator",
+        "model": f"Virtual {_device_type(device).title()}",
+        "suggested_area": _room_name(device.room),
+    }
+
+
+def _device_record(device: SimulatedDevice, record: dict[str, Any], source: str) -> dict[str, Any]:
+    capabilities: list[str]
+    if isinstance(device, LightDevice):
+        capabilities = ["turn_on", "turn_off", "set_brightness"]
+    elif isinstance(device, CurtainDevice):
+        capabilities = ["open", "close", "set_position"]
+    elif isinstance(device, ClimateDevice):
+        capabilities = ["set_mode", "set_temperature", "turn_off"]
+    else:
+        capabilities = ["turn_on", "turn_off"]
+    return {
+        **record,
+        "type": _device_type(device),
+        "name": device.name,
+        "room": device.room,
+        "room_name": _room_name(device.room),
+        "entity_id": _entity_id(device),
+        "feedback_entity_id": _feedback_entity_id(device),
+        "capabilities": capabilities,
+        "definition_source": source,
+        "removable": source == "runtime",
+    }
+
+
+def _room_name(room: str) -> str:
+    return {
+        "living_room": "客厅",
+        "bedroom": "卧室",
+        "primary_bedroom": "主卧",
+        "kitchen": "厨房",
+        "study": "书房",
+        "balcony": "阳台",
+        "bathroom": "卫生间",
+        "home": "全屋",
+    }.get(room, room.replace("_", " ").title())
+
+
+def _light_discovery(device: LightDevice) -> dict[str, Any]:
+    object_id = _entity_object_id(device)
+    return {
+        "name": None,
+        "unique_id": f"spacebutler_mqtt_{object_id}",
+        "default_entity_id": f"light.spacebutler_{object_id}",
         "schema": "json",
         "command_topic": device.command_topic,
         "state_topic": device.state_topic,
@@ -595,47 +765,30 @@ def _light_discovery(device: LightDevice) -> dict[str, Any]:
         "payload_not_available": "offline",
         "brightness": True,
         "brightness_scale": 255,
-        "device": {
-            "identifiers": ["spacebutler_device_simulator_living_room"],
-            "name": "SpaceButler 客厅设备组",
-            "manufacturer": "SpaceButler Simulator",
-            "model": "Docker MQTT Device Simulator",
-        },
+        "device": _discovery_device(device),
     }
 
 
 def _feedback_discovery(device: SimulatedDevice) -> dict[str, Any]:
     """Expose device protocol outcomes to HA without allowing the Agent to write them."""
-    suffix = (
-        "living_room_main"
-        if isinstance(device, LightDevice)
-        else "living_room_curtain"
-        if isinstance(device, CurtainDevice)
-        else "living_room_ac"
-        if isinstance(device, ClimateDevice)
-        else "living_room_tv"
-    )
+    suffix = _entity_object_id(device)
     return {
-        "name": f"{device.name} 协议反馈",
+        "name": "协议反馈",
         "unique_id": f"spacebutler_mqtt_{suffix}_feedback",
         "default_entity_id": f"sensor.spacebutler_{suffix}_feedback",
         "state_topic": device.feedback_topic,
         "value_template": "{{ value_json.status }}",
         "json_attributes_topic": device.feedback_topic,
-        "device": {
-            "identifiers": ["spacebutler_device_simulator_living_room"],
-            "name": "SpaceButler 客厅设备组",
-            "manufacturer": "SpaceButler Simulator",
-            "model": "Docker MQTT Device Simulator",
-        },
+        "device": _discovery_device(device),
     }
 
 
 def _curtain_discovery(device: CurtainDevice) -> dict[str, Any]:
+    object_id = _entity_object_id(device)
     return {
-        "name": device.name,
-        "unique_id": "spacebutler_mqtt_living_room_curtain",
-        "default_entity_id": "cover.spacebutler_living_room_curtain",
+        "name": None,
+        "unique_id": f"spacebutler_mqtt_{object_id}",
+        "default_entity_id": f"cover.spacebutler_{object_id}",
         "device_class": "curtain",
         "command_topic": device.command_topic,
         "set_position_topic": device.set_position_topic,
@@ -653,20 +806,16 @@ def _curtain_discovery(device: CurtainDevice) -> dict[str, Any]:
         "payload_not_available": "offline",
         "optimistic": False,
         "json_attributes_topic": device.state_topic,
-        "device": {
-            "identifiers": ["spacebutler_device_simulator_living_room"],
-            "name": "SpaceButler 客厅设备组",
-            "manufacturer": "SpaceButler Simulator",
-            "model": "Docker MQTT Device Simulator",
-        },
+        "device": _discovery_device(device),
     }
 
 
 def _climate_discovery(device: ClimateDevice) -> dict[str, Any]:
+    object_id = _entity_object_id(device)
     return {
-        "name": device.name,
-        "unique_id": "spacebutler_mqtt_living_room_ac",
-        "default_entity_id": "climate.spacebutler_living_room_ac",
+        "name": None,
+        "unique_id": f"spacebutler_mqtt_{object_id}",
+        "default_entity_id": f"climate.spacebutler_{object_id}",
         "mode_command_topic": device.command_topic,
         "mode_state_topic": device.state_topic,
         "mode_state_template": "{{ value_json.mode }}",
@@ -684,20 +833,16 @@ def _climate_discovery(device: ClimateDevice) -> dict[str, Any]:
         "payload_available": "online",
         "payload_not_available": "offline",
         "json_attributes_topic": device.state_topic,
-        "device": {
-            "identifiers": ["spacebutler_device_simulator_living_room"],
-            "name": "SpaceButler 客厅设备组",
-            "manufacturer": "SpaceButler Simulator",
-            "model": "Docker MQTT Device Simulator",
-        },
+        "device": _discovery_device(device),
     }
 
 
 def _switch_discovery(device: SwitchDevice) -> dict[str, Any]:
+    object_id = _entity_object_id(device)
     return {
-        "name": device.name,
-        "unique_id": "spacebutler_mqtt_living_room_tv",
-        "default_entity_id": "switch.spacebutler_living_room_tv",
+        "name": None,
+        "unique_id": f"spacebutler_mqtt_{object_id}",
+        "default_entity_id": f"switch.spacebutler_{object_id}",
         "command_topic": device.command_topic,
         "state_topic": device.state_topic,
         "value_template": "{{ value_json.state }}",
@@ -707,15 +852,16 @@ def _switch_discovery(device: SwitchDevice) -> dict[str, Any]:
         "payload_available": "online",
         "payload_not_available": "offline",
         "json_attributes_topic": device.state_topic,
-        "device": {"identifiers": ["spacebutler_device_simulator_living_room"], "name": "SpaceButler 客厅设备组", "manufacturer": "SpaceButler Simulator", "model": "Docker MQTT Device Simulator"},
+        "device": _discovery_device(device),
     }
 
 
 def _power_discovery(device: SwitchDevice) -> dict[str, Any]:
+    object_id = _entity_object_id(device)
     return {
-        "name": f"{device.name} 功耗",
-        "unique_id": "spacebutler_mqtt_living_room_tv_power",
-        "default_entity_id": "sensor.spacebutler_living_room_tv_power",
+        "name": "功耗",
+        "unique_id": f"spacebutler_mqtt_{object_id}_power",
+        "default_entity_id": f"sensor.spacebutler_{object_id}_power",
         "state_topic": device.state_topic,
         "value_template": "{{ value_json.power_w }}",
         "unit_of_measurement": "W",
@@ -724,7 +870,7 @@ def _power_discovery(device: SwitchDevice) -> dict[str, Any]:
         "availability_topic": device.availability_topic,
         "payload_available": "online",
         "payload_not_available": "offline",
-        "device": {"identifiers": ["spacebutler_device_simulator_living_room"], "name": "SpaceButler 客厅设备组", "manufacturer": "SpaceButler Simulator", "model": "Docker MQTT Device Simulator"},
+        "device": _discovery_device(device),
     }
 
 
@@ -806,34 +952,130 @@ def _timestamp() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _load_devices(path: Path) -> dict[str, SimulatedDevice]:
+def _load_device_definitions(path: Path) -> dict[str, dict[str, Any]]:
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(loaded, dict) or not isinstance(loaded.get("devices"), dict):
         raise ValueError("devices.yaml must contain a devices mapping")
-    devices: dict[str, SimulatedDevice] = {}
+    definitions: dict[str, dict[str, Any]] = {}
     for device_id, raw in loaded["devices"].items():
-        if not isinstance(device_id, str) or not isinstance(raw, dict) or raw.get("type") not in {"light", "curtain", "climate", "switch"}:
-            raise ValueError("device type must be light, curtain, climate, or switch")
-        initial_state = raw.get("initial_state")
-        behavior = raw.get("behavior", {})
-        if not isinstance(initial_state, dict) or not isinstance(behavior, dict):
-            raise ValueError(f"invalid definition for {device_id}")
-        if raw["type"] == "light":
-            initial_command = dict(initial_state)
-            if "power" in initial_command and "state" not in initial_command:
-                initial_command["state"] = initial_command["power"]
-            state = _light_state({"power": "OFF", "brightness": 0}, initial_command)
-            devices[device_id] = LightDevice(device_id, str(raw.get("name", device_id)), str(raw.get("room", "home")), state, int(behavior.get("command_delay_ms", 0)), float(behavior.get("failure_rate", 0)))
-        elif raw["type"] == "curtain":
-            state = _curtain_state(initial_state)
-            devices[device_id] = CurtainDevice(device_id, str(raw.get("name", device_id)), str(raw.get("room", "home")), state, int(behavior.get("command_delay_ms", 0)), float(behavior.get("failure_rate", 0)), int(behavior.get("move_duration_ms", 800)))
-        elif raw["type"] == "climate":
-            state = _climate_state(initial_state)
-            devices[device_id] = ClimateDevice(device_id, str(raw.get("name", device_id)), str(raw.get("room", "home")), state, int(behavior.get("command_delay_ms", 0)), float(behavior.get("failure_rate", 0)))
-        else:
-            state = _switch_state(initial_state)
-            devices[device_id] = SwitchDevice(device_id, str(raw.get("name", device_id)), str(raw.get("room", "home")), state, int(behavior.get("command_delay_ms", 0)), float(behavior.get("failure_rate", 0)))
-    return devices
+        if not isinstance(device_id, str) or not isinstance(raw, dict):
+            raise ValueError("device definitions must map identifiers to objects")
+        normalized_id, definition = _normalize_device_definition({**raw, "device_id": device_id})
+        definitions[normalized_id] = definition
+    return definitions
+
+
+def _normalize_device_definition(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    device_type = str(payload.get("type", "")).strip().lower()
+    if device_type not in _DEVICE_TYPES:
+        raise ValueError("device type must be light, curtain, climate, or switch")
+    name = str(payload.get("name", "")).strip()
+    if not 1 <= len(name) <= 40:
+        raise ValueError("device name must contain 1 to 40 characters")
+    room = str(payload.get("room", "home")).strip().lower()
+    if not re.fullmatch(r"[a-z0-9_]{1,32}", room):
+        raise ValueError("room must use 1 to 32 lowercase letters, numbers, or underscores")
+    requested_id = str(payload.get("device_id", "")).strip().lower()
+    device_id = requested_id or f"{room}_{device_type}_{uuid4().hex[:6]}"
+    if not re.fullmatch(r"[a-z0-9_]{3,64}", device_id):
+        raise ValueError("device_id must use 3 to 64 lowercase letters, numbers, or underscores")
+    behavior = payload.get("behavior") or {}
+    if not isinstance(behavior, dict):
+        raise ValueError("behavior must be an object")
+    initial_state = payload.get("initial_state")
+    if initial_state is None:
+        initial_state = _default_initial_state(device_type)
+    if not isinstance(initial_state, dict):
+        raise ValueError("initial_state must be an object")
+    normalized = {
+        "type": device_type,
+        "name": name,
+        "room": room,
+        "initial_state": initial_state,
+        "behavior": {
+            "command_delay_ms": int(behavior.get("command_delay_ms", 100)),
+            "failure_rate": float(behavior.get("failure_rate", 0)),
+            **(
+                {"move_duration_ms": int(behavior.get("move_duration_ms", 800))}
+                if device_type == "curtain"
+                else {}
+            ),
+        },
+    }
+    if not 0 <= normalized["behavior"]["command_delay_ms"] <= 10_000:
+        raise ValueError("command_delay_ms must be between 0 and 10000")
+    if not 0 <= normalized["behavior"]["failure_rate"] <= 1:
+        raise ValueError("failure_rate must be between 0 and 1")
+    if device_type == "curtain" and not 0 <= normalized["behavior"]["move_duration_ms"] <= 60_000:
+        raise ValueError("move_duration_ms must be between 0 and 60000")
+    return device_id, normalized
+
+
+def _default_initial_state(device_type: str) -> dict[str, Any]:
+    if device_type == "light":
+        return {"power": "OFF", "brightness": 0}
+    if device_type == "curtain":
+        return {"position": 0, "target_position": 0, "status": "closed"}
+    if device_type == "climate":
+        return {"mode": "off", "temperature": 24, "current_temperature": 26}
+    return {"power": "OFF", "power_w": 1.5}
+
+
+def _device_from_definition(device_id: str, raw: dict[str, Any]) -> SimulatedDevice:
+    initial_state = raw["initial_state"]
+    behavior = raw["behavior"]
+    if raw["type"] == "light":
+        initial_command = dict(initial_state)
+        if "power" in initial_command and "state" not in initial_command:
+            initial_command["state"] = initial_command["power"]
+        state = _light_state({"power": "OFF", "brightness": 0}, initial_command)
+        return LightDevice(
+            device_id,
+            str(raw["name"]),
+            str(raw["room"]),
+            state,
+            int(behavior["command_delay_ms"]),
+            float(behavior["failure_rate"]),
+        )
+    if raw["type"] == "curtain":
+        return CurtainDevice(
+            device_id,
+            str(raw["name"]),
+            str(raw["room"]),
+            _curtain_state(initial_state),
+            int(behavior["command_delay_ms"]),
+            float(behavior["failure_rate"]),
+            int(behavior["move_duration_ms"]),
+        )
+    if raw["type"] == "climate":
+        return ClimateDevice(
+            device_id,
+            str(raw["name"]),
+            str(raw["room"]),
+            _climate_state(initial_state),
+            int(behavior["command_delay_ms"]),
+            float(behavior["failure_rate"]),
+        )
+    return SwitchDevice(
+        device_id,
+        str(raw["name"]),
+        str(raw["room"]),
+        _switch_state(initial_state),
+        int(behavior["command_delay_ms"]),
+        float(behavior["failure_rate"]),
+    )
+
+
+def _load_devices(path: Path, store: DeviceStateStore) -> dict[str, SimulatedDevice]:
+    existing = {item["device_id"]: item for item in store.definitions()}
+    for device_id, definition in _load_device_definitions(path).items():
+        current = existing.get(device_id)
+        if current is None or current["source"] == "configured":
+            store.save_definition(device_id, definition, source="configured", replace=True)
+    return {
+        item["device_id"]: _device_from_definition(item["device_id"], item["definition"])
+        for item in store.definitions()
+    }
 
 
 def _admin_handler(simulator: DeviceSimulator) -> type[BaseHTTPRequestHandler]:
@@ -858,6 +1100,14 @@ def _admin_handler(simulator: DeviceSimulator) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            if parsed.path == "/admin/devices":
+                try:
+                    record = simulator.add_device(self._read_json())
+                except (KeyError, ValueError) as error:
+                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                    return
+                self._write_json(HTTPStatus.CREATED, record)
+                return
             prefix = "/admin/devices/"
             if not parsed.path.startswith(prefix):
                 self._write_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
@@ -880,6 +1130,26 @@ def _admin_handler(simulator: DeviceSimulator) -> type[BaseHTTPRequestHandler]:
                 self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                 return
             self._write_json(HTTPStatus.OK, record)
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            prefix = "/admin/devices/"
+            if not parsed.path.startswith(prefix):
+                self._write_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+                return
+            device_id = unquote(parsed.path.removeprefix(prefix))
+            if not device_id or "/" in device_id:
+                self._write_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+                return
+            try:
+                removed = simulator.remove_device(device_id)
+            except KeyError as error:
+                self._write_json(HTTPStatus.NOT_FOUND, {"error": str(error)})
+                return
+            except ValueError as error:
+                self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
+            self._write_json(HTTPStatus.OK, {"removed": removed})
 
         def _respond_device(self, device_id: str) -> None:
             try:
@@ -912,9 +1182,10 @@ def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
     config_path = Path(os.environ.get("DEVICE_CONFIG", "/app/config/devices.yaml"))
     database_path = Path(os.environ.get("STATE_DB", "/app/data/device_state.db"))
+    store = DeviceStateStore(database_path)
     simulator = DeviceSimulator(
-        _load_devices(config_path),
-        DeviceStateStore(database_path),
+        _load_devices(config_path, store),
+        store,
         os.environ.get("MQTT_HOST", "mqtt"),
         int(os.environ.get("MQTT_PORT", "1883")),
     )
