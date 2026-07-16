@@ -38,14 +38,55 @@ class EdgeLlmClient:
         self.timeout_seconds = timeout_seconds
 
     def classify_energy_feedback(self, text: str) -> dict[str, object]:
+        return self.complete_json(_CLASSIFIER_PROMPT, text, max_tokens=80)
+
+    def plan_home_task(
+        self,
+        text: str,
+        devices: list[dict[str, object]],
+        context: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        inventory = [
+            {
+                "device_id": item.get("device_id"),
+                "name": item.get("name"),
+                "room": item.get("room"),
+                "type": item.get("type"),
+                "capabilities": item.get("capabilities"),
+                "state": item.get("state"),
+            }
+            for item in devices[:32]
+        ]
+        prompt = "\n".join(
+            [
+                "你是智能家居意图理解和任务拆解器。只输出 JSON 对象，不要额外文字。",
+                "你只规划，不执行。device_id 必须逐字复制真实设备清单，禁止编造。",
+                "用户请求中每个并列设备目标必须对应一个 step，不能只处理第一项。",
+                "同一句中后续设备省略空间时，继承紧邻前一个设备的空间，不要继承更早出现的空间。",
+                "格式："
+                '{"intent":"device_control|query_state|proactive_service|general_chat|clarification",'
+                '"summary":"简短目标","reasoning":"拆解依据","reply":"普通对话回复或空字符串",'
+                '"requires_confirmation":true,'
+                '"steps":[{"device_id":"真实ID或null",'
+                '"action":"turn_on|turn_off|set_brightness|set_temperature|set_hvac_mode|set_position|read_state|analyze_proactive",'
+                '"value":数字或字符串或null,"mode":"cool|heat|off或null","reason":"步骤原因"}]}',
+                "亮度和位置为 0-100；温度为 16-30；查询使用 read_state；节能分析使用 analyze_proactive。",
+                "信息不足时 intent=clarification 且 steps=[]。普通聊天 intent=general_chat 且 steps=[]。",
+                "真实设备清单：" + json.dumps(inventory, ensure_ascii=False, separators=(",", ":")),
+                "上文：" + json.dumps((context or [])[-6:], ensure_ascii=False, separators=(",", ":")),
+            ]
+        )
+        return self.complete_json(prompt, text, max_tokens=640)
+
+    def complete_json(self, system_prompt: str, text: str, *, max_tokens: int = 256) -> dict[str, object]:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": _CLASSIFIER_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text},
             ],
             "temperature": 0,
-            "max_tokens": 80,
+            "max_tokens": max_tokens,
             "response_format": {"type": "json_object"},
         }
         request = Request(

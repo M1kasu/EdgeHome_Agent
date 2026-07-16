@@ -18,7 +18,8 @@ from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
 from .agent import SpaceButlerAgent
-from .edge_language import EdgeLanguageRouter
+from .conversation import ConversationAgent
+from .edge_language import EdgeLanguageRouter, EdgeLlmClient
 from .home_assistant import EnergyEntityMap, HomeAssistantClient, HomeAssistantRuntime, HomeAssistantSpaceAdapter
 from .interaction import InteractionResponse, SpaceButlerSession
 from .memory import HouseholdMemory
@@ -32,6 +33,7 @@ class WorkbenchController:
         simulator_url: str,
         memory: HouseholdMemory,
         language_router: EdgeLanguageRouter | None = None,
+        edge_llm_client: EdgeLlmClient | None = None,
     ) -> None:
         self._ha = ha_client
         self._simulator_url = simulator_url.rstrip("/")
@@ -43,6 +45,13 @@ class WorkbenchController:
         self._unoccupied_minutes = 23
         self._rule_store = ProactiveRuleStore(memory.database_path)
         self._lock = threading.RLock()
+        self._conversation = ConversationAgent(
+            self.devices,
+            self.control_device,
+            self.observe,
+            edge_llm_client,
+            memory.database_path,
+        )
 
     def status(self) -> dict[str, object]:
         with self._lock:
@@ -389,6 +398,21 @@ class WorkbenchController:
         with self._lock:
             self._last_response = self._session.user_message("household", text)
             return {"response": to_jsonable(self._last_response), "status": self.status()}
+
+    def chat(self, text: str) -> dict[str, object]:
+        return self._conversation.submit(text)
+
+    def chat_history(self) -> dict[str, object]:
+        return self._conversation.history()
+
+    def confirm_chat(self) -> dict[str, object]:
+        return self._conversation.confirm()
+
+    def cancel_chat(self) -> dict[str, object]:
+        return self._conversation.cancel()
+
+    def clear_chat(self) -> dict[str, object]:
+        return self._conversation.clear()
 
     def set_fault(self, mode: str, delay_ms: int = 0) -> dict[str, object]:
         if mode not in {
@@ -807,6 +831,9 @@ def serve_workbench(
             if path == "/api/proactive":
                 self._api(controller.proactive)
                 return
+            if path == "/api/chat":
+                self._api(controller.chat_history)
+                return
             if path == "/api/events":
                 self._api(controller.events)
                 return
@@ -840,6 +867,10 @@ def serve_workbench(
                     int(body["unoccupied_minutes"]) if "unoccupied_minutes" in body else None
                 ),
                 "/api/message": lambda body: controller.message(str(body.get("text", ""))),
+                "/api/chat": lambda body: controller.chat(str(body.get("text", ""))),
+                "/api/chat/confirm": lambda _body: controller.confirm_chat(),
+                "/api/chat/cancel": lambda _body: controller.cancel_chat(),
+                "/api/chat/clear": lambda _body: controller.clear_chat(),
                 "/api/fault": lambda body: controller.set_fault(
                     str(body.get("mode", "none")),
                     int(body.get("delay_ms", 0)),

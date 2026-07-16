@@ -131,6 +131,7 @@ def main() -> int:
         and any("accept_workbench_external.py" in command for command in command_lines)
         and any("accept_proactive_binding_external.py" in command for command in command_lines)
         and any("accept_dynamic_device_external.py" in command for command in command_lines)
+        and any("accept_conversation_agent_external.py" in command for command in command_lines)
     )
     (report_dir / "test_results.json").write_text(
         json.dumps(results, ensure_ascii=False, indent=2),
@@ -292,13 +293,23 @@ def _run_workbench_gate(environment: dict[str, str]) -> list[dict[str, object]]:
                             )
                             results.append(proactive_acceptance)
                             if proactive_acceptance["returncode"] == 0:
-                                results.append(
-                                    _run(
-                                        [sys.executable, str(ROOT / "scripts" / "accept_dynamic_device_external.py")],
-                                        timeout=240,
-                                        environment=workbench_environment,
-                                    )
+                                dynamic_acceptance = _run(
+                                    [sys.executable, str(ROOT / "scripts" / "accept_dynamic_device_external.py")],
+                                    timeout=240,
+                                    environment=workbench_environment,
                                 )
+                                results.append(dynamic_acceptance)
+                                if dynamic_acceptance["returncode"] == 0:
+                                    results.append(
+                                        _run(
+                                            [
+                                                sys.executable,
+                                                str(ROOT / "scripts" / "accept_conversation_agent_external.py"),
+                                            ],
+                                            timeout=360,
+                                            environment=workbench_environment,
+                                        )
+                                    )
                         return results
             except OSError:
                 pass

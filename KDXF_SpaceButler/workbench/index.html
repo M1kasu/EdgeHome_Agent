@@ -33,7 +33,10 @@
 
   <main class="workspace">
     <nav class="rail" aria-label="工作台导航">
-      <button class="rail-button active" data-view-target="home" title="空间与设备">
+      <button class="rail-button active" data-view-target="assistant" title="AI 管家">
+        <i data-lucide="message-square-more"></i>
+      </button>
+      <button class="rail-button" data-view-target="home" title="空间与设备">
         <i data-lucide="layout-dashboard"></i>
       </button>
       <button class="rail-button" data-view-target="agent" title="主动服务">
@@ -48,7 +51,77 @@
     </nav>
 
     <section class="content">
-      <section class="view active" data-view="home">
+      <section class="view active" data-view="assistant">
+        <div class="page-heading assistant-heading">
+          <div>
+            <span class="eyebrow">CONVERSATIONAL AGENT</span>
+            <h2>AI 管家</h2>
+          </div>
+          <div class="assistant-heading-actions">
+            <span class="agent-model-badge" id="agent-model-badge">
+              <i data-lucide="brain-circuit"></i><span>模型检测中</span>
+            </span>
+            <button class="secondary compact-button" id="clear-chat">
+              <i data-lucide="message-square-x"></i><span>新会话</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="assistant-layout">
+          <section class="panel conversation-panel">
+            <div class="panel-heading conversation-heading">
+              <div>
+                <span class="eyebrow">HOUSEHOLD CONVERSATION</span>
+                <h3>家庭会话</h3>
+              </div>
+              <span class="conversation-state" id="conversation-state">准备就绪</span>
+            </div>
+            <div class="chat-thread" id="chat-thread">
+              <div class="loading-state"><i data-lucide="loader-circle"></i><span>读取会话</span></div>
+            </div>
+            <div class="prompt-strip" aria-label="快捷任务">
+              <button data-chat-prompt="打开卧室阅读灯到55%，关闭客厅电视，把客厅窗帘调到30%，空调设为25度制冷">
+                <i data-lucide="list-checks"></i><span>多设备任务</span>
+              </button>
+              <button data-chat-prompt="客厅主灯和空调现在是什么状态？">
+                <i data-lucide="scan-search"></i><span>查询状态</span>
+              </button>
+              <button data-chat-prompt="分析一下当前有没有主动节能机会">
+                <i data-lucide="leaf"></i><span>节能分析</span>
+              </button>
+            </div>
+            <form class="chat-composer" id="chat-form">
+              <textarea id="chat-input" maxlength="500" rows="2" placeholder="输入家居目标或继续当前会话" autocomplete="off"></textarea>
+              <button class="primary chat-send" id="chat-send" type="submit" title="发送">
+                <i data-lucide="send-horizontal"></i>
+              </button>
+            </form>
+          </section>
+
+          <aside class="panel task-plan-panel">
+            <div class="panel-heading task-plan-heading">
+              <div>
+                <span class="eyebrow">INTENT & TASK PLAN</span>
+                <h3>意图与任务拆解</h3>
+              </div>
+              <span class="plan-status idle" id="plan-status">暂无计划</span>
+            </div>
+            <div class="task-plan-body" id="task-plan-body">
+              <div class="empty-state"><i data-lucide="workflow"></i><span>等待对话任务</span></div>
+            </div>
+            <div class="task-plan-actions" id="task-plan-actions" hidden>
+              <button class="secondary" id="cancel-chat-plan">
+                <i data-lucide="x"></i><span>取消</span>
+              </button>
+              <button class="confirm-button" id="confirm-chat-plan">
+                <i data-lucide="play"></i><span>确认并执行</span>
+              </button>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" data-view="home">
         <div class="page-heading">
           <div>
             <span class="eyebrow">HOME INVENTORY</span>

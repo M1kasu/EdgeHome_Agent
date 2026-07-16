@@ -1,6 +1,7 @@
 """SpaceButler core package for the KDXF SpaceMind challenge."""
 
 from .agent import SpaceButlerAgent
+from .conversation import ConversationAgent
 from .edge_language import EdgeLanguageRouter, EdgeLlmClient, LanguageRoute, LanguageRouteResult
 from .interaction import InteractionResponse, SpaceButlerSession
 from .home_assistant import EnergyEntityMap, HomeAssistantClient, HomeAssistantRuntime, HomeAssistantSpaceAdapter
@@ -22,6 +23,7 @@ from .runtime import InMemoryHomeRuntime, execute_and_verify
 
 __all__ = [
     "DeviceState",
+    "ConversationAgent",
     "EnvironmentState",
     "EnergyEntityMap",
     "EdgeLanguageRouter",

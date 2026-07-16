@@ -6,8 +6,10 @@ const state = {
   devices: [],
   rooms: [],
   roomFilter: "all",
-  view: "home",
+  view: "assistant",
   proactive: null,
+  conversation: null,
+  lastMessageId: null,
 };
 
 const typeMeta = {
@@ -17,6 +19,25 @@ const typeMeta = {
   curtain: { label: "窗帘", icon: "blinds", tone: "green" },
   presence: { label: "存在传感器", icon: "user-round-check", tone: "green" },
   contact: { label: "门窗传感器", icon: "panel-top-open", tone: "amber" },
+};
+
+const intentLabels = {
+  device_control: "设备控制",
+  query_state: "状态查询",
+  proactive_service: "主动服务",
+  general_chat: "普通对话",
+  clarification: "需要澄清",
+};
+
+const actionLabels = {
+  turn_on: "开启",
+  turn_off: "关闭",
+  set_brightness: "设置亮度",
+  set_temperature: "设置温度",
+  set_hvac_mode: "设置模式",
+  set_position: "设置位置",
+  read_state: "读取状态",
+  analyze_proactive: "主动分析",
 };
 
 async function api(path, options = {}) {
@@ -57,6 +78,146 @@ function renderStatus(payload) {
   renderDecision(payload.last_response);
   renderMemory(payload.preferences || []);
   refreshIcons();
+}
+
+function renderConversation(payload) {
+  state.conversation = payload;
+  const modelBadge = $("#agent-model-badge");
+  modelBadge.classList.toggle("fallback", !payload.llm_available);
+  $("span", modelBadge).textContent = payload.llm_available ? "Edge LLM 在线" : "确定性降级";
+  const conversationState = $("#conversation-state");
+  conversationState.className = `conversation-state${payload.busy ? " busy" : ""}`;
+  conversationState.textContent = payload.busy ? "理解与规划中" : "准备就绪";
+
+  const messages = payload.messages || [];
+  const lastMessage = messages.at(-1);
+  const shouldScroll = lastMessage?.message_id !== state.lastMessageId;
+  const thread = $("#chat-thread");
+  thread.innerHTML = messages.length
+    ? messages.map((message) => `
+      <article class="chat-message ${escapeHtml(message.role)}">
+        <div class="chat-message-bubble">${escapeHtml(message.content)}</div>
+        <div class="chat-message-meta">
+          <span>${message.role === "user" ? "家庭成员" : "SpaceButler"}</span>
+          <span>${formatTimestamp(message.created_at)}</span>
+          ${message.plan_id ? `<code>${escapeHtml(message.plan_id)}</code>` : ""}
+        </div>
+      </article>`).join("")
+    : `<div class="empty-state"><i data-lucide="messages-square"></i><span>新会话</span></div>`;
+  if (payload.busy) {
+    thread.insertAdjacentHTML("beforeend", `
+      <div class="chat-thinking"><i data-lucide="loader-circle"></i><span>正在理解意图并生成任务计划</span></div>`);
+  }
+  if (shouldScroll) {
+    requestAnimationFrame(() => {
+      thread.scrollTop = thread.scrollHeight;
+    });
+  }
+  state.lastMessageId = lastMessage?.message_id || null;
+  renderTaskPlan(payload.active_plan);
+  refreshIcons();
+}
+
+function renderTaskPlan(plan) {
+  const status = $("#plan-status");
+  const body = $("#task-plan-body");
+  const actions = $("#task-plan-actions");
+  if (!plan) {
+    status.className = "plan-status idle";
+    status.textContent = "暂无计划";
+    body.innerHTML = `<div class="empty-state"><i data-lucide="workflow"></i><span>等待对话任务</span></div>`;
+    actions.hidden = true;
+    return;
+  }
+  const statusMeta = {
+    ready: ["idle", "准备执行"],
+    awaiting_confirmation: ["pending", "等待确认"],
+    executing: ["executing", "执行中"],
+    completed: ["success", "执行完成"],
+    partial_success: ["failure", "部分成功"],
+    failed: ["failure", "执行失败"],
+    cancelled: ["idle", "已取消"],
+    clarification: ["pending", "需要澄清"],
+    interrupted: ["failure", "执行中断"],
+  };
+  const [statusClass, statusLabel] = statusMeta[plan.status] || ["idle", text(plan.status)];
+  status.className = `plan-status ${statusClass}`;
+  status.textContent = statusLabel;
+  const steps = plan.steps || [];
+  body.innerHTML = `
+    <div class="plan-overview">
+      <div class="plan-intent-row">
+        <span class="intent-badge">${escapeHtml(intentLabels[plan.intent] || plan.intent)}</span>
+        <span class="route-badge">${escapeHtml(plan.route || "--")}</span>
+      </div>
+      <h4>${escapeHtml(plan.summary)}</h4>
+      <p>${escapeHtml(plan.reasoning)}</p>
+      <div class="plan-id-row">
+        <code>${escapeHtml(plan.plan_id)}</code>
+        <span>${steps.length} 个步骤</span>
+      </div>
+    </div>
+    <div class="task-step-list">
+      ${steps.map((step, index) => renderTaskStep(step, index)).join("")}
+    </div>`;
+  actions.hidden = plan.status !== "awaiting_confirmation";
+}
+
+function renderTaskStep(step, index) {
+  const icon = {
+    pending: "circle-dashed",
+    running: "loader-circle",
+    success: "circle-check-big",
+    failed: "circle-x",
+    skipped: "circle-slash",
+  }[step.status] || "circle-dashed";
+  const value = taskValue(step);
+  const afterState = evidenceState(step.after);
+  return `
+    <article class="task-step ${escapeHtml(step.status)}">
+      <span class="task-step-index">${index + 1}</span>
+      <div class="task-step-copy">
+        <div class="task-step-title">
+          <strong>${escapeHtml(step.device_name || "主动服务")}</strong>
+          <span>${escapeHtml(actionLabels[step.action] || step.action)}${value ? ` · ${escapeHtml(value)}` : ""}</span>
+        </div>
+        <p>${escapeHtml(step.reason)}</p>
+        ${step.entity_id ? `<code title="${escapeHtml(step.entity_id)}">${escapeHtml(step.entity_id)}</code>` : ""}
+        ${afterState ? `<div class="task-step-evidence">回读：${escapeHtml(afterState)} · ${step.verified ? "PASS" : "FAIL"}</div>` : ""}
+        ${step.error ? `<div class="task-step-evidence task-step-error">${escapeHtml(step.error)}</div>` : ""}
+      </div>
+      <i data-lucide="${icon}"></i>
+    </article>`;
+}
+
+function taskValue(step) {
+  if (step.action === "set_brightness" || step.action === "set_position") return `${step.value}%`;
+  if (step.action === "set_temperature") return `${step.value}°C${step.mode ? ` / ${step.mode}` : ""}`;
+  if (step.action === "set_hvac_mode") return text(step.value, "");
+  return "";
+}
+
+function evidenceState(evidence) {
+  const value = evidence?.state;
+  if (!value) {
+    if (evidence?.response?.status) return evidence.response.message || evidence.response.status;
+    return "";
+  }
+  if ("power" in value) {
+    const on = String(value.power).toUpperCase() === "ON";
+    const brightness = Number.isFinite(Number(value.brightness))
+      ? `，亮度 ${Math.round(Number(value.brightness) * 100 / 255)}%`
+      : "";
+    return `${on ? "开启" : "关闭"}${on ? brightness : ""}`;
+  }
+  if ("mode" in value) {
+    const mode = value.mode === "cool" ? "制冷" : value.mode === "heat" ? "制热" : "关闭";
+    return `${mode}，设定 ${value.temperature}°C`;
+  }
+  if ("position" in value) return `位置 ${value.position}%`;
+  if ("occupied" in value) return value.occupied ? "有人" : "无人";
+  if ("open" in value) return value.open ? "打开" : "关闭";
+  return JSON.stringify(value);
 }
 
 function renderProactive(payload) {
@@ -489,8 +650,16 @@ async function loadEvents() {
   }
 }
 
+async function loadConversation() {
+  try {
+    renderConversation(await api("/api/chat"));
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
 async function loadAll() {
-  await Promise.all([loadStatus(), loadDevices()]);
+  await Promise.all([loadStatus(), loadDevices(), loadConversation()]);
   if (state.view === "events") await loadEvents();
 }
 
@@ -519,6 +688,54 @@ function switchView(view) {
   $$(".view").forEach((element) => element.classList.toggle("active", element.dataset.view === view));
   $$(".rail-button[data-view-target]").forEach((button) => button.classList.toggle("active", button.dataset.viewTarget === view));
   if (view === "events") loadEvents();
+  if (view === "assistant") loadConversation();
+}
+
+async function sendChat(textValue) {
+  const input = $("#chat-input");
+  const sendButton = $("#chat-send");
+  const textValueNormalized = textValue.trim();
+  if (!textValueNormalized) return;
+  input.disabled = true;
+  sendButton.disabled = true;
+  $("#conversation-state").className = "conversation-state busy";
+  $("#conversation-state").textContent = "理解与规划中";
+  $("#chat-thread").insertAdjacentHTML("beforeend", `
+    <div class="chat-thinking" id="chat-pending">
+      <i data-lucide="loader-circle"></i><span>正在读取设备上下文</span>
+    </div>`);
+  refreshIcons();
+  try {
+    const payload = await api("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({ text: textValueNormalized }),
+    });
+    renderConversation(payload);
+    input.value = "";
+    await Promise.all([loadStatus(), loadDevices(), loadEvents()]);
+  } catch (error) {
+    $("#chat-pending")?.remove();
+    toast(error.message, true);
+  } finally {
+    input.disabled = false;
+    sendButton.disabled = false;
+    input.focus();
+  }
+}
+
+async function chatPlanAction(path) {
+  $("#confirm-chat-plan").disabled = true;
+  $("#cancel-chat-plan").disabled = true;
+  try {
+    const payload = await api(path, { method: "POST", body: "{}" });
+    renderConversation(payload);
+    await Promise.all([loadStatus(), loadDevices(), loadEvents()]);
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    $("#confirm-chat-plan").disabled = false;
+    $("#cancel-chat-plan").disabled = false;
+  }
 }
 
 async function handleDeviceClick(event) {
@@ -651,6 +868,26 @@ document.addEventListener("DOMContentLoaded", () => {
     button.addEventListener("click", () => switchView(button.dataset.viewTarget));
   });
   $("#refresh-all").addEventListener("click", loadAll);
+  $("#clear-chat").addEventListener("click", async () => {
+    const payload = await api("/api/chat/clear", { method: "POST", body: "{}" });
+    state.lastMessageId = null;
+    renderConversation(payload);
+  });
+  $("#chat-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    sendChat($("#chat-input").value);
+  });
+  $("#chat-input").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      $("#chat-form").requestSubmit();
+    }
+  });
+  $$(".prompt-strip [data-chat-prompt]").forEach((button) => {
+    button.addEventListener("click", () => sendChat(button.dataset.chatPrompt));
+  });
+  $("#confirm-chat-plan").addEventListener("click", () => chatPlanAction("/api/chat/confirm"));
+  $("#cancel-chat-plan").addEventListener("click", () => chatPlanAction("/api/chat/cancel"));
   $("#devices-reload").addEventListener("click", loadDevices);
   $("#events-reload").addEventListener("click", loadEvents);
   $("#open-add-device").addEventListener("click", () => $("#add-device-dialog").showModal());

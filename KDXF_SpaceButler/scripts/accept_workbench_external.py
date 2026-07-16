@@ -14,6 +14,17 @@ BASE_URL = os.getenv("SPACEBUTLER_WORKBENCH_URL", "http://127.0.0.1:8766")
 
 def main() -> int:
     clear = request("POST", "/api/preferences/clear", {})
+    binding = request(
+        "POST",
+        "/api/proactive/config",
+        {
+            "enabled": True,
+            "room": "living_room",
+            "presence_device_id": "living_room_presence_sensor",
+            "contact_device_id": "living_room_window_sensor",
+            "climate_device_id": "living_room_ac",
+        },
+    )
     reset = request(
         "POST",
         "/api/scene/reset",
@@ -68,38 +79,56 @@ def main() -> int:
     request("POST", "/api/devices/living_room_curtain/control", {"position": 100})
     request("POST", "/api/scene/reset", {"unoccupied_minutes": 23})
     inventory_devices = inventory.get("devices", [])
-    passed = all(
-        (
-            clear["preferences"] == [],
-            reset["climate"]["state"] == "cool",
-            reset["presence"]["state"] == "off",
-            reset["window"]["state"] == "on",
-            proactive["config"]["presence_device_id"] == "living_room_presence_sensor",
-            proactive["config"]["contact_device_id"] == "living_room_window_sensor",
-            proactive["config"]["climate_device_id"] == "living_room_ac",
-            proactive["ready"] is True,
-            proactive["trigger_ready"] is True,
-            observed["response"]["status"] == "needs_confirmation",
-            observed["response"]["plan"]["actions"][0]["entity_id"] == "climate.spacebutler_living_room_ac",
-            confirmed["response"]["status"] == "executed",
-            confirmed["response"]["report"]["verified"] is True,
-            learned["response"]["learned"] == "learned_auto_execute",
-            second["response"]["status"] == "executed",
-            second["response"]["report"]["verified"] is True,
-            len(inventory_devices) >= 7,
-            all(device.get("discovered") is True for device in inventory_devices),
-            find_device(light, "bedroom_reading_light")["state"]["power"] == "ON",
-            find_device(switch, "living_room_tv")["state"]["power"] == "ON",
-            find_device(curtain, "living_room_curtain")["state"]["position"] == 35,
-            find_device(climate, "living_room_ac")["state"]["mode"] == "cool",
-            find_device(climate, "living_room_ac")["state"]["temperature"] == 25,
-            find_device(presence, "living_room_presence_sensor")["state"]["occupied"] is True,
-            find_device(contact, "living_room_window_sensor")["state"]["open"] is False,
-            inactive_conditions["trigger_ready"] is False,
-            isinstance(events.get("events"), list),
-            len(events.get("events", [])) > 0,
-        )
-    )
+    checks = {
+        "preferences_cleared": clear["preferences"] == [],
+        "reset_climate_cool": reset["climate"]["state"] == "cool",
+        "reset_presence_empty": reset["presence"]["state"] == "off",
+        "reset_window_open": reset["window"]["state"] == "on",
+        "presence_binding": (
+            binding["proactive"]["config"]["presence_device_id"] == "living_room_presence_sensor"
+            and proactive["config"]["presence_device_id"] == "living_room_presence_sensor"
+        ),
+        "contact_binding": (
+            binding["proactive"]["config"]["contact_device_id"] == "living_room_window_sensor"
+            and proactive["config"]["contact_device_id"] == "living_room_window_sensor"
+        ),
+        "climate_binding": (
+            binding["proactive"]["config"]["climate_device_id"] == "living_room_ac"
+            and proactive["config"]["climate_device_id"] == "living_room_ac"
+        ),
+        "proactive_ready": proactive["ready"] is True,
+        "proactive_trigger_ready": proactive["trigger_ready"] is True,
+        "first_needs_confirmation": observed["response"]["status"] == "needs_confirmation",
+        "planned_climate_entity": (
+            observed["response"]["plan"]["actions"][0]["entity_id"]
+            == "climate.spacebutler_living_room_ac"
+        ),
+        "confirmation_executed": confirmed["response"]["status"] == "executed",
+        "confirmation_verified": confirmed["response"]["report"]["verified"] is True,
+        "auto_execute_learned": learned["response"]["learned"] == "learned_auto_execute",
+        "second_auto_executed": second["response"]["status"] == "executed",
+        "second_verified": second["response"]["report"]["verified"] is True,
+        "inventory_seed_present": len(inventory_devices) >= 7,
+        "inventory_discovered": all(device.get("discovered") is True for device in inventory_devices),
+        "light_controlled": find_device(light, "bedroom_reading_light")["state"]["power"] == "ON",
+        "switch_controlled": find_device(switch, "living_room_tv")["state"]["power"] == "ON",
+        "curtain_controlled": find_device(curtain, "living_room_curtain")["state"]["position"] == 35,
+        "climate_mode_controlled": find_device(climate, "living_room_ac")["state"]["mode"] == "cool",
+        "climate_temperature_controlled": (
+            find_device(climate, "living_room_ac")["state"]["temperature"] == 25
+        ),
+        "presence_reported": (
+            find_device(presence, "living_room_presence_sensor")["state"]["occupied"] is True
+        ),
+        "contact_reported": (
+            find_device(contact, "living_room_window_sensor")["state"]["open"] is False
+        ),
+        "inactive_after_sensor_change": inactive_conditions["trigger_ready"] is False,
+        "events_are_list": isinstance(events.get("events"), list),
+        "events_recorded": len(events.get("events", [])) > 0,
+    }
+    failed_checks = [name for name, value in checks.items() if not value]
+    passed = not failed_checks
     print(
         json.dumps(
             {
@@ -112,6 +141,7 @@ def main() -> int:
                 "inventory_devices": len(inventory_devices),
                 "manual_controls": ["light", "switch", "curtain", "climate", "presence", "contact"],
                 "event_count": len(events.get("events", [])),
+                "failed_checks": failed_checks,
             },
             ensure_ascii=False,
             indent=2,

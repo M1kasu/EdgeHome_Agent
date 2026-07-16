@@ -28,10 +28,12 @@ def main() -> int:
     wait_until_ready(ha_url, timeout_seconds=120)
     token = obtain_token(ha_url, ROOT / "deployment" / "homeassistant" / ".storage" / "auth")
     language_router = None
+    edge_llm_client = None
     try:
         with urlopen(f"{edge_llm_url.rstrip('/')}/health", timeout=3) as response:
             if response.status == 200:
-                language_router = EdgeLanguageRouter(EdgeLlmClient(edge_llm_url, timeout_seconds=60))
+                edge_llm_client = EdgeLlmClient(edge_llm_url, timeout_seconds=60)
+                language_router = EdgeLanguageRouter(edge_llm_client)
     except OSError:
         pass
     controller = WorkbenchController(
@@ -39,6 +41,7 @@ def main() -> int:
         simulator_url,
         HouseholdMemory(ROOT / "deployment" / "runtime" / "agent" / "household_memory.db"),
         language_router,
+        edge_llm_client,
     )
     server = serve_workbench(controller, ROOT / "workbench", args.host, args.port)
     print(f"SpaceButler workbench: http://{args.host}:{args.port}", flush=True)
