@@ -129,6 +129,7 @@ def main() -> int:
         and any("accept_restart_recovery_external.py" in command for command in command_lines)
         and any("accept_edge_llm_routing_external.py" in command for command in command_lines)
         and any("accept_workbench_external.py" in command for command in command_lines)
+        and any("accept_proactive_binding_external.py" in command for command in command_lines)
         and any("accept_dynamic_device_external.py" in command for command in command_lines)
     )
     (report_dir / "test_results.json").write_text(
@@ -284,13 +285,20 @@ def _run_workbench_gate(environment: dict[str, str]) -> list[dict[str, object]]:
                         )
                         results = [startup_result, acceptance]
                         if acceptance["returncode"] == 0:
-                            results.append(
-                                _run(
-                                    [sys.executable, str(ROOT / "scripts" / "accept_dynamic_device_external.py")],
-                                    timeout=240,
-                                    environment=workbench_environment,
-                                )
+                            proactive_acceptance = _run(
+                                [sys.executable, str(ROOT / "scripts" / "accept_proactive_binding_external.py")],
+                                timeout=240,
+                                environment=workbench_environment,
                             )
+                            results.append(proactive_acceptance)
+                            if proactive_acceptance["returncode"] == 0:
+                                results.append(
+                                    _run(
+                                        [sys.executable, str(ROOT / "scripts" / "accept_dynamic_device_external.py")],
+                                        timeout=240,
+                                        environment=workbench_environment,
+                                    )
+                                )
                         return results
             except OSError:
                 pass

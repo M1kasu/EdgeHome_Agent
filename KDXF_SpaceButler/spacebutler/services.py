@@ -64,7 +64,7 @@ class ProactiveServiceEngine:
                 continue
             if not running_climates or not open_windows:
                 continue
-            room_name = "客厅" if room == "living_room" else room
+            room_name = _room_name(room)
             auto_execute = bool(self._memory.recall("household", "empty_room_open_window_energy_guard", "auto_execute", False))
             actions = tuple(
                 PlanAction(
@@ -239,3 +239,16 @@ def _room_power_w(snapshot: SpatialSnapshot, room: str, devices: list) -> float:
         if isinstance(power, (int, float)):
             total += float(power)
     return total
+
+
+def _room_name(room: str) -> str:
+    return {
+        "living_room": "客厅",
+        "bedroom": "卧室",
+        "primary_bedroom": "主卧",
+        "kitchen": "厨房",
+        "study": "书房",
+        "balcony": "阳台",
+        "bathroom": "卫生间",
+        "home": "全屋",
+    }.get(room, room.replace("_", " ").title())

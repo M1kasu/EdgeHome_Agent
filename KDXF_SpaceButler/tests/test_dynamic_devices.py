@@ -5,6 +5,8 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from device_simulator.spacebutler_simulator.app import (
+    BinarySensorDevice,
+    _binary_sensor_state,
     _device_from_definition,
     _entity_id,
     _normalize_device_definition,
@@ -98,6 +100,47 @@ class DynamicDeviceRegistryTest(unittest.TestCase):
             self.assertEqual(removed["device_id"], runtime_id)
             self.assertIsNone(store.get_device(runtime_id))
             self.assertEqual([item["device_id"] for item in store.definitions()], [seed_id])
+
+    def test_presence_and_contact_devices_use_binary_sensor_entities(self) -> None:
+        presence_id, presence_definition = _normalize_device_definition(
+            {
+                "device_id": "study_presence",
+                "type": "presence",
+                "name": "Study Presence",
+                "room": "study",
+                "initial_state": {"occupied": False, "unoccupied_minutes": 25},
+            }
+        )
+        contact_id, contact_definition = _normalize_device_definition(
+            {
+                "device_id": "study_window",
+                "type": "contact",
+                "name": "Study Window",
+                "room": "study",
+                "initial_state": {"open": True},
+            }
+        )
+
+        presence = _device_from_definition(presence_id, presence_definition)
+        contact = _device_from_definition(contact_id, contact_definition)
+
+        self.assertIsInstance(presence, BinarySensorDevice)
+        self.assertEqual(_entity_id(presence), "binary_sensor.spacebutler_study_presence")
+        self.assertFalse(presence.initial_state["occupied"])
+        self.assertIsInstance(presence.initial_state["unoccupied_since"], str)
+        self.assertEqual(_entity_id(contact), "binary_sensor.spacebutler_study_window")
+        self.assertEqual(contact.initial_state, {"open": True})
+
+    def test_presence_report_preserves_since_until_occupancy_changes(self) -> None:
+        initial = _binary_sensor_state(
+            "presence",
+            {"occupied": False, "unoccupied_minutes": 23},
+        )
+        repeated = _binary_sensor_state("presence", initial)
+        occupied = _binary_sensor_state("presence", {**initial, "occupied": True})
+
+        self.assertEqual(repeated["unoccupied_since"], initial["unoccupied_since"])
+        self.assertEqual(occupied, {"occupied": True, "unoccupied_since": None})
 
 
 if __name__ == "__main__":

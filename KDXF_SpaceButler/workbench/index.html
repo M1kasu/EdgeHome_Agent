@@ -103,44 +103,97 @@
         </div>
 
         <div class="agent-layout">
-          <section class="panel scene-panel">
+          <div class="agent-primary-stack">
+            <section class="panel scene-panel">
             <div class="panel-heading">
-              <div><span class="eyebrow">SPACE SNAPSHOT</span><h3>客厅节能条件</h3></div>
-              <span class="source-badge">HA + MQTT</span>
+              <div><span class="eyebrow">LIVE SIGNAL GRAPH</span><h3 id="active-rule-title">主动规则信号</h3></div>
+              <span class="source-badge" id="rule-health-badge">读取中</span>
             </div>
-            <div class="scene-visual">
-              <div class="room-map">
-                <div class="window-visual" id="window-visual">
-                  <i data-lucide="panel-top-open"></i><span>窗户</span>
+            <div class="signal-board">
+              <div class="signal-context">
+                <div>
+                  <span>当前监听空间</span>
+                  <strong id="active-room-name">--</strong>
                 </div>
-                <div class="ac-visual" id="ac-visual">
-                  <i data-lucide="air-vent"></i><span>客厅空调</span>
+                <div>
+                  <span>数据链路</span>
+                  <strong id="active-data-source">--</strong>
                 </div>
-                <div class="presence-visual" id="presence-visual">
-                  <i data-lucide="user-round-x"></i><span>无人</span>
+                <div>
+                  <span>最近刷新</span>
+                  <strong id="active-refresh-time">--</strong>
                 </div>
-                <div class="room-label">LIVING ROOM</div>
               </div>
-              <div class="condition-list">
-                <div><span>客厅占用</span><strong id="presence-value">--</strong></div>
-                <div><span>连续无人</span><strong id="minutes-value">--</strong></div>
-                <div><span>窗户</span><strong id="window-value">--</strong></div>
-                <div><span>空调</span><strong id="climate-value">--</strong></div>
-                <div><span>估算功率</span><strong id="power-value">--</strong></div>
-                <div><span>协议反馈</span><strong id="feedback-value">--</strong></div>
+              <div class="signal-grid" id="proactive-sources">
+                <div class="loading-state compact"><i data-lucide="loader-circle"></i><span>读取设备信号</span></div>
+              </div>
+              <div class="condition-section">
+                <div class="section-label">
+                  <span>规则条件</span>
+                  <strong id="condition-summary">--</strong>
+                </div>
+                <div class="condition-stack" id="proactive-conditions"></div>
               </div>
             </div>
-          </section>
+            </section>
 
-          <aside class="panel scenario-panel">
+            <section class="panel decision-panel">
+              <div class="panel-heading">
+                <div><span class="eyebrow">AGENT DECISION</span><h3>决策与回读</h3></div>
+                <span class="decision-status idle" id="decision-status">等待分析</span>
+              </div>
+              <div class="decision-body" id="decision-body">
+                <div class="empty-state"><i data-lucide="sparkles"></i><span>尚无主动服务计划</span></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="agent-secondary-stack">
+            <aside class="panel scenario-panel">
             <div class="panel-heading">
-              <div><span class="eyebrow">SCENARIO INPUT</span><h3>条件注入</h3></div>
+              <div><span class="eyebrow">RULE BINDING</span><h3>规则配置</h3></div>
+              <label class="toggle-control" title="启用主动规则">
+                <input id="rule-enabled" type="checkbox" checked>
+                <span></span>
+              </label>
+            </div>
+            <label class="field-label" for="rule-room">监听空间</label>
+            <select id="rule-room"></select>
+            <label class="field-label" for="rule-presence-device">存在传感器</label>
+            <select id="rule-presence-device"></select>
+            <label class="field-label" for="rule-contact-device">门窗传感器</label>
+            <select id="rule-contact-device"></select>
+            <label class="field-label" for="rule-climate-device">执行空调</label>
+            <select id="rule-climate-device"></select>
+            <button class="secondary rule-save-button" id="save-rule">
+              <i data-lucide="link"></i><span>保存设备绑定</span>
+            </button>
+
+            <div class="panel-subheading">
+              <div><span class="eyebrow">TEST EVENT</span><h4>设备事件测试</h4></div>
+              <span>写入设备侧</span>
+            </div>
+            <div class="binary-test-grid">
+              <label class="binary-test">
+                <span><i data-lucide="user-round-check"></i>空间有人</span>
+                <input id="test-occupied" type="checkbox">
+              </label>
+              <label class="binary-test">
+                <span><i data-lucide="panel-top-open"></i>窗户打开</span>
+                <input id="test-window-open" type="checkbox" checked>
+              </label>
             </div>
             <label class="field-label" for="minutes-range">连续无人时长</label>
             <div class="range-row">
               <input id="minutes-range" type="range" min="0" max="60" step="1" value="23">
               <output id="minutes-output">23</output><span>分钟</span>
             </div>
+            <label class="field-label" for="test-climate-mode">空调状态</label>
+            <select id="test-climate-mode">
+              <option value="cool">制冷</option>
+              <option value="heat">制热</option>
+              <option value="off">关闭</option>
+            </select>
             <label class="field-label" for="fault-mode">空调故障</label>
             <select id="fault-mode">
               <option value="none">正常</option>
@@ -151,10 +204,10 @@
             </select>
             <div class="button-grid">
               <button class="secondary" id="reset-scene">
-                <i data-lucide="rotate-ccw"></i><span>重置条件</span>
+                <i data-lucide="radio-tower"></i><span>写入测试状态</span>
               </button>
               <button class="primary" id="observe-scene">
-                <i data-lucide="scan-eye"></i><span>主动分析</span>
+                <i data-lucide="scan-eye"></i><span>读取并分析</span>
               </button>
             </div>
             <button class="confirm-button" id="confirm-action">
@@ -164,27 +217,18 @@
               <input id="feedback-input" type="text" maxlength="500" placeholder="确认、取消或输入家庭偏好" autocomplete="off">
               <button type="submit" title="发送"><i data-lucide="send-horizontal"></i></button>
             </form>
-          </aside>
+            </aside>
 
-          <section class="panel decision-panel">
-            <div class="panel-heading">
-              <div><span class="eyebrow">AGENT DECISION</span><h3>决策与回读</h3></div>
-              <span class="decision-status idle" id="decision-status">等待分析</span>
-            </div>
-            <div class="decision-body" id="decision-body">
-              <div class="empty-state"><i data-lucide="sparkles"></i><span>尚无主动服务计划</span></div>
-            </div>
-          </section>
-
-          <section class="panel memory-panel">
-            <div class="panel-heading">
-              <div><span class="eyebrow">HOUSEHOLD MEMORY</span><h3>家庭偏好</h3></div>
-              <span class="count-badge" id="memory-count">0</span>
-            </div>
-            <div id="memory-list" class="memory-list">
-              <div class="empty-state compact"><span>暂无偏好</span></div>
-            </div>
-          </section>
+            <section class="panel memory-panel">
+              <div class="panel-heading">
+                <div><span class="eyebrow">HOUSEHOLD MEMORY</span><h3>家庭偏好</h3></div>
+                <span class="count-badge" id="memory-count">0</span>
+              </div>
+              <div id="memory-list" class="memory-list">
+                <div class="empty-state compact"><span>暂无偏好</span></div>
+              </div>
+            </section>
+          </div>
         </div>
       </section>
 
@@ -228,14 +272,16 @@
           <span>设备名称</span>
           <input id="new-device-name" name="name" maxlength="40" required placeholder="例如：卧室阅读灯">
         </label>
-        <label>
-          <span>设备类型</span>
-          <select id="new-device-type" name="type">
-            <option value="light">灯光</option>
-            <option value="switch">智能开关</option>
-            <option value="climate">空调</option>
-            <option value="curtain">窗帘</option>
-          </select>
+          <label>
+            <span>设备类型</span>
+            <select id="new-device-type" name="type">
+              <option value="light">灯光</option>
+              <option value="switch">智能开关</option>
+              <option value="climate">空调</option>
+              <option value="curtain">窗帘</option>
+              <option value="presence">人体存在传感器</option>
+              <option value="contact">门窗传感器</option>
+            </select>
         </label>
         <label>
           <span>所在空间</span>

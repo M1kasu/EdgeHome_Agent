@@ -149,6 +149,7 @@ class EnergyEntityMap:
     presence: str = "input_boolean.spacebutler_living_room_presence"
     window: str = "input_boolean.spacebutler_living_room_window_open"
     ac_rated_power_w: float = 1_050
+    room: str = "living_room"
 
 
 class HomeAssistantSpaceAdapter:
@@ -178,14 +179,14 @@ class HomeAssistantSpaceAdapter:
         climate = DeviceState(
             climate.entity_id,
             climate.domain,
-            "living_room",
+            self._entities.room,
             climate.state,
             climate_attributes,
         )
         window_device = DeviceState(
             self._entities.window,
             "window",
-            "living_room",
+            self._entities.room,
             "open" if window_open else "closed",
             dict(window.get("attributes") or {}),
         )
@@ -204,7 +205,7 @@ class HomeAssistantSpaceAdapter:
             devices=(climate, window_device),
             rooms=(
                 RoomState(
-                    "living_room",
+                    self._entities.room,
                     occupied=occupied,
                     unoccupied_minutes=0 if occupied else unoccupied_minutes,
                     temperature=indoor_temperature,

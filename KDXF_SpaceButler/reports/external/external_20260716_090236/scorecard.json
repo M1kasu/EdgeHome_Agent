@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-07-16T08:16:32.181399+00:00",
+  "generated_at": "2026-07-16T09:02:36.189707+00:00",
   "gate": "EXTERNAL_HA_MQTT_SQLITE_ACCEPTANCE",
   "passed": true,
-  "checks_total": 11,
-  "checks_passed": 11,
+  "checks_total": 12,
+  "checks_passed": 12,
   "checks_failed": 0,
   "external_acceptance": "PASS",
   "boundary": "separate process -> HA REST -> MQTT -> simulator -> SQLite -> readback, plus container restarts"

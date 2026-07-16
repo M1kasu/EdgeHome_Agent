@@ -7,6 +7,7 @@ const state = {
   rooms: [],
   roomFilter: "all",
   view: "home",
+  proactive: null,
 };
 
 const typeMeta = {
@@ -14,6 +15,8 @@ const typeMeta = {
   switch: { label: "智能开关", icon: "toggle-right", tone: "blue" },
   climate: { label: "空调", icon: "air-vent", tone: "cyan" },
   curtain: { label: "窗帘", icon: "blinds", tone: "green" },
+  presence: { label: "存在传感器", icon: "user-round-check", tone: "green" },
+  contact: { label: "门窗传感器", icon: "panel-top-open", tone: "amber" },
 };
 
 async function api(path, options = {}) {
@@ -49,25 +52,140 @@ function renderStatus(payload) {
   const healthy = Boolean(payload.healthy);
   $("#health-dot").className = `status-dot ${healthy ? "healthy" : "error"}`;
   $("#health-label").textContent = healthy ? "链路正常" : "链路异常";
-
-  const occupied = payload.presence?.state === "on";
-  const open = payload.window?.state === "on";
-  const climate = payload.climate?.state;
-  $("#presence-value").textContent = occupied ? "有人" : "无人";
-  $("#window-value").textContent = open ? "打开" : "关闭";
-  $("#climate-value").textContent = climate === "cool" ? "制冷" : climate === "heat" ? "制热" : climate === "off" ? "关闭" : text(climate);
-  $("#power-value").textContent = climate === "off" ? "0 W" : "1050 W";
-  $("#minutes-value").textContent = `${payload.unoccupied_minutes ?? 0} 分钟`;
-  $("#minutes-range").value = payload.unoccupied_minutes ?? 23;
-  $("#minutes-output").textContent = payload.unoccupied_minutes ?? 23;
-  $("#feedback-value").textContent = text(payload.feedback?.state, "未上报");
   $("#snapshot-time").textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });
-  $("#presence-visual").innerHTML = `<i data-lucide="${occupied ? "user-round-check" : "user-round-x"}"></i><span>${occupied ? "有人" : "无人"}</span>`;
-  $("#window-visual").classList.toggle("closed", !open);
-  $("#ac-visual").classList.toggle("off", climate === "off");
+  if (payload.proactive) renderProactive(payload.proactive);
   renderDecision(payload.last_response);
   renderMemory(payload.preferences || []);
   refreshIcons();
+}
+
+function renderProactive(payload) {
+  state.proactive = payload;
+  const sources = payload.sources || {};
+  const config = payload.config || {};
+  $("#active-rule-title").textContent = payload.rule_name || "主动规则信号";
+  $("#active-room-name").textContent = payload.room?.name || "未绑定";
+  $("#active-data-source").textContent = payload.data_source || "--";
+  $("#active-refresh-time").textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  const badge = $("#rule-health-badge");
+  badge.className = `source-badge ${payload.ready ? "ready" : "warning"}`;
+  badge.textContent = !config.enabled ? "规则已停用" : payload.ready ? "实时监听" : "绑定不完整";
+
+  const sourceMeta = {
+    presence: { label: "存在信号", icon: "user-round-check", value: sourceValue("presence", sources.presence) },
+    contact: { label: "门窗信号", icon: "panel-top-open", value: sourceValue("contact", sources.contact) },
+    climate: { label: "执行设备", icon: "air-vent", value: sourceValue("climate", sources.climate) },
+  };
+  $("#proactive-sources").innerHTML = Object.entries(sourceMeta).map(([role, meta]) => {
+    const source = sources[role];
+    if (!source) {
+      return `
+        <article class="signal-card missing">
+          <div class="signal-card-icon"><i data-lucide="${meta.icon}"></i></div>
+          <div><span>${meta.label}</span><strong>未绑定设备</strong><code>请在右侧选择来源</code></div>
+        </article>`;
+    }
+    const connected = source.online && source.discovered;
+    return `
+      <article class="signal-card ${connected ? "connected" : "missing"}">
+        <div class="signal-card-icon"><i data-lucide="${meta.icon}"></i></div>
+        <div class="signal-card-copy">
+          <div class="signal-card-title">
+            <span>${meta.label}</span>
+            <b>${connected ? "在线" : "异常"}</b>
+          </div>
+          <strong>${escapeHtml(meta.value)}</strong>
+          <p>${escapeHtml(source.name)}</p>
+          <code title="${escapeHtml(source.entity_id)}">${escapeHtml(source.entity_id)}</code>
+          <small>${formatTimestamp(source.updated_at)} · ${source.discovered ? "HA 已发现" : "HA 未发现"}</small>
+        </div>
+      </article>`;
+  }).join("");
+
+  const conditions = payload.conditions || [];
+  const metCount = conditions.filter((item) => item.met).length;
+  $("#condition-summary").textContent = `${metCount}/${conditions.length} 条满足`;
+  $("#proactive-conditions").innerHTML = conditions.map((condition, index) => `
+    <div class="condition-row ${condition.met ? "met" : "unmet"}">
+      <span class="condition-index">${index + 1}</span>
+      <div>
+        <strong>${escapeHtml(condition.label)}</strong>
+        <code>${escapeHtml(condition.entity_id || "无数据源")}</code>
+      </div>
+      <div class="condition-reading">
+        <span>当前 ${escapeHtml(condition.actual)}</span>
+        <small>要求 ${escapeHtml(condition.required)}</small>
+      </div>
+      <i data-lucide="${condition.met ? "circle-check" : "circle-x"}"></i>
+    </div>`).join("");
+
+  renderRuleBinding(payload);
+  if (!$("#test-occupied").matches(":focus")) {
+    $("#test-occupied").checked = Boolean(sources.presence?.state?.occupied);
+  }
+  if (!$("#test-window-open").matches(":focus")) {
+    $("#test-window-open").checked = Boolean(sources.contact?.state?.open);
+  }
+  if (!$("#test-climate-mode").matches(":focus")) {
+    $("#test-climate-mode").value = sources.climate?.state?.mode || "off";
+  }
+  if (!$("#minutes-range").matches(":focus") && !sources.presence?.state?.occupied) {
+    $("#minutes-range").value = payload.unoccupied_minutes ?? 0;
+    $("#minutes-output").textContent = payload.unoccupied_minutes ?? 0;
+  }
+}
+
+function sourceValue(role, source) {
+  if (!source) return "无数据";
+  if (role === "presence") return source.state?.occupied ? "有人" : `无人 ${state.proactive?.unoccupied_minutes ?? 0} 分钟`;
+  if (role === "contact") return source.state?.open ? "窗户打开" : "窗户关闭";
+  const mode = source.state?.mode;
+  return mode === "cool" ? "制冷运行" : mode === "heat" ? "制热运行" : mode === "off" ? "已关闭" : text(mode);
+}
+
+function formatTimestamp(value) {
+  if (!value) return "未上报";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.valueOf())
+    ? text(value)
+    : parsed.toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+function renderRuleBinding(payload) {
+  const config = payload.config || {};
+  $("#rule-enabled").checked = Boolean(config.enabled);
+  $("#save-rule").classList.remove("attention");
+  populateSelect(
+    $("#rule-room"),
+    (payload.available_rooms || []).map((room) => ({ value: room.room, label: `${room.name} · ${room.devices} 台设备` })),
+    config.room,
+  );
+  populateRuleDeviceSelects(config.room, config);
+}
+
+function populateRuleDeviceSelects(room, config = {}) {
+  const available = state.proactive?.available_devices || {};
+  [
+    ["#rule-presence-device", "presence", config.presence_device_id],
+    ["#rule-contact-device", "contact", config.contact_device_id],
+    ["#rule-climate-device", "climate", config.climate_device_id],
+  ].forEach(([selector, type, selected]) => {
+    const options = (available[type] || [])
+      .filter((device) => device.room === room)
+      .map((device) => ({
+        value: device.device_id,
+        label: `${device.name}${device.discovered ? "" : " · 未发现"}`,
+      }));
+    populateSelect($(selector), options, selected);
+  });
+}
+
+function populateSelect(element, options, selected) {
+  const requested = document.activeElement === element ? element.value : selected;
+  element.innerHTML = options.length
+    ? options.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join("")
+    : `<option value="">当前空间无可用设备</option>`;
+  if (options.some((option) => option.value === requested)) element.value = requested;
 }
 
 function renderDecision(response) {
@@ -86,6 +204,8 @@ function renderDecision(response) {
     execution_failed: ["failure", "执行未验证"],
     cancelled: ["idle", "已取消"],
     ignored: ["idle", "未触发"],
+    disabled: ["idle", "规则已停用"],
+    no_pending_plan: ["idle", "没有待执行计划"],
     unhandled: ["idle", "未识别"],
   };
   const [className, label] = map[response.status] || ["idle", text(response.status)];
@@ -204,7 +324,7 @@ function renderDeviceCard(device) {
       <label class="fault-control">
         <span>故障模式</span>
         <select data-device-fault>
-          ${faultOptions(device.fault_mode)}
+          ${faultOptions(device.fault_mode, ["presence", "contact"].includes(device.type))}
         </select>
       </label>
     </article>`;
@@ -246,6 +366,34 @@ function renderDeviceControls(device) {
         <output>${position}%</output>
       </label>`;
   }
+  if (device.type === "presence") {
+    const occupied = Boolean(deviceState.occupied);
+    return `
+      <div class="sensor-control">
+        <div>
+          <span>空间占用上报</span>
+          <strong>${occupied ? "有人" : "无人"}</strong>
+        </div>
+        <button class="sensor-state-button ${occupied ? "active" : ""}" data-device-action="sensor-toggle">
+          <i data-lucide="${occupied ? "user-round-check" : "user-round-x"}"></i>
+          <span>${occupied ? "切换为无人" : "切换为有人"}</span>
+        </button>
+      </div>`;
+  }
+  if (device.type === "contact") {
+    const open = Boolean(deviceState.open);
+    return `
+      <div class="sensor-control">
+        <div>
+          <span>门窗状态上报</span>
+          <strong>${open ? "打开" : "关闭"}</strong>
+        </div>
+        <button class="sensor-state-button ${open ? "active" : ""}" data-device-action="sensor-toggle">
+          <i data-lucide="${open ? "panel-top-open" : "panel-top-close"}"></i>
+          <span>${open ? "上报关闭" : "上报打开"}</span>
+        </button>
+      </div>`;
+  }
   const mode = String(deviceState.mode || "off");
   const temperature = Number(deviceState.temperature || 24);
   return `
@@ -280,19 +428,32 @@ function deviceStateSummary(device) {
   if (device.type === "curtain") {
     return { primary: `${Number(value.position || 0)}%`, secondary: value.status === "open" ? "已打开" : value.status === "closed" ? "已关闭" : text(value.status) };
   }
+  if (device.type === "presence") {
+    return {
+      primary: value.occupied ? "检测到有人" : "空间无人",
+      secondary: value.occupied ? "占用状态 ON" : `起始 ${formatTimestamp(value.unoccupied_since)}`,
+    };
+  }
+  if (device.type === "contact") {
+    return { primary: value.open ? "窗户打开" : "窗户关闭", secondary: value.open ? "状态 ON" : "状态 OFF" };
+  }
   const mode = value.mode === "cool" ? "制冷" : value.mode === "heat" ? "制热" : "已关闭";
   return { primary: mode, secondary: `设定 ${Number(value.temperature || 24)}°C · 室温 ${Number(value.current_temperature || 0)}°C` };
 }
 
-function faultOptions(selected) {
-  return [
+function faultOptions(selected, sensor = false) {
+  const options = sensor ? [
+    ["none", "正常"],
+    ["offline", "离线"],
+  ] : [
     ["none", "正常"],
     ["offline", "离线"],
     ["reject", "拒绝命令"],
     ["delay", "响应延迟"],
     ["ack_without_state_change", "ACK 不变"],
     ["invalid_state", "无效状态"],
-  ].map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
+  ];
+  return options.map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
 }
 
 async function loadStatus() {
@@ -392,6 +553,14 @@ async function handleDeviceClick(event) {
     await controlDevice(device, body);
     return;
   }
+  if (action === "sensor-toggle") {
+    const body = device.type === "presence"
+      ? { occupied: !Boolean(device.state?.occupied) }
+      : { open: !Boolean(device.state?.open) };
+    await controlDevice(device, body, "传感器状态已上报");
+    await loadStatus();
+    return;
+  }
   if (action === "climate-mode") {
     const temperature = Number($("[data-device-temperature]", card)?.value || 24);
     await controlDevice(device, { mode: actionButton.dataset.mode, temperature });
@@ -444,7 +613,11 @@ async function addDevice(event) {
       ? { power: power.toUpperCase(), power_w: power === "on" ? 95 : 1.5 }
       : type === "climate"
         ? { mode: power === "on" ? "cool" : "off", temperature: 24, current_temperature: 26 }
-        : { position: power === "on" ? 100 : 0, target_position: power === "on" ? 100 : 0, status: power === "on" ? "open" : "closed" };
+        : type === "curtain"
+          ? { position: power === "on" ? 100 : 0, target_position: power === "on" ? 100 : 0, status: power === "on" ? "open" : "closed" }
+          : type === "presence"
+            ? { occupied: power === "on" }
+            : { open: power === "on" };
   $("#submit-add-device").disabled = true;
   try {
     const payload = await api("/api/devices", {
@@ -496,15 +669,37 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#minutes-range").addEventListener("input", (event) => {
     $("#minutes-output").textContent = event.target.value;
   });
+  $("#rule-room").addEventListener("change", (event) => {
+    populateRuleDeviceSelects(event.target.value, {});
+  });
+  $("#save-rule").addEventListener("click", () => post(
+    "/api/proactive/config",
+    {
+      enabled: $("#rule-enabled").checked,
+      room: $("#rule-room").value,
+      presence_device_id: $("#rule-presence-device").value,
+      contact_device_id: $("#rule-contact-device").value,
+      climate_device_id: $("#rule-climate-device").value,
+    },
+    "主动规则设备绑定已保存",
+  ));
+  $("#rule-enabled").addEventListener("change", () => {
+    $("#save-rule").classList.add("attention");
+  });
   $("#reset-scene").addEventListener("click", () => post(
     "/api/scene/reset",
-    { unoccupied_minutes: Number($("#minutes-range").value) },
-    "节能条件已重置",
+    {
+      occupied: $("#test-occupied").checked,
+      window_open: $("#test-window-open").checked,
+      climate_mode: $("#test-climate-mode").value,
+      unoccupied_minutes: Number($("#minutes-range").value),
+    },
+    "测试状态已写入设备侧并完成回读",
   ));
   $("#observe-scene").addEventListener("click", () => post(
     "/api/observe",
-    { unoccupied_minutes: Number($("#minutes-range").value) },
-    "主动分析完成",
+    {},
+    "已读取当前设备状态并完成主动分析",
   ));
   $("#confirm-action").addEventListener("click", () => post("/api/message", { text: "确认" }, "确认已发送"));
   $("#clear-memory").addEventListener("click", () => post("/api/preferences/clear", {}, "偏好已清空"));

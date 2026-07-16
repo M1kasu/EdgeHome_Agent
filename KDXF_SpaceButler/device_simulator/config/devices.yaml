@@ -46,6 +46,25 @@ devices:
     behavior:
       command_delay_ms: 200
       failure_rate: 0
+  living_room_presence_sensor:
+    type: presence
+    name: 客厅人体存在传感器
+    room: living_room
+    initial_state:
+      occupied: false
+      unoccupied_minutes: 23
+    behavior:
+      command_delay_ms: 0
+      failure_rate: 0
+  living_room_window_sensor:
+    type: contact
+    name: 客厅窗户传感器
+    room: living_room
+    initial_state:
+      open: true
+    behavior:
+      command_delay_ms: 0
+      failure_rate: 0
   living_room_tv:
     type: switch
     name: 客厅电视
