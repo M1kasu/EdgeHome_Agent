@@ -26,6 +26,7 @@ from spacebutler import (  # noqa: E402
     HomeAssistantClient,
     HomeAssistantRuntime,
     HomeAssistantSpaceAdapter,
+    HouseholdMemory,
     SpaceButlerAgent,
     SpaceButlerSession,
 )
@@ -39,6 +40,12 @@ DEVICE_DB = Path(
     os.getenv(
         "SPACEBUTLER_DEVICE_DB",
         str(ROOT / "deployment" / "runtime" / "device-simulator" / "device_state.db"),
+    )
+)
+MEMORY_DB = Path(
+    os.getenv(
+        "SPACEBUTLER_MEMORY_DB",
+        str(ROOT / "deployment" / "runtime" / "agent" / "household_memory.db"),
     )
 )
 TOKEN = os.environ["HA_TOKEN"]
@@ -84,7 +91,9 @@ def main() -> int:
     try:
         _prepare_healthy_scene(client)
         with MqttCapture() as mqtt_capture:
-            agent = SpaceButlerAgent()
+            memory = HouseholdMemory(MEMORY_DB)
+            memory.clear()
+            agent = SpaceButlerAgent(memory)
             session = SpaceButlerSession(
                 agent,
                 HomeAssistantRuntime(client, verification_timeout_seconds=5),
@@ -126,8 +135,9 @@ def main() -> int:
 
             learned = session.user_message("household", "以后这种情况直接执行")
             _prepare_healthy_scene(client)
+            reconstructed_agent = SpaceButlerAgent(HouseholdMemory(MEMORY_DB))
             second = SpaceButlerSession(
-                agent,
+                reconstructed_agent,
                 HomeAssistantRuntime(client, verification_timeout_seconds=5),
             ).observe(adapter.capture_energy_snapshot(unoccupied_minutes=23))
             _wait_for(lambda: _simulator_device()["state"]["mode"] == "off", 10, "learned auto execution")
@@ -139,7 +149,10 @@ def main() -> int:
                         and second.status == "executed"
                         and second.report is not None
                         and second.report.verified
+                        and len(reconstructed_agent.memory.export_preferences()) == 1
                     ),
+                    "reconstructed_agent": True,
+                    "memory_database_exists": MEMORY_DB.exists(),
                     "learned": to_jsonable(learned),
                     "second": to_jsonable(second),
                 }
@@ -289,4 +302,3 @@ def to_jsonable(value: object) -> object:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

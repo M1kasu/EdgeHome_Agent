@@ -18,8 +18,9 @@ def wait_until_ready(base_url: str, timeout_seconds: float = 120) -> None:
     stable_since: float | None = None
     while time.monotonic() < deadline:
         try:
-            response = request_json("GET", f"{base_url.rstrip('/')}/api/onboarding")
-            if isinstance(response, list):
+            with urlopen(f"{base_url.rstrip('/')}/", timeout=2) as response:
+                ready = response.status == 200
+            if ready:
                 stable_since = stable_since or time.monotonic()
                 if time.monotonic() - stable_since >= 5:
                     return
@@ -41,6 +42,10 @@ def obtain_token(base_url: str, auth_store: Path) -> str:
         except RuntimeError:
             pass
     base_url = base_url.rstrip("/")
+    try:
+        return exchange_refresh_token_from_store(base_url, auth_store)
+    except RuntimeError:
+        pass
     steps = request_json("GET", f"{base_url}/api/onboarding")
     if not isinstance(steps, list):
         raise RuntimeError("invalid Home Assistant onboarding response")

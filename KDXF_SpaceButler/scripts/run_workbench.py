@@ -1,0 +1,55 @@
+"""Run the local SpaceButler control workbench."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import sys
+from urllib.request import urlopen
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ha_bootstrap import obtain_token, wait_until_ready  # noqa: E402
+from spacebutler import EdgeLanguageRouter, EdgeLlmClient, HomeAssistantClient, HouseholdMemory  # noqa: E402
+from spacebutler.workbench import WorkbenchController, serve_workbench  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8765)
+    args = parser.parse_args()
+    ha_url = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:8900")
+    simulator_url = os.getenv("SPACEBUTLER_SIMULATOR_URL", "http://127.0.0.1:8091")
+    edge_llm_url = os.getenv("EDGE_LLM_URL", "http://127.0.0.1:8081")
+    wait_until_ready(ha_url, timeout_seconds=120)
+    token = obtain_token(ha_url, ROOT / "deployment" / "homeassistant" / ".storage" / "auth")
+    language_router = None
+    try:
+        with urlopen(f"{edge_llm_url.rstrip('/')}/health", timeout=3) as response:
+            if response.status == 200:
+                language_router = EdgeLanguageRouter(EdgeLlmClient(edge_llm_url, timeout_seconds=60))
+    except OSError:
+        pass
+    controller = WorkbenchController(
+        HomeAssistantClient(ha_url, token),
+        simulator_url,
+        HouseholdMemory(ROOT / "deployment" / "runtime" / "agent" / "household_memory.db"),
+        language_router,
+    )
+    server = serve_workbench(controller, ROOT / "workbench", args.host, args.port)
+    print(f"SpaceButler workbench: http://{args.host}:{args.port}", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

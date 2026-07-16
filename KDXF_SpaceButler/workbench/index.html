@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SpaceButler 控制台</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/vendor/lucide.min.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-block">
+      <div class="brand-mark"><i data-lucide="house-plug"></i></div>
+      <div>
+        <h1>SpaceButler 控制台</h1>
+        <p>客厅主动节能闭环</p>
+      </div>
+    </div>
+    <div class="health-strip" aria-label="服务状态">
+      <span class="status-dot" id="health-dot"></span>
+      <span id="health-label">连接中</span>
+      <span class="divider"></span>
+      <span>HA :8900</span>
+      <span>MQTT :1884</span>
+      <span>Edge LLM :8080</span>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <nav class="rail" aria-label="工作台导航">
+      <button class="rail-button active" title="空间状态"><i data-lucide="layout-dashboard"></i></button>
+      <button class="rail-button" title="执行事件" id="refresh-events"><i data-lucide="list-tree"></i></button>
+      <button class="rail-button" title="刷新" id="refresh-status"><i data-lucide="refresh-cw"></i></button>
+    </nav>
+
+    <section class="content">
+      <div class="metric-grid">
+        <article class="metric">
+          <div class="metric-icon green"><i data-lucide="users"></i></div>
+          <div><span>客厅占用</span><strong id="presence-value">--</strong></div>
+        </article>
+        <article class="metric">
+          <div class="metric-icon amber"><i data-lucide="panels-top-left"></i></div>
+          <div><span>窗户</span><strong id="window-value">--</strong></div>
+        </article>
+        <article class="metric">
+          <div class="metric-icon blue"><i data-lucide="snowflake"></i></div>
+          <div><span>空调</span><strong id="climate-value">--</strong></div>
+        </article>
+        <article class="metric">
+          <div class="metric-icon red"><i data-lucide="zap"></i></div>
+          <div><span>估算功率</span><strong id="power-value">--</strong></div>
+        </article>
+      </div>
+
+      <div class="main-grid">
+        <section class="panel scene-panel">
+          <div class="panel-heading">
+            <div><span class="eyebrow">SPACE SNAPSHOT</span><h2>空间状态</h2></div>
+            <span class="timestamp" id="snapshot-time">--</span>
+          </div>
+          <div class="scene-visual">
+            <div class="room-map">
+              <div class="window-visual" id="window-visual"><i data-lucide="panel-top-open"></i><span>窗户</span></div>
+              <div class="ac-visual" id="ac-visual"><i data-lucide="air-vent"></i><span>客厅空调</span></div>
+              <div class="presence-visual" id="presence-visual"><i data-lucide="user-round-x"></i><span>无人</span></div>
+              <div class="room-label">LIVING ROOM</div>
+            </div>
+            <div class="condition-list">
+              <div><span>连续无人</span><strong id="minutes-value">23 分钟</strong></div>
+              <div><span>设备状态源</span><strong>HA + MQTT</strong></div>
+              <div><span>状态持久化</span><strong>SQLite</strong></div>
+              <div><span>协议反馈</span><strong id="feedback-value">--</strong></div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="panel control-panel">
+          <div class="panel-heading">
+            <div><span class="eyebrow">SCENARIO</span><h2>场景控制</h2></div>
+            <button class="icon-button" id="clear-memory" title="清空偏好"><i data-lucide="database-zap"></i></button>
+          </div>
+          <label class="field-label" for="minutes-range">连续无人时长</label>
+          <div class="range-row">
+            <input id="minutes-range" type="range" min="0" max="60" step="1" value="23">
+            <output id="minutes-output">23</output><span>分钟</span>
+          </div>
+          <label class="field-label" for="fault-mode">设备故障</label>
+          <select id="fault-mode">
+            <option value="none">正常</option>
+            <option value="ack_without_state_change">ACK 状态不变</option>
+            <option value="reject">设备拒绝</option>
+            <option value="delay">响应延迟</option>
+            <option value="offline">设备离线</option>
+          </select>
+          <div class="button-grid">
+            <button class="secondary" id="reset-scene"><i data-lucide="rotate-ccw"></i><span>重置场景</span></button>
+            <button class="primary" id="observe-scene"><i data-lucide="scan-eye"></i><span>主动分析</span></button>
+          </div>
+          <button class="confirm-button" id="confirm-action"><i data-lucide="circle-check-big"></i><span>确认执行</span></button>
+          <form class="feedback-form" id="feedback-form">
+            <input id="feedback-input" type="text" maxlength="500" placeholder="输入确认、取消或偏好反馈" autocomplete="off">
+            <button type="submit" title="发送"><i data-lucide="send-horizontal"></i></button>
+          </form>
+        </aside>
+
+        <section class="panel decision-panel">
+          <div class="panel-heading">
+            <div><span class="eyebrow">AGENT DECISION</span><h2>主动服务</h2></div>
+            <span class="decision-status idle" id="decision-status">等待分析</span>
+          </div>
+          <div class="decision-body" id="decision-body">
+            <div class="empty-state"><i data-lucide="sparkles"></i><span>尚无主动服务计划</span></div>
+          </div>
+        </section>
+
+        <section class="panel memory-panel">
+          <div class="panel-heading">
+            <div><span class="eyebrow">HOUSEHOLD MEMORY</span><h2>家庭偏好</h2></div>
+            <span class="count-badge" id="memory-count">0</span>
+          </div>
+          <div id="memory-list" class="memory-list">
+            <div class="empty-state compact"><span>暂无偏好</span></div>
+          </div>
+        </section>
+
+        <section class="panel events-panel">
+          <div class="panel-heading">
+            <div><span class="eyebrow">EXECUTION TRACE</span><h2>设备事件</h2></div>
+            <button class="icon-button" id="events-reload" title="刷新事件"><i data-lucide="refresh-cw"></i></button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>时间</th><th>事件</th><th>设备</th><th>请求</th></tr></thead>
+              <tbody id="events-body"><tr><td colspan="4">加载中</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status"></div>
+</body>
+</html>

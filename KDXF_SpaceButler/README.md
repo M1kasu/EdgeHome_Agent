@@ -12,11 +12,14 @@ SpaceButler 是面向科大讯飞 SpaceMind 家庭应用场景赛题的 AI Agent
 
 - 统一空间状态 `SpatialSnapshot`：成员位置、活动、设备、环境、时间段。
 - 家庭记忆 `HouseholdMemory`：显式反馈写入偏好，按成员和场景召回。
+- SQLite 持久化记忆：Agent 重建后仍能召回用户授权和节能等待阈值。
 - 主动服务引擎 `ProactiveServiceEngine`：返家舒适、夜间老人安全、舒适节能平衡、多成员冲突调和。
 - 计划编排 `SpaceButlerAgent`：输入空间快照，输出可解释 `ServicePlan`。
 - 主动节能闭环：客厅连续无人、窗户打开、空调运行且功率偏高时，首次建议确认，执行后四路回读；用户授权后同类场景自动执行。
 - 真实执行底座：独立 Docker Compose、Home Assistant REST、MQTT Discovery、设备模拟器和 SQLite 设备状态。
 - 故障防护：设备拒绝、ACK 但状态不变、延迟、离线、超时和多动作部分成功均不误报为全部成功。
+- 边缘语言路由：调用 llama.cpp 理解自然语言偏好，模型候选必须通过字段白名单和范围校验。
+- 现场工作台：场景重置、主动分析、确认执行、故障注入、偏好清除和事件追踪。
 
 ## 快速运行
 
@@ -32,6 +35,14 @@ python scripts\run_iteration.py
 python -m spacebutler.demo
 ```
 
+启动现场工作台：
+
+```powershell
+python scripts\run_workbench.py --port 8765
+```
+
+浏览器打开 `http://127.0.0.1:8765`。工作台使用项目内置前端资源，不依赖公网 CDN；Home Assistant Token 仅保留在服务端。
+
 ## 外部验收
 
 Docker Desktop 运行时执行：
@@ -40,4 +51,6 @@ Docker Desktop 运行时执行：
 python scripts\run_external_acceptance.py
 ```
 
-该门禁在独立进程中验证 `Agent -> Home Assistant REST -> MQTT -> device-simulator -> SQLite -> MQTT/HA 回读`，报告写入 `reports/external/`。也可用 `python scripts\run_iteration.py --external` 同时执行本地回归与外部门禁。
+将 `Home-Llama-3.2-3B.q4_k_m.gguf` 放入 `deployment/models/`，或通过 `SPACEBUTLER_MODELS_DIR` 指向模型目录。当前工作区存在旧项目模型时，验收脚本会迁移复用该 GGUF 制品，但始终启动 KDXF 自己的 llama.cpp 容器。
+
+该门禁在独立进程中验证 `Agent -> Home Assistant REST -> MQTT -> device-simulator -> SQLite -> MQTT/HA 回读`，并覆盖服务重启、KDXF Compose llama.cpp 路由和工作台 API。报告写入 `reports/external/`。也可用 `python scripts\run_iteration.py --external` 同时执行本地回归与外部门禁。

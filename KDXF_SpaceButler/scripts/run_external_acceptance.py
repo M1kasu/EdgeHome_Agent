@@ -19,6 +19,8 @@ if str(ROOT) not in sys.path:
 COMPOSE = ROOT / "deployment" / "docker-compose.yml"
 HA_URL = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:8900")
 SIMULATOR_URL = os.getenv("SPACEBUTLER_SIMULATOR_URL", "http://127.0.0.1:8091")
+EDGE_LLM_URL = os.getenv("EDGE_LLM_URL", "http://127.0.0.1:8081")
+MODEL_FILENAME = "Home-Llama-3.2-3B.q4_k_m.gguf"
 
 
 def main() -> int:
@@ -30,8 +32,41 @@ def main() -> int:
     docker = _run(["docker", "version", "--format", "{{.Server.Version}}"], timeout=30)
     results.append(docker)
     if docker["returncode"] == 0:
-        compose = _run(["docker", "compose", "-f", str(COMPOSE), "up", "-d", "--build"], timeout=180)
-        results.append(compose)
+        try:
+            models_dir = _resolve_models_dir()
+            compose_environment = os.environ.copy()
+            compose_environment["SPACEBUTLER_MODELS_DIR"] = str(models_dir)
+            results.append(
+                {
+                    "command": ["resolve_edge_llm_model", str(models_dir / MODEL_FILENAME)],
+                    "returncode": 0,
+                }
+            )
+            compose = _run(
+                [
+                    "docker",
+                    "compose",
+                    "-f",
+                    str(COMPOSE),
+                    "--profile",
+                    "edge-llm",
+                    "up",
+                    "-d",
+                    "--build",
+                ],
+                timeout=240,
+                environment=compose_environment,
+            )
+            results.append(compose)
+        except RuntimeError as error:
+            compose = {"returncode": 1}
+            results.append(
+                {
+                    "command": ["resolve_edge_llm_model", MODEL_FILENAME],
+                    "returncode": 1,
+                    "stderr": str(error),
+                }
+            )
     else:
         compose = {"returncode": 1}
 
@@ -64,10 +99,36 @@ def main() -> int:
             environment=environment,
         )
         results.append(acceptance)
+        if acceptance["returncode"] == 0:
+            restart_acceptance = _run(
+                [sys.executable, str(ROOT / "scripts" / "accept_restart_recovery_external.py")],
+                timeout=300,
+                environment=environment,
+            )
+            results.append(restart_acceptance)
+            if restart_acceptance["returncode"] == 0:
+                edge_llm_health = _edge_llm_health()
+                results.append(edge_llm_health)
+                if edge_llm_health["returncode"] == 0:
+                    environment["EDGE_LLM_URL"] = EDGE_LLM_URL
+                    edge_llm_acceptance = _run(
+                        [sys.executable, str(ROOT / "scripts" / "accept_edge_llm_routing_external.py")],
+                        timeout=120,
+                        environment=environment,
+                    )
+                    results.append(edge_llm_acceptance)
+                    if edge_llm_acceptance["returncode"] == 0:
+                        results.extend(_run_workbench_gate(environment))
 
     failures = [item for item in results if item.get("returncode") != 0]
-    passed = bool(results) and not failures and any(
-        "accept_ha_mqtt_energy_external.py" in " ".join(map(str, item.get("command", []))) for item in results
+    command_lines = [" ".join(map(str, item.get("command", []))) for item in results]
+    passed = (
+        bool(results)
+        and not failures
+        and any("accept_ha_mqtt_energy_external.py" in command for command in command_lines)
+        and any("accept_restart_recovery_external.py" in command for command in command_lines)
+        and any("accept_edge_llm_routing_external.py" in command for command in command_lines)
+        and any("accept_workbench_external.py" in command for command in command_lines)
     )
     (report_dir / "test_results.json").write_text(
         json.dumps(results, ensure_ascii=False, indent=2),
@@ -85,7 +146,7 @@ def main() -> int:
         "checks_passed": len(results) - len(failures),
         "checks_failed": len(failures),
         "external_acceptance": "PASS" if passed else "FAIL",
-        "boundary": "separate_process -> Home Assistant REST -> MQTT -> device simulator -> SQLite -> MQTT/HA readback",
+        "boundary": "separate process -> HA REST -> MQTT -> simulator -> SQLite -> readback, plus container restarts",
     }
     (report_dir / "scorecard.json").write_text(
         json.dumps(scorecard, ensure_ascii=False, indent=2),
@@ -141,6 +202,111 @@ def _wait_for_climate(token: str, timeout_seconds: float) -> None:
             pass
         time.sleep(0.5)
     raise TimeoutError("MQTT climate entity was not discovered by Home Assistant")
+
+
+def _edge_llm_health(timeout_seconds: float = 120) -> dict[str, object]:
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "edge LLM did not become healthy"
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(f"{EDGE_LLM_URL.rstrip('/')}/health", timeout=5) as response:
+                payload = response.read().decode("utf-8", errors="replace")
+            if response.status == 200:
+                return {
+                    "command": ["edge_llm_health", EDGE_LLM_URL],
+                    "returncode": 0,
+                    "stdout": payload,
+                    "stderr": "",
+                }
+            last_error = f"edge LLM returned HTTP {response.status}"
+        except OSError as error:
+            last_error = str(error)
+        time.sleep(1)
+    return {
+        "command": ["edge_llm_health", EDGE_LLM_URL],
+        "returncode": 1,
+        "stdout": "",
+        "stderr": last_error,
+    }
+
+
+def _resolve_models_dir() -> Path:
+    configured = os.getenv("SPACEBUTLER_MODELS_DIR")
+    candidates = (
+        [Path(configured).expanduser()]
+        if configured
+        else [
+            ROOT / "deployment" / "models",
+            ROOT.parent / "EdgeHome_Agent" / "deployment" / "models",
+        ]
+    )
+    for candidate in candidates:
+        model = candidate / MODEL_FILENAME
+        if model.is_file():
+            return candidate.resolve()
+    searched = ", ".join(str(candidate / MODEL_FILENAME) for candidate in candidates)
+    raise RuntimeError(f"edge LLM model not found; searched: {searched}")
+
+
+def _run_workbench_gate(environment: dict[str, str]) -> list[dict[str, object]]:
+    workbench_environment = environment.copy()
+    workbench_environment["SPACEBUTLER_WORKBENCH_URL"] = "http://127.0.0.1:8766"
+    process = subprocess.Popen(
+        [sys.executable, str(ROOT / "scripts" / "run_workbench.py"), "--port", "8766"],
+        cwd=ROOT,
+        env=workbench_environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    startup_result: dict[str, object]
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                break
+            try:
+                with urlopen("http://127.0.0.1:8766/api/status", timeout=2) as response:
+                    if response.status == 200:
+                        startup_result = {
+                            "command": ["run_workbench.py", "--port", "8766"],
+                            "returncode": 0,
+                            "stdout": "workbench ready",
+                            "stderr": "",
+                        }
+                        acceptance = _run(
+                            [sys.executable, str(ROOT / "scripts" / "accept_workbench_external.py")],
+                            timeout=120,
+                            environment=workbench_environment,
+                        )
+                        return [startup_result, acceptance]
+            except OSError:
+                pass
+            time.sleep(0.5)
+        if process.poll() is None:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5)
+        startup_result = {
+            "command": ["run_workbench.py", "--port", "8766"],
+            "returncode": process.returncode if process.returncode is not None else 1,
+            "stdout": stdout,
+            "stderr": stderr or "workbench did not become ready",
+        }
+        return [startup_result]
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
 
 
 def _obtain_token_with_retry(timeout_seconds: float) -> str:

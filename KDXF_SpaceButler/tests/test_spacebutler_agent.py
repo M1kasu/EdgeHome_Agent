@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from spacebutler import (
     DeviceState,
+    EdgeLanguageRouter,
     EnvironmentState,
     ExecutionStatus,
     HouseholdMember,
+    HouseholdMemory,
     InMemoryHomeRuntime,
     MemberRole,
     PlanAction,
@@ -160,6 +164,89 @@ class SpaceButlerAgentTest(unittest.TestCase):
         plans = agent.observe_and_plan(snapshot)
 
         self.assertFalse(any(plan.plan_id == "empty_room_open_window_energy_guard" for plan in plans))
+
+    def test_energy_feedback_survives_agent_reconstruction_from_sqlite(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "household_memory.db"
+            first_memory = HouseholdMemory(database_path)
+            first_memory.apply_energy_feedback("household", "以后这种情况直接执行")
+
+            reconstructed_agent = SpaceButlerAgent(HouseholdMemory(database_path))
+            devices = (
+                DeviceState("climate.living_room_ac", "climate", "living_room", "cool", {"power_w": 1000}),
+                DeviceState("window.living_room_window", "window", "living_room", "open"),
+            )
+            snapshot = SpatialSnapshot(
+                scene="daily",
+                time_of_day="afternoon",
+                members=(),
+                environment=EnvironmentState(27, 34, 62, 500, 18),
+                devices=devices,
+                rooms=(
+                    RoomState(
+                        "living_room",
+                        occupied=False,
+                        unoccupied_minutes=25,
+                        window_state="open",
+                        power_w=1000,
+                    ),
+                ),
+            )
+
+            response = SpaceButlerSession(
+                reconstructed_agent,
+                InMemoryHomeRuntime(devices),
+            ).observe(snapshot)
+
+            self.assertEqual(response.status, "executed")
+            self.assertTrue(response.report.verified if response.report else False)
+            preferences = reconstructed_agent.memory.export_preferences()
+            self.assertEqual(len(preferences), 1)
+            self.assertEqual(preferences[0].sample_count, 1)
+
+    def test_validated_edge_llm_feedback_updates_only_allowed_preference(self) -> None:
+        class FakeEdgeClient:
+            def classify_energy_feedback(self, _text: str) -> dict[str, object]:
+                return {"intent": "set_unoccupied_minutes", "minutes": 40, "action": "turn_off"}
+
+        memory = HouseholdMemory()
+        routed = EdgeLanguageRouter(FakeEdgeClient()).apply_energy_feedback(
+            memory,
+            "household",
+            "等客厅没人待够四十分钟再帮我处理空调。",
+        )
+
+        self.assertEqual(routed.route.value, "edge_llm")
+        self.assertEqual(routed.learned, "learned_unoccupied_40")
+        self.assertEqual(memory.recall_number("household", "empty_room_open_window_energy_guard", "unoccupied_minutes", 20), 40)
+        self.assertEqual(memory.export_preferences()[0].source, "edge_llm_validated")
+
+    def test_edge_llm_out_of_range_minutes_is_rejected(self) -> None:
+        class InvalidEdgeClient:
+            def classify_energy_feedback(self, _text: str) -> dict[str, object]:
+                return {"intent": "set_unoccupied_minutes", "minutes": 999}
+
+        memory = HouseholdMemory()
+        routed = EdgeLanguageRouter(InvalidEdgeClient()).apply_energy_feedback(memory, "household", "模型候选")
+
+        self.assertEqual(routed.route.value, "fallback")
+        self.assertEqual(memory.export_preferences(), [])
+
+    def test_malformed_edge_llm_output_falls_back_without_learning(self) -> None:
+        class MalformedEdgeClient:
+            def classify_energy_feedback(self, _text: str) -> dict[str, object]:
+                raise ValueError("invalid JSON")
+
+        memory = HouseholdMemory()
+        routed = EdgeLanguageRouter(MalformedEdgeClient()).apply_energy_feedback(
+            memory,
+            "household",
+            "随便处理一下",
+        )
+
+        self.assertEqual(routed.route.value, "fallback")
+        self.assertEqual(routed.learned, "no_structured_energy_feedback")
+        self.assertEqual(memory.export_preferences(), [])
 
     def test_command_ack_without_state_change_is_validation_failed(self) -> None:
         agent = SpaceButlerAgent()

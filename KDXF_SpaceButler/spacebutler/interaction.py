@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .agent import SpaceButlerAgent
+from .edge_language import EdgeLanguageRouter
 from .models import ExecutionReport, ServicePlan, SpatialSnapshot
 from .runtime import HomeRuntime, execute_and_verify
 
@@ -16,16 +17,23 @@ class InteractionResponse:
     plan: ServicePlan | None = None
     report: ExecutionReport | None = None
     learned: str | None = None
+    route: str | None = None
 
 
 class SpaceButlerSession:
     """Small stateful shell around the Agent for black-box scenario acceptance."""
 
-    def __init__(self, agent: SpaceButlerAgent, runtime: HomeRuntime) -> None:
+    def __init__(
+        self,
+        agent: SpaceButlerAgent,
+        runtime: HomeRuntime,
+        language_router: EdgeLanguageRouter | None = None,
+    ) -> None:
         self._agent = agent
         self._runtime = runtime
         self._pending_plan: ServicePlan | None = None
         self._last_report: ExecutionReport | None = None
+        self._language_router = language_router
 
     def observe(self, snapshot: SpatialSnapshot) -> InteractionResponse:
         plans = self._agent.observe_and_plan(snapshot)
@@ -66,10 +74,25 @@ class SpaceButlerSession:
         if normalized in {"拒绝", "不用", "取消", "先别关"}:
             self._pending_plan = None
             return InteractionResponse(status="cancelled", message="已取消本次主动节能建议。")
-        learned = self._agent.memory.apply_energy_feedback(member_id, text)
+        route = None
+        if self._language_router is None:
+            learned = self._agent.memory.apply_energy_feedback(member_id, text)
+        else:
+            routed = self._language_router.apply_energy_feedback(self._agent.memory, member_id, text)
+            learned = routed.learned
+            route = routed.route.value
         if learned != "no_structured_energy_feedback":
-            return InteractionResponse(status="learned", message="已记录这条节能偏好。", learned=learned)
-        return InteractionResponse(status="unhandled", message="暂未识别为确认、取消或节能偏好反馈。")
+            return InteractionResponse(
+                status="learned",
+                message="已记录这条节能偏好。",
+                learned=learned,
+                route=route,
+            )
+        return InteractionResponse(
+            status="unhandled",
+            message="暂未识别为确认、取消或节能偏好反馈。",
+            route=route,
+        )
 
     @property
     def last_report(self) -> ExecutionReport | None:

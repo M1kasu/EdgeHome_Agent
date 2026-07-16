@@ -1,6 +1,7 @@
 """SpaceButler core package for the KDXF SpaceMind challenge."""
 
 from .agent import SpaceButlerAgent
+from .edge_language import EdgeLanguageRouter, EdgeLlmClient, LanguageRoute, LanguageRouteResult
 from .interaction import InteractionResponse, SpaceButlerSession
 from .home_assistant import EnergyEntityMap, HomeAssistantClient, HomeAssistantRuntime, HomeAssistantSpaceAdapter
 from .memory import HouseholdMemory
@@ -23,6 +24,8 @@ __all__ = [
     "DeviceState",
     "EnvironmentState",
     "EnergyEntityMap",
+    "EdgeLanguageRouter",
+    "EdgeLlmClient",
     "ExecutionReport",
     "ExecutionStatus",
     "HouseholdMember",
@@ -32,6 +35,8 @@ __all__ = [
     "HomeAssistantSpaceAdapter",
     "InMemoryHomeRuntime",
     "InteractionResponse",
+    "LanguageRoute",
+    "LanguageRouteResult",
     "MemberRole",
     "PlanAction",
     "PlanPriority",

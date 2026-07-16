@@ -16,3 +16,7 @@
 - `KDXF_SpaceButler`：产品方案、核心 Agent 内核、比赛材料、SpaceMind 场景。
 - `EdgeHome_Agent`：设备执行、Docker 演示、HA 插件、MQTT 模拟器和验收证据来源。
 
+## 实施结果
+
+- 新项目已拥有独立 Compose、HA 配置、MQTT 模拟器、SQLite 状态库和验收脚本，不依赖启动旧项目服务。
+- 旧项目只作为工程模式参考；本次新增代码、运行数据和最终证据均收敛在 `KDXF_SpaceButler`。
