@@ -5,8 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import socket
+import threading
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -30,10 +31,18 @@ class HomeAssistantRequestError(RuntimeError):
 
 
 class HomeAssistantClient:
-    def __init__(self, base_url: str, token: str, request_timeout_seconds: float = 10) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        request_timeout_seconds: float = 10,
+        token_refresher: Callable[[], str] | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self._token = token
         self._request_timeout_seconds = request_timeout_seconds
+        self._token_refresher = token_refresher
+        self._token_lock = threading.Lock()
 
     def state(self, entity_id: str) -> dict[str, Any]:
         response = self._request("GET", f"/api/states/{entity_id}")
@@ -51,6 +60,16 @@ class HomeAssistantClient:
         return self._request("POST", f"/api/services/{domain}/{service}", data)
 
     def _request(self, method: str, path: str, body: dict[str, object] | None = None) -> object:
+        stale_token = self._token
+        try:
+            return self._request_once(method, path, body)
+        except HomeAssistantRequestError as error:
+            if error.status_code != 401 or self._token_refresher is None:
+                raise
+        self._refresh_token(stale_token)
+        return self._request_once(method, path, body)
+
+    def _request_once(self, method: str, path: str, body: dict[str, object] | None = None) -> object:
         data = None
         headers = {"Authorization": f"Bearer {self._token}", "Accept": "application/json"}
         if body is not None:
@@ -76,6 +95,15 @@ class HomeAssistantClient:
             return json.loads(payload.decode("utf-8"))
         except json.JSONDecodeError as error:
             raise HomeAssistantRequestError("Home Assistant returned invalid JSON") from error
+
+    def _refresh_token(self, stale_token: str) -> None:
+        with self._token_lock:
+            if self._token != stale_token:
+                return
+            refreshed = self._token_refresher() if self._token_refresher else ""
+            if not isinstance(refreshed, str) or not refreshed.strip():
+                raise HomeAssistantRequestError("Home Assistant token refresh returned an empty token", status_code=401)
+            self._token = refreshed.strip()
 
 
 class HomeAssistantRuntime:

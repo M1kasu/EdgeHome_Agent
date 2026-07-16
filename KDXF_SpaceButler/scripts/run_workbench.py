@@ -25,8 +25,9 @@ def main() -> int:
     ha_url = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:8900")
     simulator_url = os.getenv("SPACEBUTLER_SIMULATOR_URL", "http://127.0.0.1:8091")
     edge_llm_url = os.getenv("EDGE_LLM_URL", "http://127.0.0.1:8081")
+    auth_store = ROOT / "deployment" / "homeassistant" / ".storage" / "auth"
     wait_until_ready(ha_url, timeout_seconds=120)
-    token = obtain_token(ha_url, ROOT / "deployment" / "homeassistant" / ".storage" / "auth")
+    token = obtain_token(ha_url, auth_store)
     language_router = None
     edge_llm_client = None
     try:
@@ -37,7 +38,11 @@ def main() -> int:
     except OSError:
         pass
     controller = WorkbenchController(
-        HomeAssistantClient(ha_url, token),
+        HomeAssistantClient(
+            ha_url,
+            token,
+            token_refresher=lambda: obtain_token(ha_url, auth_store),
+        ),
         simulator_url,
         HouseholdMemory(ROOT / "deployment" / "runtime" / "agent" / "household_memory.db"),
         language_router,
