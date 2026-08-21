@@ -56,6 +56,24 @@ devices:
     behavior:
       command_delay_ms: 0
       failure_rate: 0
+  bedroom_illuminance_sensor:
+    type: illuminance
+    name: 卧室照度传感器
+    room: bedroom
+    initial_state:
+      illuminance: 8
+    behavior:
+      command_delay_ms: 0
+      failure_rate: 0
+  bedroom_presence_sensor:
+    type: presence
+    name: 卧室起身传感器
+    room: bedroom
+    initial_state:
+      occupied: false
+    behavior:
+      command_delay_ms: 0
+      failure_rate: 0
   living_room_window_sensor:
     type: contact
     name: 客厅窗户传感器

@@ -17,9 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 COMPOSE = ROOT / "deployment" / "docker-compose.yml"
-HA_URL = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:8900")
-SIMULATOR_URL = os.getenv("SPACEBUTLER_SIMULATOR_URL", "http://127.0.0.1:8091")
-EDGE_LLM_URL = os.getenv("EDGE_LLM_URL", "http://127.0.0.1:8081")
+HA_URL = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:12900")
+SIMULATOR_URL = os.getenv("SPACEBUTLER_SIMULATOR_URL", "http://127.0.0.1:12891")
+EDGE_LLM_URL = os.getenv("EDGE_LLM_URL", "http://127.0.0.1:12881")
 MODEL_FILENAME = "Home-Llama-3.2-3B.q4_k_m.gguf"
 
 

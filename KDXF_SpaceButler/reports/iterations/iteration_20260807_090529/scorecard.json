@@ -1,0 +1,9 @@
+{
+  "generated_at": "2026-08-07T09:05:29.194141+00:00",
+  "gate": "LOCAL_REGRESSION",
+  "passed": true,
+  "checks_total": 6,
+  "checks_passed": 6,
+  "checks_failed": 0,
+  "external_acceptance": "NOT_EVALUATED"
+}

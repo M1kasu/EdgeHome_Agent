@@ -22,9 +22,9 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
-    ha_url = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:8900")
-    simulator_url = os.getenv("SPACEBUTLER_SIMULATOR_URL", "http://127.0.0.1:8091")
-    edge_llm_url = os.getenv("EDGE_LLM_URL", "http://127.0.0.1:8081")
+    ha_url = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:12900")
+    simulator_url = os.getenv("SPACEBUTLER_SIMULATOR_URL", "http://127.0.0.1:12891")
+    edge_llm_url = os.getenv("EDGE_LLM_URL", "http://127.0.0.1:12881")
     auth_store = ROOT / "deployment" / "homeassistant" / ".storage" / "auth"
     wait_until_ready(ha_url, timeout_seconds=120)
     token = obtain_token(ha_url, auth_store)
@@ -49,12 +49,14 @@ def main() -> int:
         edge_llm_client,
     )
     server = serve_workbench(controller, ROOT / "workbench", args.host, args.port)
+    controller.start_night_monitor()
     print(f"SpaceButler workbench: http://{args.host}:{args.port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        controller.stop_night_monitor()
         server.server_close()
     return 0
 

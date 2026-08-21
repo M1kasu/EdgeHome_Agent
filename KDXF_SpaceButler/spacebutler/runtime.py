@@ -150,7 +150,8 @@ def _verify_result(result: ActionResult) -> bool:
     if result.capability == "set_temperature":
         return result.after.attributes.get("temperature") == result.expected_value
     if result.capability == "set_brightness":
-        return result.after.state == "on" and result.after.attributes.get("brightness") == result.expected_value
+        brightness = result.after.attributes.get("brightness_pct", result.after.attributes.get("brightness"))
+        return result.after.state == "on" and brightness == result.expected_value
     return result.after == result.before
 
 
@@ -167,6 +168,8 @@ def _report_status(results: tuple[ActionResult, ...], verified_results: tuple[bo
         return ExecutionStatus.DEVICE_UNAVAILABLE
     if any(result.status == ExecutionStatus.EXECUTION_FAILED for result in results):
         return ExecutionStatus.EXECUTION_FAILED
+    if any(result.status == ExecutionStatus.VALIDATION_FAILED for result in results):
+        return ExecutionStatus.VALIDATION_FAILED
     if any(result.success for result in results):
         return ExecutionStatus.VALIDATION_FAILED
     return ExecutionStatus.EXECUTION_FAILED

@@ -26,8 +26,8 @@ from spacebutler import (  # noqa: E402
 )
 
 
-HA_URL = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:8900")
-SIMULATOR_URL = os.getenv("SPACEBUTLER_SIMULATOR_URL", "http://127.0.0.1:8091")
+HA_URL = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:12900")
+SIMULATOR_URL = os.getenv("SPACEBUTLER_SIMULATOR_URL", "http://127.0.0.1:12891")
 TOKEN = os.environ["HA_TOKEN"]
 COMPOSE = ROOT / "deployment" / "docker-compose.yml"
 CLIMATE = "climate.spacebutler_living_room_ac"
@@ -75,7 +75,42 @@ def main() -> int:
                     "failure": str(error),
                 }
             )
-    passed = len(cases) == len(services) and all(bool(case.get("passed")) for case in cases)
+    try:
+        client = HomeAssistantClient(HA_URL, TOKEN)
+        _prepare_cool(client)
+        entity_ids = _simulator_entity_ids()
+        _wait_for(lambda: _all_entity_states(client, entity_ids, "available"), 30, "all simulator entities available")
+        container = _compose("ps", "-q", "spacebutler-device-simulator").strip()
+        if not container:
+            raise RuntimeError("compose service has no container: spacebutler-device-simulator")
+        _docker("update", "--restart=no", container)
+        try:
+            _docker("kill", "--signal=KILL", container)
+            _wait_for(lambda: _all_entity_states(client, entity_ids, "unavailable"), 30, "SIGKILL Last Will unavailable")
+            unavailable_states = {entity_id: _ha_state(client, entity_id).get("state") for entity_id in entity_ids}
+            cases.append(
+                {
+                    "test_id": "simulator_sigkill_marks_all_entities_unavailable",
+                    "passed": all(state == "unavailable" for state in unavailable_states.values()),
+                    "entities_total": len(entity_ids),
+                    "ha_states": unavailable_states,
+                }
+            )
+        finally:
+            _compose("up", "-d", "spacebutler-device-simulator")
+            restored_container = _compose("ps", "-q", "spacebutler-device-simulator").strip()
+            if restored_container:
+                _docker("update", "--restart=unless-stopped", restored_container)
+            _wait_for_infrastructure(client, "spacebutler-device-simulator", 90)
+    except Exception as error:
+        cases.append(
+            {
+                "test_id": "simulator_sigkill_marks_all_entities_unavailable",
+                "passed": False,
+                "failure": str(error),
+            }
+        )
+    passed = len(cases) == len(services) + 1 and all(bool(case.get("passed")) for case in cases)
     print(
         json.dumps(
             {
@@ -122,6 +157,45 @@ def _execute_energy_loop(client: HomeAssistantClient):
     return response
 
 
+def _simulator_entity_ids() -> list[str]:
+    payload = _simulator_request("GET", "/devices")
+    devices = payload.get("devices")
+    if not isinstance(devices, list):
+        raise RuntimeError("simulator device list is missing")
+    entity_ids: list[str] = []
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
+        for key in ("entity_id", "feedback_entity_id"):
+            value = device.get(key)
+            if isinstance(value, str) and value:
+                entity_ids.append(value)
+        if device.get("type") == "switch":
+            entity_id = device.get("entity_id")
+            if isinstance(entity_id, str) and entity_id.startswith("switch."):
+                entity_ids.append(entity_id.replace("switch.", "sensor.", 1) + "_power")
+    if not entity_ids:
+        raise RuntimeError("simulator returned no HA entities")
+    return sorted(set(entity_ids))
+
+
+def _all_entity_states(client: HomeAssistantClient, entity_ids: list[str], expected: str) -> bool:
+    for entity_id in entity_ids:
+        state = _ha_state(client, entity_id).get("state")
+        if expected == "available" and state == "unavailable":
+            return False
+        if expected == "unavailable" and state != "unavailable":
+            return False
+    return True
+
+
+def _ha_state(client: HomeAssistantClient, entity_id: str) -> dict[str, Any]:
+    state = client.state(entity_id)
+    if not isinstance(state, dict):
+        raise RuntimeError(f"invalid HA state response for {entity_id}")
+    return state
+
+
 def _container_started_at(service: str) -> str:
     container = _compose("ps", "-q", service).strip()
     if not container:
@@ -164,6 +238,22 @@ def _compose(*arguments: str) -> str:
     )
     if completed.returncode:
         raise RuntimeError(f"docker compose {' '.join(arguments)} failed: {completed.stderr.strip()}")
+    return completed.stdout
+
+
+def _docker(*arguments: str) -> str:
+    completed = subprocess.run(
+        ["docker", *arguments],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+        check=False,
+    )
+    if completed.returncode:
+        raise RuntimeError(f"docker {' '.join(arguments)} failed: {completed.stderr.strip()}")
     return completed.stdout
 
 

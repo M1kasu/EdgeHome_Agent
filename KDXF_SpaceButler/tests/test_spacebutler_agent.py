@@ -59,7 +59,84 @@ class SpaceButlerAgentTest(unittest.TestCase):
         plan = self._plan(agent.observe_and_plan(snapshot), "night_elder_safety")
 
         self.assertEqual(plan.priority.value, "safety")
-        self.assertEqual(plan.actions[0].value, 25)
+        self.assertEqual(plan.actions[0].value, 18)
+        self.assertFalse(plan.requires_confirmation)
+
+    def test_night_safety_orders_path_and_preserves_manual_lights(self) -> None:
+        agent = SpaceButlerAgent()
+        snapshot = SpatialSnapshot(
+            scene="night_safety",
+            time_of_day="night",
+            members=(HouseholdMember("grandpa", "爷爷", MemberRole.ELDER, "bedroom", "night_walk"),),
+            environment=EnvironmentState(23, 18, 52, 8, 7),
+            devices=(
+                DeviceState(
+                    "light.hallway_path",
+                    "light",
+                    "hallway",
+                    "on",
+                    {
+                        "brightness_pct": 55,
+                        "night_path": ["grandpa"],
+                        "night_path_order": 2,
+                        "manual_control": True,
+                    },
+                ),
+                DeviceState(
+                    "light.bathroom_path",
+                    "light",
+                    "bathroom",
+                    "off",
+                    {"night_path": ["grandpa"], "night_path_order": 3},
+                ),
+                DeviceState(
+                    "light.bedroom_path",
+                    "light",
+                    "bedroom",
+                    "off",
+                    {"night_path_order": 1},
+                ),
+            ),
+        )
+
+        plan = self._plan(agent.observe_and_plan(snapshot), "night_elder_safety")
+        report = execute_and_verify(InMemoryHomeRuntime(snapshot.devices), plan)
+
+        self.assertEqual(
+            [action.entity_id for action in plan.actions],
+            ["light.bedroom_path", "light.bathroom_path"],
+        )
+        self.assertIn("1 台", plan.explanation)
+        self.assertTrue(report.verified)
+
+    def test_night_safety_does_not_trigger_when_ambient_light_is_sufficient(self) -> None:
+        agent = SpaceButlerAgent()
+        snapshot = SpatialSnapshot(
+            scene="night_safety",
+            time_of_day="night",
+            members=(HouseholdMember("grandpa", "爷爷", MemberRole.ELDER, "bedroom", "night_walk"),),
+            environment=EnvironmentState(23, 18, 52, 90, 7),
+            devices=(DeviceState("light.bedroom_path", "light", "bedroom", "off"),),
+        )
+
+        plans = agent.observe_and_plan(snapshot)
+
+        self.assertFalse(any(plan.plan_id == "night_elder_safety" for plan in plans))
+
+    def test_night_safety_uses_explicit_member_brightness_preference(self) -> None:
+        agent = SpaceButlerAgent()
+        agent.memory.learn_preference("grandpa", "night_walk", "path_brightness", 12)
+        snapshot = SpatialSnapshot(
+            scene="night_safety",
+            time_of_day="night",
+            members=(HouseholdMember("grandpa", "爷爷", MemberRole.ELDER, "bedroom", "night_walk"),),
+            environment=EnvironmentState(23, 18, 52, 5, 7),
+            devices=(DeviceState("light.bedroom_path", "light", "bedroom", "off"),),
+        )
+
+        plan = self._plan(agent.observe_and_plan(snapshot), "night_elder_safety")
+
+        self.assertEqual(plan.actions[0].value, 12)
 
     def test_multi_member_conflict_generates_confirmable_compromise(self) -> None:
         agent = SpaceButlerAgent()

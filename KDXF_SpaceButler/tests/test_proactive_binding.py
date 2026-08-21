@@ -6,10 +6,24 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from spacebutler.proactive import ENERGY_RULE_ID, ProactiveRuleStore
-from spacebutler.workbench import _resolve_rule_config, _unoccupied_minutes
+from spacebutler.workbench import _resolve_night_safety_config, _resolve_rule_config, _unoccupied_minutes
 
 
 class ProactiveBindingTest(unittest.TestCase):
+    def test_night_safety_prefers_sensor_entities_in_origin_room(self) -> None:
+        devices = [
+            {"device_id": "bedroom_light", "type": "light", "room": "bedroom", "name": "Path"},
+            {"device_id": "bedroom_presence", "type": "presence", "room": "bedroom"},
+            {"device_id": "bedroom_lux", "type": "illuminance", "room": "bedroom"},
+            {"device_id": "living_presence", "type": "presence", "room": "living_room"},
+        ]
+
+        config = _resolve_night_safety_config(None, devices)
+
+        self.assertEqual(config["origin_room"], "bedroom")
+        self.assertEqual(config["presence_device_id"], "bedroom_presence")
+        self.assertEqual(config["illuminance_device_id"], "bedroom_lux")
+
     def test_default_binding_selects_a_room_with_all_required_sources(self) -> None:
         devices = [
             {"device_id": "bedroom_ac", "type": "climate", "room": "bedroom"},

@@ -25,7 +25,7 @@ from spacebutler import (  # noqa: E402
 )
 
 
-EDGE_LLM_URL = os.getenv("EDGE_LLM_URL", "http://127.0.0.1:8080")
+EDGE_LLM_URL = os.getenv("EDGE_LLM_URL", "http://127.0.0.1:12881")
 MEMORY_DB = Path(
     os.getenv(
         "SPACEBUTLER_EDGE_MEMORY_DB",

@@ -10,6 +10,16 @@ const state = {
   proactive: null,
   conversation: null,
   lastMessageId: null,
+  chatBusy: false,
+  ruleDraftDirty: false,
+  ruleDraftRevision: 0,
+  sceneDraftDirty: false,
+  sceneDraftRevision: 0,
+  nightSafety: null,
+  nightDraftDirty: false,
+  nightDraftRevision: 0,
+  nightBusy: false,
+  nightPathOrder: [],
 };
 
 const typeMeta = {
@@ -19,6 +29,7 @@ const typeMeta = {
   curtain: { label: "窗帘", icon: "blinds", tone: "green" },
   presence: { label: "存在传感器", icon: "user-round-check", tone: "green" },
   contact: { label: "门窗传感器", icon: "panel-top-open", tone: "amber" },
+  illuminance: { label: "照度传感器", icon: "sun-medium", tone: "amber" },
 };
 
 const intentLabels = {
@@ -75,6 +86,7 @@ function renderStatus(payload) {
   $("#health-label").textContent = healthy ? "链路正常" : "链路异常";
   $("#snapshot-time").textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });
   if (payload.proactive) renderProactive(payload.proactive);
+  if (payload.night_safety) renderNightSafety(payload.night_safety);
   renderDecision(payload.last_response);
   renderMemory(payload.preferences || []);
   refreshIcons();
@@ -86,8 +98,9 @@ function renderConversation(payload) {
   modelBadge.classList.toggle("fallback", !payload.llm_available);
   $("span", modelBadge).textContent = payload.llm_available ? "Edge LLM 在线" : "确定性降级";
   const conversationState = $("#conversation-state");
-  conversationState.className = `conversation-state${payload.busy ? " busy" : ""}`;
-  conversationState.textContent = payload.busy ? "理解与规划中" : "准备就绪";
+  const busy = Boolean(payload.busy || state.chatBusy);
+  conversationState.className = `conversation-state${busy ? " busy" : ""}`;
+  conversationState.textContent = busy ? "理解与规划中" : "准备就绪";
 
   const messages = payload.messages || [];
   const lastMessage = messages.at(-1);
@@ -116,6 +129,21 @@ function renderConversation(payload) {
   state.lastMessageId = lastMessage?.message_id || null;
   renderTaskPlan(payload.active_plan);
   refreshIcons();
+}
+
+function setChatBusy(busy) {
+  state.chatBusy = busy;
+  $("#chat-input").disabled = busy;
+  $("#chat-send").disabled = busy;
+  $("#clear-chat").disabled = busy;
+  $$(".prompt-strip [data-chat-prompt]").forEach((button) => {
+    button.disabled = busy;
+  });
+  $("#confirm-chat-plan").disabled = busy;
+  $("#cancel-chat-plan").disabled = busy;
+  const conversationState = $("#conversation-state");
+  conversationState.className = `conversation-state${busy ? " busy" : ""}`;
+  conversationState.textContent = busy ? "理解与规划中" : "准备就绪";
 }
 
 function renderTaskPlan(plan) {
@@ -281,18 +309,14 @@ function renderProactive(payload) {
     </div>`).join("");
 
   renderRuleBinding(payload);
-  if (!$("#test-occupied").matches(":focus")) {
+  if (!state.sceneDraftDirty) {
     $("#test-occupied").checked = Boolean(sources.presence?.state?.occupied);
-  }
-  if (!$("#test-window-open").matches(":focus")) {
     $("#test-window-open").checked = Boolean(sources.contact?.state?.open);
-  }
-  if (!$("#test-climate-mode").matches(":focus")) {
     $("#test-climate-mode").value = sources.climate?.state?.mode || "off";
-  }
-  if (!$("#minutes-range").matches(":focus") && !sources.presence?.state?.occupied) {
-    $("#minutes-range").value = payload.unoccupied_minutes ?? 0;
-    $("#minutes-output").textContent = payload.unoccupied_minutes ?? 0;
+    if (!sources.presence?.state?.occupied) {
+      $("#minutes-range").value = payload.unoccupied_minutes ?? 0;
+      $("#minutes-output").textContent = payload.unoccupied_minutes ?? 0;
+    }
   }
 }
 
@@ -304,6 +328,150 @@ function sourceValue(role, source) {
   return mode === "cool" ? "制冷运行" : mode === "heat" ? "制热运行" : mode === "off" ? "已关闭" : text(mode);
 }
 
+function renderNightSafety(payload) {
+  state.nightSafety = payload;
+  const config = payload.config || {};
+  const pathLights = payload.path_lights || [];
+  const badge = $("#night-health-badge");
+  badge.className = `source-badge ${payload.ready ? "ready" : "warning"}`;
+  badge.classList.toggle("warning", Boolean(payload.listener?.error) || !payload.listener?.active);
+  badge.textContent = !config.enabled
+    ? "规则已停用"
+    : payload.listener?.error
+      ? "监听异常"
+      : !payload.listener?.active
+        ? "监听未启动"
+        : payload.trigger_ready
+          ? "条件已满足"
+          : payload.ready
+            ? "实体监听中"
+            : "来源不完整";
+  badge.title = payload.listener?.error || "后台监听 Home Assistant 实体上升沿";
+  $("#night-path-summary").textContent = `${pathLights.length} 路 · ${payload.manual_lights || 0} 手动`;
+  renderNightConditions(payload.conditions || []);
+  renderNightResult(payload.last_response);
+  if (state.nightDraftDirty) return;
+
+  state.nightPathOrder = [...(config.path_light_device_ids || [])];
+  $("#night-enabled").checked = Boolean(config.enabled);
+  $("#night-member-name").value = config.member_name || "爷爷";
+  populateSelect(
+    $("#night-origin-room"),
+    (payload.available_rooms || []).map((room) => ({ value: room.room, label: room.name })),
+    config.origin_room,
+  );
+  populateSelect(
+    $("#night-presence-device"),
+    (payload.available_presence_sensors || []).map((source) => ({ value: source.device_id, label: `${source.name} · ${source.room_name}` })),
+    config.presence_device_id,
+  );
+  populateSelect(
+    $("#night-illuminance-device"),
+    (payload.available_illuminance_sensors || []).map((source) => ({ value: source.device_id, label: `${source.name} · ${source.room_name}` })),
+    config.illuminance_device_id,
+  );
+  $("#night-brightness-range").value = config.brightness ?? 18;
+  $("#night-brightness-output").textContent = config.brightness ?? 18;
+  $("#night-threshold-range").value = config.max_illuminance ?? 50;
+  $("#night-threshold-output").textContent = config.max_illuminance ?? 50;
+  $("#night-lux-range").value = payload.current_illuminance ?? 8;
+  $("#night-lux-output").textContent = payload.current_illuminance ?? 8;
+  const selected = new Set(state.nightPathOrder);
+  const availableLights = payload.available_lights || [];
+  const lightOrder = [
+    ...state.nightPathOrder
+      .map((deviceId) => availableLights.find((light) => light.device_id === deviceId))
+      .filter(Boolean),
+    ...availableLights.filter((light) => !selected.has(light.device_id)),
+  ];
+  $("#night-path-lights").innerHTML = (payload.available_lights || []).length
+    ? lightOrder.map((light) => `
+      <label class="night-path-item ${selected.has(light.device_id) ? "selected" : ""}">
+        <input type="checkbox" data-night-path-id="${escapeHtml(light.device_id)}" ${selected.has(light.device_id) ? "checked" : ""}>
+        <span class="night-path-order">${selected.has(light.device_id) ? state.nightPathOrder.indexOf(light.device_id) + 1 : "–"}</span>
+        <span class="night-path-copy">
+          <strong>${escapeHtml(light.name)}</strong>
+          <small>${escapeHtml(light.room_name)} · ${light.online && light.discovered ? "在线" : "异常"}${light.manual_override ? ` · 人工接管 ${Math.max(1, Math.ceil(Number(light.manual_remaining_seconds || 0) / 60))} 分钟` : ""}</small>
+        </span>
+        <i data-lucide="${light.manual_override ? "hand" : "lightbulb"}"></i>
+      </label>`).join("")
+    : `<div class="empty-state compact"><span>暂无可用灯光</span></div>`;
+  populateNightManualSelect();
+  refreshIcons();
+}
+
+function renderNightConditions(conditions) {
+  $("#night-condition-strip").innerHTML = conditions.map((condition) => `
+    <div class="night-condition ${condition.met ? "met" : "waiting"}">
+      <i data-lucide="${condition.met ? "circle-check" : "circle-dashed"}"></i>
+      <span>${escapeHtml(condition.label)}</span>
+      <strong>${escapeHtml(condition.actual)}</strong>
+    </div>`).join("");
+}
+
+function populateNightManualSelect() {
+  const select = $("#night-manual-light");
+  const previous = select.value;
+  const selectedIds = $$('[data-night-path-id]:checked').map((input) => input.dataset.nightPathId);
+  const available = state.nightSafety?.available_lights || [];
+  const options = [
+    { value: "", label: "无手动接管" },
+    ...selectedIds.map((deviceId) => {
+      const light = available.find((item) => item.device_id === deviceId);
+      return { value: deviceId, label: light?.name || deviceId };
+    }),
+  ];
+  populateSelect(select, options, options.some((item) => item.value === previous) ? previous : "");
+}
+
+function syncNightPathUi() {
+  const container = $("#night-path-lights");
+  const items = $$('[data-night-path-id]', container).map((input) => [input.dataset.nightPathId, input.closest(".night-path-item")]);
+  const byId = new Map(items);
+  const availableOrder = (state.nightSafety?.available_lights || []).map((light) => light.device_id);
+  [...state.nightPathOrder, ...availableOrder.filter((deviceId) => !state.nightPathOrder.includes(deviceId))]
+    .forEach((deviceId) => {
+      const item = byId.get(deviceId);
+      if (!item) return;
+      const input = $("[data-night-path-id]", item);
+      const order = $(".night-path-order", item);
+      const index = state.nightPathOrder.indexOf(deviceId);
+      item.classList.toggle("selected", index >= 0);
+      input.checked = index >= 0;
+      order.textContent = index >= 0 ? String(index + 1) : "–";
+      container.append(item);
+    });
+  populateNightManualSelect();
+}
+
+function renderNightResult(response) {
+  const container = $("#night-result");
+  if (!response) {
+    container.innerHTML = `<div class="empty-state compact"><span>等待夜间事件</span></div>`;
+    return;
+  }
+  const report = response.report;
+  const actionCount = response.plan?.actions?.length || 0;
+  const status = response.status === "executed" && report?.verified
+    ? "回读通过"
+    : response.status === "ignored"
+      ? "保持现状"
+      : response.status === "disabled"
+        ? "规则停用"
+        : "执行异常";
+  container.innerHTML = `
+    <div class="night-result-heading">
+      <strong>${escapeHtml(response.plan?.title || status)}</strong>
+      <span class="${report?.verified ? "success" : ""}">${escapeHtml(status)}</span>
+    </div>
+    <p>${escapeHtml(response.plan?.explanation || response.message || "")}</p>
+    <div class="night-result-metrics">
+      <span>动作 <strong>${actionCount}</strong></span>
+      <span>执行 <strong>${escapeHtml(report?.status || response.status)}</strong></span>
+      <span>验证 <strong>${report ? (report.verified ? "PASS" : "FAIL") : "--"}</strong></span>
+    </div>`;
+}
+
 function formatTimestamp(value) {
   if (!value) return "未上报";
   const parsed = new Date(value);
@@ -313,6 +481,7 @@ function formatTimestamp(value) {
 }
 
 function renderRuleBinding(payload) {
+  if (state.ruleDraftDirty) return;
   const config = payload.config || {};
   $("#rule-enabled").checked = Boolean(config.enabled);
   $("#save-rule").classList.remove("attention");
@@ -418,7 +587,8 @@ function renderInventory(payload) {
   $("#total-power").textContent = `${Math.round(totalPower)} W`;
   $("#inventory-summary").textContent = `${state.devices.length} 台设备 · ${state.rooms.length} 个空间`;
   renderRoomTabs();
-  renderDeviceGrid();
+  const grid = $("#device-grid");
+  if (!grid.contains(document.activeElement)) renderDeviceGrid();
 }
 
 function renderRoomTabs() {
@@ -485,7 +655,7 @@ function renderDeviceCard(device) {
       <label class="fault-control">
         <span>故障模式</span>
         <select data-device-fault>
-          ${faultOptions(device.fault_mode, ["presence", "contact"].includes(device.type))}
+          ${faultOptions(device.fault_mode, ["presence", "contact", "illuminance"].includes(device.type))}
         </select>
       </label>
     </article>`;
@@ -555,6 +725,15 @@ function renderDeviceControls(device) {
         </button>
       </div>`;
   }
+  if (device.type === "illuminance") {
+    const illuminance = Number(deviceState.illuminance || 0);
+    return `
+      <label class="curtain-control">
+        <span>照度上报</span>
+        <input type="range" min="0" max="500" step="1" value="${illuminance}" data-device-illuminance>
+        <output>${illuminance} lux</output>
+      </label>`;
+  }
   const mode = String(deviceState.mode || "off");
   const temperature = Number(deviceState.temperature || 24);
   return `
@@ -597,6 +776,9 @@ function deviceStateSummary(device) {
   }
   if (device.type === "contact") {
     return { primary: value.open ? "窗户打开" : "窗户关闭", secondary: value.open ? "状态 ON" : "状态 OFF" };
+  }
+  if (device.type === "illuminance") {
+    return { primary: `${Number(value.illuminance || 0)} lux`, secondary: "实时环境照度" };
   }
   const mode = value.mode === "cool" ? "制冷" : value.mode === "heat" ? "制热" : "已关闭";
   return { primary: mode, secondary: `设定 ${Number(value.temperature || 24)}°C · 室温 ${Number(value.current_temperature || 0)}°C` };
@@ -692,16 +874,13 @@ function switchView(view) {
 }
 
 async function sendChat(textValue) {
+  if (state.chatBusy) return;
   const input = $("#chat-input");
-  const sendButton = $("#chat-send");
   const textValueNormalized = textValue.trim();
   if (!textValueNormalized) return;
-  input.disabled = true;
-  sendButton.disabled = true;
-  $("#conversation-state").className = "conversation-state busy";
-  $("#conversation-state").textContent = "理解与规划中";
+  setChatBusy(true);
   $("#chat-thread").insertAdjacentHTML("beforeend", `
-    <div class="chat-thinking" id="chat-pending">
+    <div class="chat-thinking chat-pending-local">
       <i data-lucide="loader-circle"></i><span>正在读取设备上下文</span>
     </div>`);
   refreshIcons();
@@ -714,18 +893,17 @@ async function sendChat(textValue) {
     input.value = "";
     await Promise.all([loadStatus(), loadDevices(), loadEvents()]);
   } catch (error) {
-    $("#chat-pending")?.remove();
+    $(".chat-pending-local")?.remove();
     toast(error.message, true);
   } finally {
-    input.disabled = false;
-    sendButton.disabled = false;
+    setChatBusy(false);
     input.focus();
   }
 }
 
 async function chatPlanAction(path) {
-  $("#confirm-chat-plan").disabled = true;
-  $("#cancel-chat-plan").disabled = true;
+  if (state.chatBusy) return;
+  setChatBusy(true);
   try {
     const payload = await api(path, { method: "POST", body: "{}" });
     renderConversation(payload);
@@ -733,9 +911,185 @@ async function chatPlanAction(path) {
   } catch (error) {
     toast(error.message, true);
   } finally {
-    $("#confirm-chat-plan").disabled = false;
-    $("#cancel-chat-plan").disabled = false;
+    setChatBusy(false);
   }
+}
+
+async function clearConversation() {
+  if (state.chatBusy) return;
+  setChatBusy(true);
+  try {
+    const payload = await api("/api/chat/clear", { method: "POST", body: "{}" });
+    state.lastMessageId = null;
+    renderConversation(payload);
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setChatBusy(false);
+  }
+}
+
+function markRuleDraftDirty() {
+  state.ruleDraftDirty = true;
+  state.ruleDraftRevision += 1;
+  $("#save-rule").classList.add("attention");
+}
+
+async function saveRuleBinding() {
+  const submittedRevision = state.ruleDraftRevision;
+  const payload = await post(
+    "/api/proactive/config",
+    {
+      enabled: $("#rule-enabled").checked,
+      room: $("#rule-room").value,
+      presence_device_id: $("#rule-presence-device").value,
+      contact_device_id: $("#rule-contact-device").value,
+      climate_device_id: $("#rule-climate-device").value,
+    },
+    "主动规则设备绑定已保存",
+  );
+  if (!payload || state.ruleDraftRevision !== submittedRevision) return;
+  state.ruleDraftDirty = false;
+  if (state.proactive) renderRuleBinding(state.proactive);
+}
+
+function markSceneDraftDirty() {
+  state.sceneDraftDirty = true;
+  state.sceneDraftRevision += 1;
+}
+
+function markNightDraftDirty() {
+  state.nightDraftDirty = true;
+  state.nightDraftRevision += 1;
+  $("#save-night-safety").classList.add("attention");
+}
+
+function nightSafetyConfig() {
+  return {
+    enabled: $("#night-enabled").checked,
+    member_name: $("#night-member-name").value.trim(),
+    origin_room: $("#night-origin-room").value,
+    presence_device_id: $("#night-presence-device").value,
+    illuminance_device_id: $("#night-illuminance-device").value,
+    path_light_device_ids: [...state.nightPathOrder],
+    brightness: Number($("#night-brightness-range").value),
+    max_illuminance: Number($("#night-threshold-range").value),
+  };
+}
+
+function setNightBusy(busy) {
+  state.nightBusy = busy;
+  [
+    "#night-enabled",
+    "#night-member-name",
+    "#night-origin-room",
+    "#night-presence-device",
+    "#night-illuminance-device",
+    "#night-brightness-range",
+    "#night-threshold-range",
+    "#night-lux-range",
+    "#night-manual-light",
+    "#save-night-safety",
+    "#prepare-night-safety",
+    "#run-night-safety",
+  ].forEach((selector) => {
+    $(selector).disabled = busy;
+  });
+  $$('[data-night-path-id]').forEach((input) => {
+    input.disabled = busy;
+  });
+}
+
+async function persistNightSafety(successMessage = "夜间安全路径已保存") {
+  const submittedRevision = state.nightDraftRevision;
+  try {
+    const payload = await api("/api/night-safety/config", {
+      method: "POST",
+      body: JSON.stringify(nightSafetyConfig()),
+    });
+    if (payload.status) renderStatus(payload.status);
+    if (state.nightDraftRevision === submittedRevision) {
+      state.nightDraftDirty = false;
+      $("#save-night-safety").classList.remove("attention");
+      if (payload.night_safety) renderNightSafety(payload.night_safety);
+    }
+    if (successMessage) toast(successMessage);
+    return payload;
+  } catch (error) {
+    toast(error.message, true);
+    return null;
+  }
+}
+
+async function saveNightSafety() {
+  if (state.nightBusy) return;
+  setNightBusy(true);
+  try {
+    await persistNightSafety();
+  } finally {
+    setNightBusy(false);
+  }
+}
+
+async function prepareNightSafety() {
+  if (state.nightBusy) return;
+  setNightBusy(true);
+  try {
+    if (state.nightDraftDirty && !await persistNightSafety(null)) return;
+    const payload = await api("/api/night-safety/prepare", {
+      method: "POST",
+      body: JSON.stringify({
+        manual_device_id: $("#night-manual-light").value,
+        illuminance: Number($("#night-lux-range").value),
+      }),
+    });
+    if (payload.status) renderStatus(payload.status);
+    if (payload.devices) renderInventory(payload);
+    if (payload.night_safety) renderNightSafety(payload.night_safety);
+    await loadEvents();
+    toast("夜间测试状态已准备，并完成设备回读");
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setNightBusy(false);
+  }
+}
+
+async function runNightSafety() {
+  if (state.nightBusy) return;
+  setNightBusy(true);
+  try {
+    if (state.nightDraftDirty && !await persistNightSafety(null)) return;
+    const payload = await api("/api/night-safety/trigger", {
+      method: "POST",
+      body: "{}",
+    });
+    if (payload.status) renderStatus(payload.status);
+    if (payload.response) renderNightResult(payload.response);
+    await Promise.all([loadDevices(), loadEvents()]);
+    toast(payload.response?.status === "executed" ? "起身事件已触发，路径执行并完成回读" : "起身事件已分析，设备保持现状");
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setNightBusy(false);
+  }
+}
+
+async function writeTestScene() {
+  const submittedRevision = state.sceneDraftRevision;
+  const payload = await post(
+    "/api/scene/reset",
+    {
+      occupied: $("#test-occupied").checked,
+      window_open: $("#test-window-open").checked,
+      climate_mode: $("#test-climate-mode").value,
+      unoccupied_minutes: Number($("#minutes-range").value),
+    },
+    "测试状态已写入设备侧并完成回读",
+  );
+  if (!payload || state.sceneDraftRevision !== submittedRevision) return;
+  state.sceneDraftDirty = false;
+  if (state.proactive) renderProactive(state.proactive);
 }
 
 async function handleDeviceClick(event) {
@@ -806,6 +1160,10 @@ async function handleDeviceChange(event) {
   if (event.target.matches("[data-device-position]")) {
     await controlDevice(device, { position: Number(event.target.value) }, "窗帘位置已更新");
   }
+  if (event.target.matches("[data-device-illuminance]")) {
+    await controlDevice(device, { illuminance: Number(event.target.value) }, "照度已上报");
+    await loadStatus();
+  }
   if (event.target.matches("[data-device-fault]")) {
     const mode = event.target.value;
     const payload = await post(
@@ -834,7 +1192,9 @@ async function addDevice(event) {
           ? { position: power === "on" ? 100 : 0, target_position: power === "on" ? 100 : 0, status: power === "on" ? "open" : "closed" }
           : type === "presence"
             ? { occupied: power === "on" }
-            : { open: power === "on" };
+            : type === "contact"
+              ? { open: power === "on" }
+              : { illuminance: power === "on" ? 100 : 8 };
   $("#submit-add-device").disabled = true;
   try {
     const payload = await api("/api/devices", {
@@ -868,11 +1228,7 @@ document.addEventListener("DOMContentLoaded", () => {
     button.addEventListener("click", () => switchView(button.dataset.viewTarget));
   });
   $("#refresh-all").addEventListener("click", loadAll);
-  $("#clear-chat").addEventListener("click", async () => {
-    const payload = await api("/api/chat/clear", { method: "POST", body: "{}" });
-    state.lastMessageId = null;
-    renderConversation(payload);
-  });
+  $("#clear-chat").addEventListener("click", clearConversation);
   $("#chat-form").addEventListener("submit", (event) => {
     event.preventDefault();
     sendChat($("#chat-input").value);
@@ -904,35 +1260,47 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#device-grid").addEventListener("click", handleDeviceClick);
   $("#device-grid").addEventListener("change", handleDeviceChange);
   $("#minutes-range").addEventListener("input", (event) => {
+    markSceneDraftDirty();
     $("#minutes-output").textContent = event.target.value;
   });
   $("#rule-room").addEventListener("change", (event) => {
     populateRuleDeviceSelects(event.target.value, {});
+    markRuleDraftDirty();
   });
-  $("#save-rule").addEventListener("click", () => post(
-    "/api/proactive/config",
-    {
-      enabled: $("#rule-enabled").checked,
-      room: $("#rule-room").value,
-      presence_device_id: $("#rule-presence-device").value,
-      contact_device_id: $("#rule-contact-device").value,
-      climate_device_id: $("#rule-climate-device").value,
-    },
-    "主动规则设备绑定已保存",
-  ));
-  $("#rule-enabled").addEventListener("change", () => {
-    $("#save-rule").classList.add("attention");
+  ["#rule-enabled", "#rule-presence-device", "#rule-contact-device", "#rule-climate-device"].forEach((selector) => {
+    $(selector).addEventListener("change", markRuleDraftDirty);
   });
-  $("#reset-scene").addEventListener("click", () => post(
-    "/api/scene/reset",
-    {
-      occupied: $("#test-occupied").checked,
-      window_open: $("#test-window-open").checked,
-      climate_mode: $("#test-climate-mode").value,
-      unoccupied_minutes: Number($("#minutes-range").value),
-    },
-    "测试状态已写入设备侧并完成回读",
-  ));
+  $("#save-rule").addEventListener("click", saveRuleBinding);
+  ["#test-occupied", "#test-window-open", "#test-climate-mode"].forEach((selector) => {
+    $(selector).addEventListener("change", markSceneDraftDirty);
+  });
+  $("#reset-scene").addEventListener("click", writeTestScene);
+  ["#night-enabled", "#night-origin-room", "#night-presence-device", "#night-illuminance-device"].forEach((selector) => {
+    $(selector).addEventListener("change", markNightDraftDirty);
+  });
+  $("#night-member-name").addEventListener("input", markNightDraftDirty);
+  [["#night-brightness-range", "#night-brightness-output"], ["#night-threshold-range", "#night-threshold-output"]]
+    .forEach(([rangeSelector, outputSelector]) => {
+      $(rangeSelector).addEventListener("input", (event) => {
+        $(outputSelector).textContent = event.target.value;
+        markNightDraftDirty();
+      });
+    });
+  $("#night-lux-range").addEventListener("input", (event) => {
+    $("#night-lux-output").textContent = event.target.value;
+  });
+  $("#night-path-lights").addEventListener("change", (event) => {
+    const input = event.target.closest("[data-night-path-id]");
+    if (!input) return;
+    const deviceId = input.dataset.nightPathId;
+    state.nightPathOrder = state.nightPathOrder.filter((item) => item !== deviceId);
+    if (input.checked) state.nightPathOrder.push(deviceId);
+    markNightDraftDirty();
+    syncNightPathUi();
+  });
+  $("#save-night-safety").addEventListener("click", saveNightSafety);
+  $("#prepare-night-safety").addEventListener("click", prepareNightSafety);
+  $("#run-night-safety").addEventListener("click", runNightSafety);
   $("#observe-scene").addEventListener("click", () => post(
     "/api/observe",
     {},

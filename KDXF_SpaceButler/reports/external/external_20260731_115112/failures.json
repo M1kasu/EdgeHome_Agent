@@ -1,0 +1,11 @@
+[
+  {
+    "command": [
+      "D:\\environment\\anaconda\\python.exe",
+      "E:\\code\\znjj\\KDXF_SpaceButler\\scripts\\accept_ha_mqtt_energy_external.py"
+    ],
+    "returncode": 1,
+    "stdout": "{\n  \"acceptance\": \"FAIL\",\n  \"boundary\": \"external_process_to_ha_mqtt_simulator_sqlite\",\n  \"cases_passed\": 0,\n  \"cases_total\": 1,\n  \"cases\": [\n    {\n      \"test_id\": \"external_infrastructure\",\n      \"passed\": false,\n      \"failure\": \"[WinError 10061] ����Ŀ�����������ܾ����޷����ӡ�\"\n    }\n  ]\n}\n",
+    "stderr": ""
+  }
+]

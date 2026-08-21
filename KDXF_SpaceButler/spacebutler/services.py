@@ -5,7 +5,7 @@ from __future__ import annotations
 from statistics import mean
 
 from .memory import HouseholdMemory
-from .models import PlanAction, PlanPriority, ServicePlan, SpatialSnapshot
+from .models import DeviceState, PlanAction, PlanPriority, ServicePlan, SpatialSnapshot
 
 
 class ProactiveServiceEngine:
@@ -131,35 +131,98 @@ class ProactiveServiceEngine:
             explanation="结合成员位置、返家状态、环境照度和偏好记忆，提前准备舒适空间。",
         )
 
-    @staticmethod
-    def _night_elder_safety(snapshot: SpatialSnapshot) -> ServicePlan | None:
+    def _night_elder_safety(self, snapshot: SpatialSnapshot) -> ServicePlan | None:
+        if not snapshot.is_fresh() or snapshot.missing_fields or snapshot.time_of_day != "night":
+            return None
         elders = [
             member
             for member in snapshot.members
             if member.is_home and member.role.value == "elder" and member.activity == "night_walk"
         ]
-        if not elders or snapshot.time_of_day != "night":
+        if not elders:
             return None
-        actions = [
-            PlanAction(
-                entity_id=device.entity_id,
-                capability="set_brightness",
-                value=25,
-                reason="老人夜间起身，低亮度照明降低跌倒风险且避免强光刺激",
+
+        actions: list[PlanAction] = []
+        target_members: list[str] = []
+        selected_entities: set[str] = set()
+        preserved_manual_lights = 0
+        for member in elders:
+            max_illuminance = self._memory.recall_number(
+                member.member_id,
+                "night_walk",
+                "max_illuminance",
+                50,
             )
-            for member in elders
-            for device in snapshot.devices_in_room(member.location, "light")
-        ]
+            if snapshot.environment.illuminance > max_illuminance:
+                continue
+            brightness = round(
+                min(
+                    max(
+                        self._memory.recall_number(
+                            member.member_id,
+                            "night_walk",
+                            "path_brightness",
+                            18,
+                        ),
+                        5,
+                    ),
+                    40,
+                )
+            )
+            path_lights = sorted(
+                (
+                    device
+                    for device in snapshot.devices
+                    if device.domain == "light"
+                    and (
+                        device.room == member.location
+                        or _is_night_path_light(device, member.member_id, member.location)
+                    )
+                ),
+                key=lambda device: (
+                    int(device.attributes.get("night_path_order", 999)),
+                    device.entity_id,
+                ),
+            )
+            member_has_action = False
+            for device in path_lights:
+                if device.entity_id in selected_entities:
+                    continue
+                if (
+                    device.protected
+                    or device.attributes.get("available") is False
+                    or device.attributes.get("manual_control") is True
+                ):
+                    preserved_manual_lights += 1
+                    continue
+                selected_entities.add(device.entity_id)
+                member_has_action = True
+                actions.append(
+                    PlanAction(
+                        entity_id=device.entity_id,
+                        capability="set_brightness",
+                        value=brightness,
+                        reason=(
+                            f"{member.name}夜间起身且环境照度仅{snapshot.environment.illuminance} lux，"
+                            f"按路径顺序点亮{brightness}%柔光，降低跌倒和强光刺激风险"
+                        ),
+                    )
+                )
+            if member_has_action:
+                target_members.append(member.member_id)
         if not actions:
             return None
         return ServicePlan(
             plan_id="night_elder_safety",
-            title="夜间老人安全照明",
+            title="老人夜间起身安全路径",
             priority=PlanPriority.SAFETY,
             proactive=True,
-            target_members=tuple(member.member_id for member in elders),
+            target_members=tuple(target_members),
             actions=tuple(actions),
-            explanation="检测到老人夜间活动，主动联动所在空间照明。",
+            explanation=(
+                "检测到老人夜间起身且环境昏暗，按配置路径启用低亮度照明；"
+                f"已手动点亮或受保护的灯具保持不变（{preserved_manual_lights} 台）。"
+            ),
         )
 
     @staticmethod
@@ -252,3 +315,14 @@ def _room_name(room: str) -> str:
         "bathroom": "卫生间",
         "home": "全屋",
     }.get(room, room.replace("_", " ").title())
+
+
+def _is_night_path_light(device: DeviceState, member_id: str, origin_room: str) -> bool:
+    marker = device.attributes.get("night_path")
+    if marker is True:
+        return True
+    if isinstance(marker, str):
+        return marker in {"all", member_id, origin_room}
+    if isinstance(marker, (list, tuple, set)):
+        return bool({"all", member_id, origin_room}.intersection(str(item) for item in marker))
+    return False

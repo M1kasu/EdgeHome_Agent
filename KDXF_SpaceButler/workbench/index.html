@@ -22,9 +22,9 @@
       <span class="status-dot" id="health-dot"></span>
       <strong id="health-label">连接中</strong>
       <span class="divider"></span>
-      <span>HA :8900</span>
-      <span>MQTT :1884</span>
-      <span>Edge LLM :8081</span>
+      <span>Home Assistant</span>
+      <span>MQTT</span>
+      <span>Edge LLM</span>
     </div>
     <button class="primary command-button" id="open-add-device">
       <i data-lucide="plus"></i><span>添加设备</span>
@@ -303,6 +303,86 @@
             </section>
           </div>
         </div>
+
+        <section class="panel night-safety-panel">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">NIGHT SAFETY PATH</span>
+              <h3>老人夜间起身安全路径</h3>
+            </div>
+            <div class="night-heading-actions">
+              <span class="source-badge" id="night-health-badge">读取中</span>
+              <label class="toggle-control" title="启用夜间守护">
+                <input id="night-enabled" type="checkbox" checked>
+                <span></span>
+              </label>
+            </div>
+          </div>
+          <div class="night-safety-grid">
+            <div class="night-safety-pane">
+              <div class="panel-subheading compact-subheading">
+                <div><span class="eyebrow">HOUSEHOLD CONTEXT</span><h4>成员与环境</h4></div>
+              </div>
+              <label class="field-label" for="night-member-name">家庭成员</label>
+              <input class="night-input" id="night-member-name" type="text" maxlength="40" value="爷爷">
+              <label class="field-label" for="night-origin-room">起身空间</label>
+              <select id="night-origin-room"></select>
+              <label class="field-label" for="night-presence-device">起身传感器</label>
+              <select id="night-presence-device"></select>
+              <label class="field-label" for="night-illuminance-device">照度传感器</label>
+              <select id="night-illuminance-device"></select>
+              <label class="field-label" for="night-brightness-range">路径亮度</label>
+              <div class="range-row">
+                <input id="night-brightness-range" type="range" min="5" max="40" step="1" value="18">
+                <output id="night-brightness-output">18</output><span>%</span>
+              </div>
+              <label class="field-label" for="night-threshold-range">触发阈值</label>
+              <div class="range-row">
+                <input id="night-threshold-range" type="range" min="1" max="200" step="1" value="50">
+                <output id="night-threshold-output">50</output><span>lux</span>
+              </div>
+              <label class="field-label" for="night-lux-range">测试照度</label>
+              <div class="range-row">
+                <input id="night-lux-range" type="range" min="0" max="200" step="1" value="8">
+                <output id="night-lux-output">8</output><span>lux</span>
+              </div>
+            </div>
+
+            <fieldset class="night-safety-pane night-path-pane">
+              <legend>
+                <span class="eyebrow">ORDERED LIGHTS</span>
+                <strong>路径灯光</strong>
+              </legend>
+              <div class="night-path-list" id="night-path-lights">
+                <div class="loading-state compact"><i data-lucide="loader-circle"></i><span>读取灯光</span></div>
+              </div>
+            </fieldset>
+
+            <div class="night-safety-pane night-result-pane">
+              <div class="panel-subheading compact-subheading">
+                <div><span class="eyebrow">MANUAL TAKEOVER</span><h4>接管与回读</h4></div>
+                <span id="night-path-summary">--</span>
+              </div>
+              <div class="night-condition-strip" id="night-condition-strip"></div>
+              <label class="field-label" for="night-manual-light">保持手动点亮</label>
+              <select id="night-manual-light"></select>
+              <div class="night-result" id="night-result">
+                <div class="empty-state compact"><span>等待夜间事件</span></div>
+              </div>
+              <div class="night-action-row">
+                <button class="secondary" id="save-night-safety">
+                  <i data-lucide="save"></i><span>保存路径</span>
+                </button>
+                <button class="secondary" id="prepare-night-safety">
+                  <i data-lucide="moon-star"></i><span>准备状态</span>
+                </button>
+                <button class="primary" id="run-night-safety">
+                  <i data-lucide="person-standing"></i><span>模拟起身</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
       </section>
 
       <section class="view" data-view="events">
@@ -354,6 +434,7 @@
               <option value="curtain">窗帘</option>
               <option value="presence">人体存在传感器</option>
               <option value="contact">门窗传感器</option>
+              <option value="illuminance">照度传感器</option>
             </select>
         </label>
         <label>

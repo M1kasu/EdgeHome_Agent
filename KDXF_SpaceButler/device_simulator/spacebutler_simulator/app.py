@@ -9,6 +9,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from queue import Empty, Full, Queue
 import random
 import re
 import signal
@@ -27,8 +28,9 @@ from .store import DeviceStateStore
 
 _LOGGER = logging.getLogger(__name__)
 _HA_BIRTH_TOPIC = "homeassistant/status"
+_SIMULATOR_AVAILABILITY_TOPIC = "spacebutler/simulator/availability"
 _FAULT_DELAY_MS = 5_000
-_DEVICE_TYPES = frozenset({"light", "curtain", "climate", "switch", "presence", "contact"})
+_DEVICE_TYPES = frozenset({"light", "curtain", "climate", "switch", "presence", "contact", "illuminance"})
 _LEGACY_OBJECT_IDS = {
     "living_room_main_light": "living_room_main",
     "living_room_curtain": "living_room_curtain",
@@ -227,7 +229,52 @@ class BinarySensorDevice:
         return f"homeassistant/sensor/spacebutler_{_entity_object_id(self)}_feedback/config"
 
 
-SimulatedDevice = LightDevice | CurtainDevice | ClimateDevice | SwitchDevice | BinarySensorDevice
+@dataclass(frozen=True, slots=True)
+class IlluminanceSensorDevice:
+    """A device-owned illuminance sensor exposed through MQTT Discovery."""
+
+    device_id: str
+    name: str
+    room: str
+    initial_state: dict[str, Any]
+    command_delay_ms: int
+    failure_rate: float
+
+    @property
+    def state_topic(self) -> str:
+        return f"spacebutler/devices/{self.device_id}/state"
+
+    @property
+    def availability_topic(self) -> str:
+        return f"spacebutler/devices/{self.device_id}/availability"
+
+    @property
+    def feedback_topic(self) -> str:
+        return f"spacebutler/devices/{self.device_id}/feedback"
+
+    @property
+    def discovery_topic(self) -> str:
+        return f"homeassistant/sensor/spacebutler_{_entity_object_id(self)}/config"
+
+    @property
+    def feedback_discovery_topic(self) -> str:
+        return f"homeassistant/sensor/spacebutler_{_entity_object_id(self)}_feedback/config"
+
+
+SimulatedDevice = (
+    LightDevice
+    | CurtainDevice
+    | ClimateDevice
+    | SwitchDevice
+    | BinarySensorDevice
+    | IlluminanceSensorDevice
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _QueuedCommand:
+    topic: str
+    payload: bytes
 
 
 class DeviceSimulator:
@@ -244,16 +291,21 @@ class DeviceSimulator:
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
-        first_device = next(iter(devices.values()))
-        self._client.will_set(first_device.availability_topic, "offline", qos=1, retain=True)
+        self._client.will_set(_SIMULATOR_AVAILABILITY_TOPIC, "offline", qos=1, retain=True)
         self._server: ThreadingHTTPServer | None = None
         self._availability_announced_offline = False
         self._shutdown_requested = False
         self._connected = False
         self._lock = threading.RLock()
+        self._command_queue_size = int(os.environ.get("SPACEBUTLER_DEVICE_COMMAND_QUEUE_SIZE", "32"))
+        if self._command_queue_size < 1:
+            raise ValueError("SPACEBUTLER_DEVICE_COMMAND_QUEUE_SIZE must be at least 1")
+        self._command_queues: dict[str, Queue[_QueuedCommand | None]] = {}
+        self._command_workers: dict[str, threading.Thread] = {}
 
         for device in devices.values():
             self._store.ensure_device(device.device_id, device.initial_state)
+            self._ensure_command_worker(device)
 
     def run(self, admin_host: str, admin_port: int) -> None:
         """Start test-only HTTP management and the MQTT client loop."""
@@ -261,9 +313,8 @@ class DeviceSimulator:
         threading.Thread(target=self._server.serve_forever, name="simulator-admin", daemon=True).start()
         _LOGGER.info("Admin API listening on %s:%s", admin_host, admin_port)
         self._client.connect_async(self._mqtt_host, self._mqtt_port, keepalive=30)
-        # Docker Compose sends SIGTERM on `stop`. MQTT only supports one Last
-        # Will topic, so explicitly publish every device offline before exit.
-        # 这样 HA 不会把仍保留的在线状态误判为可控设备。
+        # Docker Compose sends SIGTERM on `stop`; publish retained offline
+        # status explicitly so HA does not keep stale controllable entities.
         self._install_shutdown_handlers()
         try:
             self._client.loop_forever(retry_first_connection=True)
@@ -272,18 +323,20 @@ class DeviceSimulator:
 
     def stop(self) -> None:
         self._announce_all_offline()
+        self._stop_command_workers()
         if self._server is not None:
             self._server.shutdown()
             self._server.server_close()
         self._client.disconnect()
 
     def _install_shutdown_handlers(self) -> None:
-        """Publish all availability topics before Docker terminates the process."""
+        """Publish retained availability before Docker terminates the process."""
         def handle_shutdown(_signum: int, _frame: Any) -> None:
             if self._shutdown_requested:
                 return
             self._shutdown_requested = True
             self._announce_all_offline()
+            self._stop_command_workers()
             if self._server is not None:
                 self._server.shutdown()
                 self._server.server_close()
@@ -299,11 +352,12 @@ class DeviceSimulator:
         if self._availability_announced_offline:
             return
         self._availability_announced_offline = True
+        self._publish_simulator_availability(False)
         with self._lock:
             devices = tuple(self._devices.values())
         for device in devices:
             self._client.publish(device.availability_topic, "offline", qos=1, retain=True)
-        _LOGGER.info("Published retained offline availability for %d simulated devices", len(devices))
+        _LOGGER.info("Published retained offline availability for simulator and %d devices", len(devices))
 
     def device_records(self) -> list[dict[str, Any]]:
         definitions = {item["device_id"]: item for item in self._store.definitions()}
@@ -354,13 +408,17 @@ class DeviceSimulator:
 
     def report_sensor_state(self, device_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         device = self._require_device(device_id)
-        if not isinstance(device, BinarySensorDevice):
-            raise ValueError("state reporting is only supported for presence and contact sensors")
+        if not isinstance(device, (BinarySensorDevice, IlluminanceSensorDevice)):
+            raise ValueError("state reporting is only supported for sensor devices")
         record = self._require_record(device_id)
         if not record["online"]:
             raise ValueError("sensor is offline")
         event_id = f"evt-{uuid4().hex}"
-        state = _binary_sensor_state(device.sensor_type, {**record["state"], **payload})
+        state = (
+            _binary_sensor_state(device.sensor_type, {**record["state"], **payload})
+            if isinstance(device, BinarySensorDevice)
+            else _illuminance_state({**record["state"], **payload})
+        )
         changed = self._store.update_state(device_id, state, event_id)
         self._publish_state(device, changed["state"], event_id)
         self._publish_feedback(device, "ok", request_id=event_id)
@@ -380,6 +438,7 @@ class DeviceSimulator:
                 {"definition": definition, "entity_id": _entity_id(device)},
             )
             self._devices[device_id] = device
+            self._ensure_command_worker(device)
             if self._connected:
                 self._subscribe_device(device)
                 self._publish_device(device)
@@ -392,6 +451,7 @@ class DeviceSimulator:
             if self._connected:
                 self._unpublish_device(device)
                 self._unsubscribe_device(device)
+            self._stop_command_worker(device.device_id)
             del self._devices[device_id]
         return removed
 
@@ -409,6 +469,7 @@ class DeviceSimulator:
         _LOGGER.info("Connected to MQTT broker at %s:%s", self._mqtt_host, self._mqtt_port)
         self._availability_announced_offline = False
         self._connected = True
+        self._publish_simulator_availability(True)
         self._client.subscribe(_HA_BIRTH_TOPIC, qos=1)
         with self._lock:
             devices = tuple(self._devices.values())
@@ -450,23 +511,94 @@ class DeviceSimulator:
         )
         if device is None:
             return
+        self._enqueue_command(device, message.topic, bytes(message.payload))
+
+    def _enqueue_command(self, device: SimulatedDevice, topic: str, payload: bytes) -> None:
+        with self._lock:
+            command_queue = self._command_queues.get(device.device_id)
+        if command_queue is None:
+            return
         try:
-            raw = message.payload.decode("utf-8").strip()
+            command_queue.put_nowait(_QueuedCommand(topic, payload))
+        except Full:
+            self._store.append_event(
+                device.device_id,
+                "command_rejected",
+                {"error": "command_queue_full", "topic": topic},
+            )
+            self._publish_feedback(device, "rejected", reason="command_queue_full", request_id=None)
+            _LOGGER.warning("Rejected command for %s: command queue is full", device.device_id)
+
+    def _handle_queued_command(self, device: SimulatedDevice, command: _QueuedCommand) -> None:
+        try:
+            raw = command.payload.decode("utf-8").strip()
             if isinstance(device, LightDevice):
                 payload = json.loads(raw)
                 if not isinstance(payload, dict):
                     raise ValueError("command payload must be a JSON object")
                 self._handle_light_command(device, payload)
             elif isinstance(device, CurtainDevice):
-                self._handle_curtain_command(device, raw, message.topic)
+                self._handle_curtain_command(device, raw, command.topic)
             elif isinstance(device, ClimateDevice):
-                self._handle_climate_command(device, raw, message.topic)
+                self._handle_climate_command(device, raw, command.topic)
             elif isinstance(device, SwitchDevice):
                 self._handle_switch_command(device, raw)
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
             self._store.append_event(device.device_id, "command_rejected", {"error": str(error)})
             self._publish_feedback(device, "rejected", reason=f"invalid_command: {error}", request_id=None)
             _LOGGER.warning("Rejected command for %s: %s", device.device_id, error)
+
+    def _ensure_command_worker(self, device: SimulatedDevice) -> None:
+        if isinstance(device, (BinarySensorDevice, IlluminanceSensorDevice)):
+            return
+        with self._lock:
+            if device.device_id in self._command_queues:
+                return
+            command_queue: Queue[_QueuedCommand | None] = Queue(maxsize=self._command_queue_size)
+            worker = threading.Thread(
+                target=self._command_worker,
+                args=(device, command_queue),
+                name=f"simulator-command-{device.device_id}",
+                daemon=True,
+            )
+            self._command_queues[device.device_id] = command_queue
+            self._command_workers[device.device_id] = worker
+        worker.start()
+
+    def _command_worker(self, device: SimulatedDevice, command_queue: Queue[_QueuedCommand | None]) -> None:
+        while True:
+            command = command_queue.get()
+            try:
+                if command is None:
+                    return
+                self._handle_queued_command(device, command)
+            except Exception:
+                _LOGGER.exception("Unhandled command worker error for %s", device.device_id)
+            finally:
+                command_queue.task_done()
+
+    def _stop_command_workers(self) -> None:
+        with self._lock:
+            device_ids = tuple(self._command_queues)
+        for device_id in device_ids:
+            self._stop_command_worker(device_id)
+
+    def _stop_command_worker(self, device_id: str) -> None:
+        with self._lock:
+            command_queue = self._command_queues.pop(device_id, None)
+            self._command_workers.pop(device_id, None)
+        if command_queue is None:
+            return
+        while True:
+            try:
+                command_queue.put_nowait(None)
+                return
+            except Full:
+                try:
+                    command_queue.get_nowait()
+                    command_queue.task_done()
+                except Empty:
+                    return
 
     def _handle_light_command(self, device: LightDevice, payload: dict[str, Any]) -> None:
         record = self._require_record(device.device_id)
@@ -645,6 +777,8 @@ class DeviceSimulator:
             if isinstance(device, ClimateDevice)
             else _switch_discovery(device)
             if isinstance(device, SwitchDevice)
+            else _illuminance_discovery(device)
+            if isinstance(device, IlluminanceSensorDevice)
             else _binary_sensor_discovery(device)
         )
         self._publish_payload(device.discovery_topic, discovery, retain=True)
@@ -667,7 +801,7 @@ class DeviceSimulator:
             self._client.publish(topic, "", qos=1, retain=True)
 
     def _subscribe_device(self, device: SimulatedDevice) -> None:
-        if isinstance(device, BinarySensorDevice):
+        if isinstance(device, (BinarySensorDevice, IlluminanceSensorDevice)):
             return
         self._client.subscribe(device.command_topic, qos=1)
         if isinstance(device, CurtainDevice):
@@ -676,7 +810,7 @@ class DeviceSimulator:
             self._client.subscribe(device.temperature_command_topic, qos=1)
 
     def _unsubscribe_device(self, device: SimulatedDevice) -> None:
-        if isinstance(device, BinarySensorDevice):
+        if isinstance(device, (BinarySensorDevice, IlluminanceSensorDevice)):
             return
         topics = [device.command_topic]
         if isinstance(device, CurtainDevice):
@@ -687,6 +821,9 @@ class DeviceSimulator:
 
     def _publish_availability(self, device: SimulatedDevice, online: bool) -> None:
         self._client.publish(device.availability_topic, "online" if online else "offline", qos=1, retain=True)
+
+    def _publish_simulator_availability(self, online: bool) -> None:
+        self._client.publish(_SIMULATOR_AVAILABILITY_TOPIC, "online" if online else "offline", qos=1, retain=True)
 
     def _publish_state(self, device: SimulatedDevice, state: dict[str, Any], request_id: str | None) -> None:
         if isinstance(device, LightDevice):
@@ -703,6 +840,8 @@ class DeviceSimulator:
             payload = {**_climate_state(state), "updated_at": _timestamp()}
         elif isinstance(device, SwitchDevice):
             payload = {"state": _switch_state(state)["power"], "power_w": _switch_state(state)["power_w"], "updated_at": _timestamp()}
+        elif isinstance(device, IlluminanceSensorDevice):
+            payload = {**_illuminance_state(state), "updated_at": _timestamp()}
         else:
             normalized = _binary_sensor_state(device.sensor_type, state)
             active = normalized["occupied"] if device.sensor_type == "presence" else normalized["open"]
@@ -751,6 +890,8 @@ def _device_type(device: SimulatedDevice) -> str:
         return "climate"
     if isinstance(device, SwitchDevice):
         return "switch"
+    if isinstance(device, IlluminanceSensorDevice):
+        return "illuminance"
     return device.sensor_type
 
 
@@ -764,6 +905,8 @@ def _entity_id(device: SimulatedDevice) -> str:
         if isinstance(device, CurtainDevice)
         else "binary_sensor"
         if isinstance(device, BinarySensorDevice)
+        else "sensor"
+        if isinstance(device, IlluminanceSensorDevice)
         else _device_type(device)
     )
     return f"{domain}.spacebutler_{_entity_object_id(device)}"
@@ -793,6 +936,8 @@ def _device_record(device: SimulatedDevice, record: dict[str, Any], source: str)
         capabilities = ["set_mode", "set_temperature", "turn_off"]
     elif isinstance(device, SwitchDevice):
         capabilities = ["turn_on", "turn_off"]
+    elif isinstance(device, IlluminanceSensorDevice):
+        capabilities = ["report_illuminance"]
     elif device.sensor_type == "presence":
         capabilities = ["report_occupied", "report_unoccupied"]
     else:
@@ -833,9 +978,7 @@ def _light_discovery(device: LightDevice) -> dict[str, Any]:
         "schema": "json",
         "command_topic": device.command_topic,
         "state_topic": device.state_topic,
-        "availability_topic": device.availability_topic,
-        "payload_available": "online",
-        "payload_not_available": "offline",
+        **_availability_config(device),
         "brightness": True,
         "brightness_scale": 255,
         "device": _discovery_device(device),
@@ -852,6 +995,7 @@ def _feedback_discovery(device: SimulatedDevice) -> dict[str, Any]:
         "state_topic": device.feedback_topic,
         "value_template": "{{ value_json.status }}",
         "json_attributes_topic": device.feedback_topic,
+        **_availability_config(device),
         "device": _discovery_device(device),
     }
 
@@ -874,9 +1018,7 @@ def _curtain_discovery(device: CurtainDevice) -> dict[str, Any]:
         "state_stopped": "stopped",
         "position_topic": device.state_topic,
         "position_template": "{{ value_json.position }}",
-        "availability_topic": device.availability_topic,
-        "payload_available": "online",
-        "payload_not_available": "offline",
+        **_availability_config(device),
         "optimistic": False,
         "json_attributes_topic": device.state_topic,
         "device": _discovery_device(device),
@@ -902,9 +1044,7 @@ def _climate_discovery(device: ClimateDevice) -> dict[str, Any]:
         "max_temp": 30,
         "temp_step": 0.5,
         "temperature_unit": "C",
-        "availability_topic": device.availability_topic,
-        "payload_available": "online",
-        "payload_not_available": "offline",
+        **_availability_config(device),
         "json_attributes_topic": device.state_topic,
         "device": _discovery_device(device),
     }
@@ -921,9 +1061,7 @@ def _switch_discovery(device: SwitchDevice) -> dict[str, Any]:
         "value_template": "{{ value_json.state }}",
         "payload_on": "ON",
         "payload_off": "OFF",
-        "availability_topic": device.availability_topic,
-        "payload_available": "online",
-        "payload_not_available": "offline",
+        **_availability_config(device),
         "json_attributes_topic": device.state_topic,
         "device": _discovery_device(device),
     }
@@ -940,9 +1078,7 @@ def _power_discovery(device: SwitchDevice) -> dict[str, Any]:
         "unit_of_measurement": "W",
         "device_class": "power",
         "state_class": "measurement",
-        "availability_topic": device.availability_topic,
-        "payload_available": "online",
-        "payload_not_available": "offline",
+        **_availability_config(device),
         "device": _discovery_device(device),
     }
 
@@ -958,11 +1094,44 @@ def _binary_sensor_discovery(device: BinarySensorDevice) -> dict[str, Any]:
         "value_template": "{{ value_json.state }}",
         "payload_on": "ON",
         "payload_off": "OFF",
-        "availability_topic": device.availability_topic,
-        "payload_available": "online",
-        "payload_not_available": "offline",
+        **_availability_config(device),
         "json_attributes_topic": device.state_topic,
         "device": _discovery_device(device),
+    }
+
+
+def _illuminance_discovery(device: IlluminanceSensorDevice) -> dict[str, Any]:
+    object_id = _entity_object_id(device)
+    return {
+        "name": None,
+        "unique_id": f"spacebutler_mqtt_{object_id}",
+        "default_entity_id": f"sensor.spacebutler_{object_id}",
+        "device_class": "illuminance",
+        "state_class": "measurement",
+        "unit_of_measurement": "lx",
+        "state_topic": device.state_topic,
+        "value_template": "{{ value_json.illuminance }}",
+        **_availability_config(device),
+        "json_attributes_topic": device.state_topic,
+        "device": _discovery_device(device),
+    }
+
+
+def _availability_config(device: SimulatedDevice) -> dict[str, Any]:
+    return {
+        "availability": [
+            {
+                "topic": _SIMULATOR_AVAILABILITY_TOPIC,
+                "payload_available": "online",
+                "payload_not_available": "offline",
+            },
+            {
+                "topic": device.availability_topic,
+                "payload_available": "online",
+                "payload_not_available": "offline",
+            },
+        ],
+        "availability_mode": "all",
     }
 
 
@@ -1037,6 +1206,16 @@ def _binary_sensor_state(sensor_type: str, value: dict[str, Any]) -> dict[str, A
     raise ValueError("unsupported binary sensor type")
 
 
+def _illuminance_state(value: dict[str, Any]) -> dict[str, Any]:
+    try:
+        illuminance = int(value.get("illuminance", 0))
+    except (TypeError, ValueError) as error:
+        raise ValueError("illuminance must be an integer") from error
+    if not 0 <= illuminance <= 100_000:
+        raise ValueError("illuminance must be between 0 and 100000")
+    return {"illuminance": illuminance}
+
+
 def _as_bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -1092,7 +1271,7 @@ def _load_device_definitions(path: Path) -> dict[str, dict[str, Any]]:
 def _normalize_device_definition(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     device_type = str(payload.get("type", "")).strip().lower()
     if device_type not in _DEVICE_TYPES:
-        raise ValueError("device type must be light, curtain, climate, switch, presence, or contact")
+        raise ValueError("unsupported device type")
     name = str(payload.get("name", "")).strip()
     if not 1 <= len(name) <= 40:
         raise ValueError("device name must contain 1 to 40 characters")
@@ -1146,6 +1325,8 @@ def _default_initial_state(device_type: str) -> dict[str, Any]:
         return {"occupied": False}
     if device_type == "contact":
         return {"open": False}
+    if device_type == "illuminance":
+        return {"illuminance": 8}
     return {"power": "OFF", "power_w": 1.5}
 
 
@@ -1193,6 +1374,15 @@ def _device_from_definition(device_id: str, raw: dict[str, Any]) -> SimulatedDev
             int(behavior["command_delay_ms"]),
             float(behavior["failure_rate"]),
             str(raw["type"]),
+        )
+    if raw["type"] == "illuminance":
+        return IlluminanceSensorDevice(
+            device_id,
+            str(raw["name"]),
+            str(raw["room"]),
+            _illuminance_state(initial_state),
+            int(behavior["command_delay_ms"]),
+            float(behavior["failure_rate"]),
         )
     return SwitchDevice(
         device_id,

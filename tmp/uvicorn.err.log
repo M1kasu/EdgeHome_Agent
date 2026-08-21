@@ -1,0 +1,15 @@
+INFO:     Will watch for changes in these directories: ['E:\\code\\znjj']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [8136] using StatReload
+INFO:     Started server process [21576]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'EdgeHome_Agent\deployment\homeassistant\custom_components\llama_conversation\__init__.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [21576]
+INFO:     Started server process [24124]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'EdgeHome_Agent\custom_components\llama_conversation\edgehome\models.py'. Reloading...

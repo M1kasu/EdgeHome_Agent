@@ -136,6 +136,7 @@ class HomeAssistantRuntime:
                 f"entity state is {before.state}",
                 before,
             )
+        feedback_before = self._read_protocol_feedback(action.entity_id)
 
         service = _service_call(action)
         if service is None:
@@ -150,6 +151,7 @@ class HomeAssistantRuntime:
 
         deadline = time.monotonic() + self._verification_timeout_seconds
         after = before
+        terminal_feedback: dict[str, str] | None = None
         while time.monotonic() < deadline:
             try:
                 after = self.read(action.entity_id)
@@ -158,7 +160,25 @@ class HomeAssistantRuntime:
                 continue
             if _matches(after, action):
                 break
+            feedback_after = self._read_protocol_feedback(action.entity_id)
+            if _is_new_terminal_feedback(feedback_before, feedback_after):
+                terminal_feedback = feedback_after
+                break
             time.sleep(self._poll_interval_seconds)
+        if not _matches(after, action):
+            feedback_after = terminal_feedback or self._read_protocol_feedback(action.entity_id)
+            if _is_new_terminal_feedback(feedback_before, feedback_after):
+                return _feedback_failure(action, before, after, feedback_after)
+            return ActionResult(
+                entity_id=action.entity_id,
+                capability=action.capability,
+                expected_value=action.value,
+                status=ExecutionStatus.TIMEOUT,
+                success=False,
+                before=before,
+                after=after,
+                message=f"state did not reach target within {self._verification_timeout_seconds:g} seconds",
+            )
         return ActionResult(
             entity_id=action.entity_id,
             capability=action.capability,
@@ -169,6 +189,25 @@ class HomeAssistantRuntime:
             after=after,
             message="Home Assistant accepted the service call and state was read back",
         )
+
+    def _read_protocol_feedback(self, entity_id: str) -> dict[str, str] | None:
+        feedback_entity = _feedback_entity_id(entity_id)
+        try:
+            payload = self.client.state(feedback_entity)
+        except (HomeAssistantRequestError, TimeoutError):
+            return None
+        attributes = payload.get("attributes")
+        if not isinstance(attributes, dict):
+            attributes = {}
+        status = str(payload.get("state", "")).strip().lower()
+        if not status or status in {"unknown", "unavailable"}:
+            return None
+        return {
+            "status": status,
+            "reason": str(attributes.get("reason", "")).strip(),
+            "request_id": str(attributes.get("request_id", "")).strip(),
+            "updated_at": str(attributes.get("updated_at", "")).strip(),
+        }
 
 
 @dataclass(frozen=True)
@@ -253,13 +292,17 @@ def _device_state(payload: dict[str, Any]) -> DeviceState:
     entity_id = str(payload.get("entity_id", ""))
     domain = entity_id.partition(".")[0]
     room = "living_room" if "living_room" in entity_id else "home"
-    attributes = payload.get("attributes")
+    raw_attributes = payload.get("attributes")
+    attributes = dict(raw_attributes) if isinstance(raw_attributes, dict) else {}
+    brightness = attributes.get("brightness")
+    if domain == "light" and isinstance(brightness, (int, float)):
+        attributes["brightness_pct"] = round(brightness * 100 / 255)
     return DeviceState(
         entity_id=entity_id,
         domain=domain,
         room=room,
         state=str(payload.get("state", "unknown")),
-        attributes=dict(attributes) if isinstance(attributes, dict) else {},
+        attributes=attributes,
     )
 
 
@@ -282,9 +325,61 @@ def _matches(device: DeviceState, action: PlanAction) -> bool:
     if action.capability == "set_temperature":
         return device.attributes.get("temperature") == action.value
     if action.capability == "set_brightness":
-        brightness = device.attributes.get("brightness")
-        return device.state == "on" and isinstance(brightness, (int, float)) and round(brightness * 100 / 255) == action.value
+        return device.state == "on" and device.attributes.get("brightness_pct") == action.value
     return False
+
+
+def _feedback_entity_id(entity_id: str) -> str:
+    object_id = entity_id.partition(".")[2]
+    return f"sensor.{object_id}_feedback"
+
+
+def _is_new_terminal_feedback(before: dict[str, str] | None, after: dict[str, str] | None) -> bool:
+    if after is None:
+        return False
+    if after["status"] not in {"ack_without_state_change", "invalid_state", "offline", "rejected", "stuck"}:
+        return False
+    if before is None:
+        return True
+    keys = ("status", "reason", "request_id", "updated_at")
+    return any(before.get(key) != after.get(key) for key in keys)
+
+
+def _feedback_failure(
+    action: PlanAction,
+    before: DeviceState,
+    after: DeviceState,
+    feedback: dict[str, str],
+) -> ActionResult:
+    status = feedback["status"]
+    reason = feedback["reason"] or status
+    if status == "ack_without_state_change":
+        return ActionResult(
+            entity_id=action.entity_id,
+            capability=action.capability,
+            expected_value=action.value,
+            status=ExecutionStatus.VALIDATION_FAILED,
+            success=True,
+            before=before,
+            after=after,
+            message=f"protocol feedback: {reason}",
+        )
+    if status in {"offline"}:
+        result_status = ExecutionStatus.DEVICE_UNAVAILABLE
+    elif status in {"invalid_state"}:
+        result_status = ExecutionStatus.VALIDATION_FAILED
+    else:
+        result_status = ExecutionStatus.EXECUTION_FAILED
+    return ActionResult(
+        entity_id=action.entity_id,
+        capability=action.capability,
+        expected_value=action.value,
+        status=result_status,
+        success=False,
+        before=before,
+        after=after,
+        message=f"protocol feedback: {reason}",
+    )
 
 
 def _failure(

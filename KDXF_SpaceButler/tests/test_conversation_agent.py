@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event, Thread
 import unittest
 
 from spacebutler.conversation import ConversationAgent
@@ -21,6 +22,26 @@ class FakePlanner:
     ) -> dict[str, object]:
         self.calls += 1
         return deepcopy(self.candidate)
+
+
+class BlockingPlanner(FakePlanner):
+    def __init__(self, candidate: dict[str, object]) -> None:
+        super().__init__(candidate)
+        self.block = False
+        self.started = Event()
+        self.release = Event()
+
+    def plan_home_task(
+        self,
+        text: str,
+        devices: list[dict[str, object]],
+        context: list[dict[str, object]],
+    ) -> dict[str, object]:
+        if self.block:
+            self.started.set()
+            if not self.release.wait(timeout=2):
+                raise TimeoutError("test planner release timed out")
+        return super().plan_home_task(text, devices, context)
 
 
 class FakeHome:
@@ -101,6 +122,46 @@ class FakeHome:
 
 
 class ConversationAgentTest(unittest.TestCase):
+    def test_cancel_is_rejected_while_another_request_is_being_planned(self) -> None:
+        home = FakeHome()
+        planner = BlockingPlanner(
+            {
+                "intent": "device_control",
+                "summary": "关闭客厅电视和主灯",
+                "steps": [
+                    {"device_id": "living_room_tv", "action": "turn_off", "value": None},
+                    {"device_id": "living_room_main_light", "action": "turn_off", "value": None},
+                ],
+            }
+        )
+        agent = ConversationAgent(home.inventory, home.execute, home.proactive, planner)
+        agent.submit("关闭客厅电视和主灯")
+        planner.block = True
+        submit_errors: list[Exception] = []
+
+        def submit_another_request() -> None:
+            try:
+                agent.submit("再检查一次客厅电视")
+            except Exception as error:  # pragma: no cover - asserted below
+                submit_errors.append(error)
+
+        worker = Thread(target=submit_another_request)
+        worker.start()
+        self.assertTrue(planner.started.wait(timeout=1))
+        before_cancel = agent.history()
+
+        with self.assertRaisesRegex(ValueError, "processing another request"):
+            agent.cancel()
+
+        after_cancel = agent.history()
+        planner.release.set()
+        worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(submit_errors, [])
+        self.assertEqual(after_cancel["messages"], before_cancel["messages"])
+        self.assertEqual(after_cancel["plans"], before_cancel["plans"])
+        self.assertEqual(before_cancel["plans"][0]["status"], "awaiting_confirmation")
+
     def test_model_multi_device_plan_waits_for_confirmation_then_executes(self) -> None:
         home = FakeHome()
         planner = FakePlanner(

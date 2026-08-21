@@ -32,10 +32,10 @@ from spacebutler import (  # noqa: E402
 )
 
 
-HA_URL = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:8900")
-SIMULATOR_URL = os.getenv("SPACEBUTLER_SIMULATOR_URL", "http://127.0.0.1:8091")
+HA_URL = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:12900")
+SIMULATOR_URL = os.getenv("SPACEBUTLER_SIMULATOR_URL", "http://127.0.0.1:12891")
 MQTT_HOST = os.getenv("SPACEBUTLER_MQTT_HOST", "127.0.0.1")
-MQTT_PORT = int(os.getenv("SPACEBUTLER_MQTT_PORT", "1884"))
+MQTT_PORT = int(os.getenv("SPACEBUTLER_MQTT_PORT", "2884"))
 DEVICE_DB = Path(
     os.getenv(
         "SPACEBUTLER_DEVICE_DB",
@@ -160,8 +160,8 @@ def main() -> int:
 
         fault_expectations = {
             "ack_without_state_change": ExecutionStatus.VALIDATION_FAILED,
-            "reject": ExecutionStatus.VALIDATION_FAILED,
-            "delay": ExecutionStatus.VALIDATION_FAILED,
+            "reject": ExecutionStatus.EXECUTION_FAILED,
+            "delay": ExecutionStatus.TIMEOUT,
             "offline": ExecutionStatus.DEVICE_UNAVAILABLE,
         }
         for mode, expected in fault_expectations.items():

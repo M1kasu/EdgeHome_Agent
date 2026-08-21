@@ -8,7 +8,7 @@ services:
       - ./runtime/mosquitto/data:/mosquitto/data
       - ./runtime/mosquitto/log:/mosquitto/log
     ports:
-      - "127.0.0.1:${SPACEBUTLER_MQTT_PORT:-1884}:1883"
+      - "127.0.0.1:${SPACEBUTLER_MQTT_PORT:-2884}:1883"
     restart: unless-stopped
     networks:
       - spacebutler
@@ -29,7 +29,7 @@ services:
       - ../device_simulator/config:/app/config:ro
       - ./runtime/device-simulator:/app/data
     ports:
-      - "127.0.0.1:${SPACEBUTLER_SIMULATOR_PORT:-8091}:8090"
+      - "127.0.0.1:${SPACEBUTLER_SIMULATOR_PORT:-12891}:8090"
     restart: unless-stopped
     networks:
       - spacebutler
@@ -44,7 +44,7 @@ services:
     volumes:
       - ./homeassistant:/config
     ports:
-      - "127.0.0.1:${SPACEBUTLER_HA_PORT:-8900}:8123"
+      - "127.0.0.1:${SPACEBUTLER_HA_PORT:-12900}:8123"
     restart: unless-stopped
     networks:
       - spacebutler
@@ -64,7 +64,7 @@ services:
       - --port
       - "8080"
     ports:
-      - "127.0.0.1:${SPACEBUTLER_MODEL_PORT:-8081}:8080"
+      - "127.0.0.1:${SPACEBUTLER_MODEL_PORT:-12881}:8080"
     restart: unless-stopped
     networks:
       - spacebutler

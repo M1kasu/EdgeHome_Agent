@@ -1,0 +1,11 @@
+[
+  {
+    "command": [
+      "D:\\environment\\anaconda\\python.exe",
+      "E:\\code\\znjj\\KDXF_SpaceButler\\scripts\\accept_workbench_external.py"
+    ],
+    "returncode": 1,
+    "stdout": "{\n  \"acceptance\": \"FAIL\",\n  \"boundary\": \"external_http_client -> workbench_api -> agent -> HA_MQTT_SQLite\",\n  \"first_status\": \"needs_confirmation\",\n  \"confirmed_status\": \"executed\",\n  \"learned\": \"learned_auto_execute\",\n  \"second_status\": \"executed\",\n  \"inventory_devices\": 11,\n  \"manual_controls\": [\n    \"light\",\n    \"switch\",\n    \"curtain\",\n    \"climate\",\n    \"presence\",\n    \"contact\"\n  ],\n  \"event_count\": 30\n}\n",
+    "stderr": ""
+  }
+]

@@ -173,6 +173,8 @@ class ConversationAgent:
 
     def cancel(self) -> dict[str, object]:
         with self._lock:
+            if self._busy:
+                raise ValueError("Agent is processing another request")
             plan = self._pending_plan()
             if plan is None:
                 self._append_message("assistant", "当前没有等待取消的任务计划。")

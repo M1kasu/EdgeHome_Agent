@@ -11,6 +11,7 @@ from typing import Any
 
 
 ENERGY_RULE_ID = "empty_room_open_window_energy_guard"
+NIGHT_SAFETY_RULE_ID = "night_elder_safety"
 
 
 class ProactiveRuleStore:

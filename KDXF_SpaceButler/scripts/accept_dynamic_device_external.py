@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_URL = os.getenv("SPACEBUTLER_WORKBENCH_URL", "http://127.0.0.1:8766").rstrip("/")
-HA_URL = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:8900").rstrip("/")
+HA_URL = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:12900").rstrip("/")
 HA_TOKEN = os.environ["HA_TOKEN"]
 COMPOSE = ROOT / "deployment" / "docker-compose.yml"
 DEVICE_ID = "acceptance_study_light"

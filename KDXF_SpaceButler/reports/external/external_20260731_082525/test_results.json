@@ -1,0 +1,36 @@
+[
+  {
+    "command": [
+      "docker",
+      "version",
+      "--format",
+      "{{.Server.Version}}"
+    ],
+    "returncode": 0,
+    "stdout": "29.1.3\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "resolve_edge_llm_model",
+      "E:\\code\\znjj\\EdgeHome_Agent\\deployment\\models\\Home-Llama-3.2-3B.q4_k_m.gguf"
+    ],
+    "returncode": 0
+  },
+  {
+    "command": [
+      "docker",
+      "compose",
+      "-f",
+      "E:\\code\\znjj\\KDXF_SpaceButler\\deployment\\docker-compose.yml",
+      "--profile",
+      "edge-llm",
+      "up",
+      "-d",
+      "--build"
+    ],
+    "returncode": 1,
+    "stdout": "#1 [internal] load local bake definitions\n#1 reading from stdin 649B done\n#1 DONE 0.0s\n\n#2 [internal] load build definition from Dockerfile\n#2 transferring dockerfile: 252B done\n#2 DONE 0.0s\n\n#3 [internal] load metadata for docker.io/library/python:3.13-slim\n#3 DONE 17.3s\n\n#4 [internal] load .dockerignore\n#4 transferring context: 2B done\n#4 DONE 0.0s\n\n#5 [internal] load build context\n#5 transferring context: 736B done\n#5 DONE 0.0s\n\n#6 [1/5] FROM docker.io/library/python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91\n#6 resolve docker.io/library/python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 0.0s done\n#6 DONE 0.0s\n\n#7 [4/5] RUN pip install --no-cache-dir -r requirements.txt\n#7 CACHED\n\n#8 [2/5] WORKDIR /app\n#8 CACHED\n\n#9 [3/5] COPY requirements.txt .\n#9 CACHED\n\n#10 [5/5] COPY spacebutler_simulator ./spacebutler_simulator\n#10 CACHED\n\n#11 exporting to image\n#11 exporting layers done\n#11 exporting manifest sha256:6063ba7f53d5b6c0ade0574f4da1a369085859d842ccbec2557a2820e5b780f3 done\n#11 exporting config sha256:79e4ad90d21c19126c36af2cc0fe1550dd5656c4d14b4a96f3c09e30ff71b7fb done\n#11 exporting attestation manifest sha256:f72c6dcc8acede2347ba3c519ff0f2ff9feb7f7c68816eee67e95bcaab843254 0.0s done\n#11 exporting manifest list sha256:eedaa02cbea603d05745da92e420f477ce7c03089f049278bfe09c1bcd07eef4\n#11 exporting manifest list sha256:eedaa02cbea603d05745da92e420f477ce7c03089f049278bfe09c1bcd07eef4 0.0s done\n#11 naming to docker.io/library/spacebutler-spacebutler-device-simulator:latest done\n#11 unpacking to docker.io/library/spacebutler-spacebutler-device-simulator:latest done\n#11 DONE 0.1s\n\n#12 resolving provenance for metadata file\n#12 DONE 0.0s\n",
+    "stderr": " Image spacebutler-spacebutler-device-simulator Building \n Image spacebutler-spacebutler-device-simulator Built \n Container spacebutler-spacebutler-device-simulator-1 Recreate \n Container spacebutler-spacebutler-device-simulator-1 Recreated \n Container spacebutler-spacebutler-mqtt-1 Starting \n Container spacebutler-spacebutler-edge-llm-1 Starting \n Container spacebutler-spacebutler-mqtt-1 Started \nError response from daemon: ports are not available: exposing port TCP 127.0.0.1:8081 -> 127.0.0.1:0: listen tcp4 127.0.0.1:8081: bind: An attempt was made to access a socket in a way forbidden by its access permissions.\n"
+  }
+]
