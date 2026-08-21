@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ha_bootstrap import obtain_token, wait_until_ready  # noqa: E402
+from ha_bootstrap import configure_mqtt, obtain_token, wait_until_ready  # noqa: E402
 from spacebutler import EdgeLanguageRouter, EdgeLlmClient, HomeAssistantClient, HouseholdMemory  # noqa: E402
 from spacebutler.workbench import WorkbenchController, serve_workbench  # noqa: E402
 
@@ -28,6 +28,7 @@ def main() -> int:
     auth_store = ROOT / "deployment" / "homeassistant" / ".storage" / "auth"
     wait_until_ready(ha_url, timeout_seconds=120)
     token = obtain_token(ha_url, auth_store)
+    configure_mqtt(ha_url, token)
     language_router = None
     edge_llm_client = None
     try:

@@ -28,25 +28,39 @@ SpaceButler 是面向科大讯飞 SpaceMind 家庭应用场景赛题的 AI Agent
 
 ## 快速运行
 
-```powershell
-cd E:\code\znjj\KDXF_SpaceButler
-python -m unittest discover -s tests -v
-python scripts\run_iteration.py
-```
-
-运行示例：
+准备 Python 3.11+、Docker Desktop 和 PowerShell，然后在项目目录执行：
 
 ```powershell
-python -m spacebutler.demo
-```
-
-启动现场工作台：
-
-```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+Copy-Item .env.example deployment\.env
+docker compose -f deployment\docker-compose.yml up -d --build
 python scripts\run_workbench.py --port 8765
 ```
 
-浏览器打开 `http://127.0.0.1:8765`。首页可直接添加设备并按类型控制；“主动服务”既可绑定节能规则的数据源，也可配置老人夜间起身的有序灯光路径、低亮度门槛和手动接管灯。新增设备会通过 MQTT Discovery 自动进入 Home Assistant。工作台使用项目内置前端资源，不依赖公网 CDN；Home Assistant Token 仅保留在服务端。
+浏览器打开 `http://127.0.0.1:8765`。工作台启动时会自动完成本地 Home Assistant 初始化和 MQTT 配置；默认端口如下：
+
+| 服务 | 默认地址 |
+| --- | --- |
+| 工作台 | `http://127.0.0.1:8765` |
+| Home Assistant | `http://127.0.0.1:12900` |
+| 设备模拟器 | `http://127.0.0.1:12891` |
+| MQTT | `127.0.0.1:2884` |
+| 可选 llama.cpp | `http://127.0.0.1:12881` |
+
+没有 GGUF 模型时，工作台会明确使用确定性语言降级；主动规则、设备控制和状态回读仍可完整运行。完整安装、夜间安全场景操作、端口覆盖和故障排查见 [使用指南](docs/USAGE.md)。
+
+运行本地验证：
+
+```powershell
+python -m pytest tests -q
+python -m ruff check .
+node --check workbench\app.js
+python scripts\run_iteration.py
+```
+
+首页可直接添加设备并按类型控制；“主动服务”可绑定节能规则来源，也可配置老人夜间起身的有序灯光路径、照度门槛和人工接管灯。新增设备通过 MQTT Discovery 自动进入 Home Assistant。工作台使用项目内置前端资源，不依赖公网 CDN；Home Assistant Token 仅保留在服务端。
 
 同类开源项目调研、差距分析与场景选择见 `docs/OPEN_SOURCE_PROJECT_COMPARISON.md`。
 

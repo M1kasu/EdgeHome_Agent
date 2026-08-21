@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+*.egg-info/
 .env
 deployment/homeassistant/.storage/
 deployment/homeassistant/.cloud/
