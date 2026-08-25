@@ -1,4 +1,4 @@
-"""External black-box acceptance against HA, MQTT, the simulator and SQLite."""
+"""External black-box acceptance against HA, MQTT and one device container."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from enum import Enum
 import json
 import os
 from pathlib import Path
-import sqlite3
+import subprocess
 import sys
 import time
 from typing import Any
@@ -35,13 +35,7 @@ from spacebutler import (  # noqa: E402
 HA_URL = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:12900")
 SIMULATOR_URL = os.getenv("SPACEBUTLER_SIMULATOR_URL", "http://127.0.0.1:12891")
 MQTT_HOST = os.getenv("SPACEBUTLER_MQTT_HOST", "127.0.0.1")
-MQTT_PORT = int(os.getenv("SPACEBUTLER_MQTT_PORT", "2884"))
-DEVICE_DB = Path(
-    os.getenv(
-        "SPACEBUTLER_DEVICE_DB",
-        str(ROOT / "deployment" / "runtime" / "device-simulator" / "device_state.db"),
-    )
-)
+MQTT_PORT = int(os.getenv("SPACEBUTLER_MQTT_PORT", "18884"))
 MEMORY_DB = Path(
     os.getenv(
         "SPACEBUTLER_MEMORY_DB",
@@ -52,6 +46,7 @@ TOKEN = os.environ["HA_TOKEN"]
 CLIMATE = "climate.spacebutler_living_room_ac"
 FEEDBACK = "sensor.spacebutler_living_room_ac_feedback"
 DEVICE_ID = "living_room_ac"
+DEVICE_SERVICE = "spacebutler-device-living-room-ac"
 STATE_TOPIC = "spacebutler/devices/living_room_ac/state"
 
 
@@ -211,7 +206,7 @@ def main() -> int:
         json.dumps(
             {
                 "acceptance": "PASS" if passed else "FAIL",
-                "boundary": "external_process_to_ha_mqtt_simulator_sqlite",
+                "boundary": "external_process_to_ha_mqtt_device_container_sqlite",
                 "cases_passed": sum(bool(case.get("passed")) for case in cases),
                 "cases_total": len(cases),
                 "cases": cases,
@@ -260,20 +255,44 @@ def _simulator_request(method: str, path: str, payload: dict[str, object] | None
 
 
 def _sqlite_device() -> dict[str, Any]:
-    with sqlite3.connect(DEVICE_DB) as connection:
-        row = connection.execute(
-            "SELECT state_json, updated_at, last_command_id, online, fault_mode FROM device_state WHERE device_id = ?",
-            (DEVICE_ID,),
-        ).fetchone()
-    if row is None:
-        raise RuntimeError("SQLite device state is missing")
-    return {
-        "state": json.loads(row[0]),
-        "updated_at": row[1],
-        "last_command_id": row[2],
-        "online": bool(row[3]),
-        "fault_mode": row[4],
-    }
+    compose = ROOT / "deployment" / "docker-compose.yml"
+    container_result = subprocess.run(
+        ["docker", "compose", "-f", str(compose), "ps", "-q", DEVICE_SERVICE],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+    container = container_result.stdout.strip()
+    if container_result.returncode or not container:
+        raise RuntimeError(container_result.stderr.strip() or f"missing container for {DEVICE_SERVICE}")
+    query = (
+        "import json,sqlite3;"
+        "c=sqlite3.connect('/app/data/device_state.db');"
+        "r=c.execute(\"SELECT state_json,updated_at,last_command_id,online,fault_mode "
+        f"FROM device_state WHERE device_id='{DEVICE_ID}'\").fetchone();"
+        "print(json.dumps({'state':json.loads(r[0]),'updated_at':r[1],"
+        "'last_command_id':r[2],'online':bool(r[3]),'fault_mode':r[4]}))"
+    )
+    result = subprocess.run(
+        ["docker", "exec", container, "python", "-c", query],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip())
+    decoded = json.loads(result.stdout)
+    if not isinstance(decoded, dict):
+        raise RuntimeError("device container returned invalid SQLite state")
+    return decoded
 
 
 def _wait_for(predicate: Any, timeout_seconds: float, label: str) -> None:

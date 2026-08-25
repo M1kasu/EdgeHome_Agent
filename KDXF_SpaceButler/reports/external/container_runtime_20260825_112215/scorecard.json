@@ -1,0 +1,47 @@
+{
+  "generated_at": "2026-08-25T11:22:15+08:00",
+  "gate": "ONE_DEVICE_ONE_CONTAINER_EXTERNAL_ACCEPTANCE",
+  "passed": true,
+  "checks": [
+    {
+      "name": "local_unit_and_compose",
+      "passed": true,
+      "result": "54 tests and 10 subtests; Ruff, JavaScript and Compose config passed"
+    },
+    {
+      "name": "device_sqlite_and_fault_matrix",
+      "passed": true,
+      "result": "6/6"
+    },
+    {
+      "name": "runtime_fleet_mqtt_ha_restart_and_sigkill_isolation",
+      "passed": true,
+      "result": "5/5"
+    },
+    {
+      "name": "dynamic_device_container_lifecycle",
+      "passed": true,
+      "result": "4/4"
+    },
+    {
+      "name": "night_safety_multi_container_execution",
+      "passed": true,
+      "result": "2 actions verified"
+    },
+    {
+      "name": "workbench_responsive_browser",
+      "passed": true,
+      "result": "9 runtime badges; 390x844 no horizontal overflow; 0 console errors"
+    }
+  ],
+  "runtime": {
+    "fleet_total": 9,
+    "fleet_running": 9,
+    "device_memory_observed": "16-18 MiB each",
+    "fleet_gateway_memory_observed": "about 35 MiB",
+    "workbench_url": "http://127.0.0.1:8765"
+  },
+  "not_run": [
+    "llama.cpp full gate: GGUF model is not available on this host"
+  ]
+}

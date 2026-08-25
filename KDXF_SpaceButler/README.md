@@ -17,8 +17,9 @@ SpaceButler 是面向科大讯飞 SpaceMind 家庭应用场景赛题的 AI Agent
 - 老人夜间起身安全路径：监听 HA 人体存在实体的上升沿，从 MQTT 照度实体取值，按成员偏好顺序点亮柔光；人工接管有显式来源和自动过期，并逐项完成 HA/MQTT 状态回读。
 - 计划编排 `SpaceButlerAgent`：输入空间快照，输出可解释 `ServicePlan`。
 - 主动节能闭环：任意已绑定空间连续无人、窗户打开、空调运行且功率偏高时，首次建议确认，执行后四路回读；用户授权后同类场景自动执行。
-- 真实执行底座：独立 Docker Compose、Home Assistant REST、MQTT Discovery、设备模拟器和 SQLite 设备状态。
-- 动态设备注册表：设备定义写入 SQLite，运行时新增设备重启后仍存在。
+- 真实执行底座：独立 Docker Compose、Home Assistant REST、MQTT Discovery、设备容器和 SQLite 设备状态。
+- 一设备一容器：每台虚拟设备使用独立 MQTT Client ID、SQLite 卷、资源上限和故障域，Fleet Gateway 保持统一设备 API。
+- 动态设备编排：运行时新增设备会创建专属 Docker 容器，容器重启后设备定义和状态仍然存在。
 - 设备中心：按空间管理灯光、智能开关、空调、窗帘、人体存在、门窗和照度传感器，支持添加、控制/上报、故障注入和删除。
 - 动态 MQTT Discovery：新增设备立即进入 Home Assistant，删除设备同步清理 Discovery 配置。
 - 动态主动规则：选择空间及三路设备来源，绑定持久化；实时展示设备实体、上报时间和每项触发条件。
@@ -45,8 +46,8 @@ python scripts\run_workbench.py --port 8765
 | --- | --- |
 | 工作台 | `http://127.0.0.1:8765` |
 | Home Assistant | `http://127.0.0.1:12900` |
-| 设备模拟器 | `http://127.0.0.1:12891` |
-| MQTT | `127.0.0.1:2884` |
+| 设备 Fleet Gateway | `http://127.0.0.1:12891` |
+| MQTT | `127.0.0.1:18884` |
 | 可选 llama.cpp | `http://127.0.0.1:12881` |
 
 没有 GGUF 模型时，工作台会明确使用确定性语言降级；主动规则、设备控制和状态回读仍可完整运行。完整安装、夜间安全场景操作、端口覆盖和故障排查见 [使用指南](docs/USAGE.md)。
@@ -62,7 +63,7 @@ python scripts\run_iteration.py
 
 首页可直接添加设备并按类型控制；“主动服务”可绑定节能规则来源，也可配置老人夜间起身的有序灯光路径、照度门槛和人工接管灯。新增设备通过 MQTT Discovery 自动进入 Home Assistant。工作台使用项目内置前端资源，不依赖公网 CDN；Home Assistant Token 仅保留在服务端。
 
-同类开源项目调研、差距分析与场景选择见 `docs/OPEN_SOURCE_PROJECT_COMPARISON.md`。
+同类开源项目调研、差距分析与场景选择见 `docs/OPEN_SOURCE_PROJECT_COMPARISON.md`；小米 IoT、阿里云生活物联网平台对比及一设备一容器设计见 `docs/DEVICE_CONTAINER_ARCHITECTURE.md`。
 
 ## 外部验收
 
@@ -74,4 +75,4 @@ python scripts\run_external_acceptance.py
 
 将 `Home-Llama-3.2-3B.q4_k_m.gguf` 放入 `deployment/models/`，或通过 `SPACEBUTLER_MODELS_DIR` 指向模型目录。当前工作区存在旧项目模型时，验收脚本会迁移复用该 GGUF 制品，但始终启动 KDXF 自己的 llama.cpp 容器。
 
-该门禁在独立进程中验证 `Agent -> Home Assistant REST -> MQTT -> device-simulator -> SQLite -> MQTT/HA 回读`，并覆盖服务重启、KDXF Compose llama.cpp、动态设备注册/控制/删除、动态主动规则绑定和工作台 API。报告写入 `reports/external/`。也可用 `python scripts\run_iteration.py --external` 同时执行本地回归与外部门禁。
+该门禁在独立进程中验证 `Agent -> Home Assistant REST -> MQTT -> 目标设备容器 -> 独立 SQLite -> MQTT/HA 回读`，并覆盖单设备容器故障隔离、服务重启、KDXF Compose llama.cpp、动态设备容器注册/控制/删除、动态主动规则绑定和工作台 API。报告写入 `reports/external/`。也可用 `python scripts\run_iteration.py --external` 同时执行本地回归与外部门禁。

@@ -4,20 +4,21 @@
 
 当前提交：以 `git rev-parse HEAD` 输出为准。
 
-当前阶段：`ENGINEERING_EXTERNAL_GATE_PASS`
+当前阶段：`ONE_DEVICE_ONE_CONTAINER_EXTERNAL_GATE_PASS`
 
 已完成能力：
 - 读取 KDXF 赛题文档并按 `docs/REUSE_OR_REBUILD_DECISION.md` 落实“新 Agent 外壳 + 旧设备底座迁移”。
 - 完成“空间连续无人、窗户打开、空调运行、功率偏高”的主动节能闭环。
 - 完成“老人夜间起身、环境昏暗”的主动安全照明闭环：监听已绑定 HA 人体存在实体上升沿，从 MQTT Discovery 照度实体读取环境值，可配置 1 至 6 路有序路径灯、5% 至 40% 成员亮度偏好和照度门槛。
 - 人工接管不再由“灯当前已亮”推断，而是写入带来源、开始时间和 30 分钟 TTL 的 SQLite 控制上下文；关闭灯、重配规则或清空偏好时释放。
-- 夜间路径执行通过 Home Assistant REST、MQTT、设备模拟器与 HA 状态逐项回读；后台监听启动时只建立状态基线，仅在 `off -> on` 时执行，避免进程重启误触。
+- 夜间路径执行通过 Home Assistant REST、MQTT、目标设备容器与 HA 状态逐项回读；后台监听启动时只建立状态基线，仅在 `off -> on` 时执行，避免进程重启误触。
 - 首次建议确认、执行、HA/MQTT/SQLite 回读、反馈学习及后续同类场景自动执行。
 - 家庭偏好 SQLite 持久化，Agent 重建后仍可召回学习结果。
-- MQTT Broker、Home Assistant、设备模拟器逐项重启后重新完成真实闭环。
+- 设备运行时、Fleet Gateway、MQTT Broker、Home Assistant 逐项重启后重新完成真实闭环。
 - llama.cpp 边缘语言路由；模型输出只生成候选偏好，必须经过字段白名单和数值范围验证。
-- 设备定义与设备状态分别持久化到 SQLite；YAML 只作为首次启动种子。
-- 支持在运行中添加和删除虚拟设备，并立即通过 MQTT Discovery 注册或移除 Home Assistant 实体。
+- 静态设备按 `DEVICE_ID` 分别运行在九个受限容器中，每台设备拥有独立 MQTT Client ID、SQLite 卷、资源上限和故障域。
+- Fleet Gateway 聚合设备清单并路由设备管理请求；Workbench 和 Agent 不直接接触 Docker API。
+- 支持在运行中添加和删除虚拟设备；新增设备由 Fleet Gateway 创建专属容器，并立即通过 MQTT Discovery 注册 Home Assistant 实体。
 - 支持灯光、智能开关、空调、窗帘、人体存在、门窗和照度传感器七类设备，按房间展示并经 HA REST/MQTT 真实控制、上报和回读。
 - 主动规则可持久化绑定任意空间内的存在传感器、门窗传感器和空调，不再固定为客厅实体。
 - 主动服务页面展示设备名、实体 ID、在线/Discovery 状态、上报时间和逐项条件判定，测试事件写入设备侧状态。
@@ -26,29 +27,33 @@
 - 对话 Agent 支持实时设备落地、多步骤确认、失败中止、状态查询及 SQLite 会话恢复；服务端拒绝并发确认、取消和清空操作。
 - Home Assistant 灯光亮度回读统一为百分比语义，真实 `140/255` 回读可正确验证为 `55%`。
 - 工作台轮询会保留设备控件焦点、规则草稿和测试场景草稿；慢请求通过草稿版本号避免覆盖后续编辑。
-- Docker 默认宿主端口避开 Windows/Hyper-V 常见保留段，模型使用 `12881`，设备模拟器使用 `12891`，仍支持环境变量覆盖。
-- 设备模拟器使用共享进程 availability topic 作为 MQTT Last Will，并让主实体、反馈传感器和功率传感器同时依赖“模拟器进程在线 + 单设备在线”。
+- Docker 默认宿主端口避开 Windows/Hyper-V 常见保留段，模型使用 `12881`，Fleet Gateway 使用 `12891`，MQTT 使用 `18884`，仍支持环境变量覆盖。
+- 单设备运行时使用独立 availability topic 作为 MQTT Last Will；一个设备容器退出时，不会把其他设备实体连带标记为不可用。
 - MQTT `on_message` 改为轻量入队；每个可控设备使用有界 FIFO 工作队列处理命令，慢窗帘/延迟故障不会阻塞其它设备命令处理。
 - Home Assistant runtime 在目标状态未达成时读取只读协议反馈传感器，区分 `rejected`、`ack_without_state_change` 和超时，避免把拒绝、延迟统一折叠为 `validation_failed`。
 
 最终验证：
-- 49 项测试和 10 项参数化子测试通过，Ruff 和 JavaScript 语法检查通过。
+- 54 项测试和 10 项参数化子测试通过，Ruff、JavaScript 语法检查和 Docker Compose 配置解析通过。
+- 新增单设备筛选、动态定义身份匹配、Fleet 离线清单和停止容器路由拒绝测试。
+- 独立设备 SQLite、MQTT/HA 回读和故障矩阵外部门禁 6/6 通过。
+- 设备运行时、Fleet Gateway、MQTT、Home Assistant 重启恢复与目标容器 SIGKILL 隔离外部门禁 5/5 通过。
+- 动态设备专属容器注册、HA Discovery、控制、自身重启状态恢复和删除外部门禁 4/4 通过。
+- 目标空调容器被 SIGKILL 后，空调主实体和反馈实体变为 `unavailable`，卧室阅读灯保持在线。
+- 本机九个设备运行时各约 16 至 18 MiB，Fleet Gateway 约 35 MiB。
 - `python scripts\run_iteration.py` 通过，本地门禁 6/6。
-- `python scripts\run_external_acceptance.py` 在无端口覆盖环境变量时通过，新增 SIGKILL availability 检查在内的外部门禁 13/13 全部通过。
 - 节能闭环正常/反馈/ACK 不变/拒绝/延迟/离线 6/6 通过。
-- MQTT、Home Assistant、设备模拟器重启恢复 3/3 通过。
-- 动态设备注册、四类设备控制、模拟器重启持久化和 Discovery 删除外部测试 4/4 通过。
+- 完整 `run_external_acceptance.py` 本轮未执行，因为当前主机没有 GGUF；不影响上述三个不依赖模型的设备容器外部门禁。
 - 运行时创建书房三类设备、改绑主动规则、设备事件触发和空调回读外部测试 3/3 通过。
 - 夜间场景绕过工作台按钮、直接向设备侧上报人体存在后，后台监听自动执行；8 lux 下 2 个动作回读通过并保留 1 个接管灯，120 lux 下抑制补光。
 - 工作台桌面与移动端 390x844 浏览器交互均通过，无横向溢出，浏览器控制台错误为 0。
 - 真实 HA 亮度回读：原始值 `140`、规范化值 `55%`、报告 `verified=true`。
-- 最终本地证据：`reports/iterations/iteration_20260821_021114/`。
-- 最终外部证据：`reports/external/external_20260807_093636/`。
+- 最终本地证据：`reports/iterations/iteration_20260825_032504/`。
+- 本轮设备容器证据：`reports/external/container_runtime_20260825_112215/scorecard.json`；历史含 llama.cpp 的完整外部证据：`reports/external/external_20260807_093636/`。
 
 当前服务：
 - Home Assistant：`http://127.0.0.1:12900`
-- MQTT：`127.0.0.1:2884`
-- 设备模拟器：`http://127.0.0.1:12891`
+- MQTT：`127.0.0.1:18884`
+- 设备 Fleet Gateway：`http://127.0.0.1:12891`，当前 9/9 设备运行时在线。
 - KDXF llama.cpp：当前未启动，本机未找到配置的 GGUF 模型；工作台使用确定性降级，不影响本次夜间规则闭环。
 - SpaceButler 工作台：`http://127.0.0.1:8765`
 
@@ -56,4 +61,4 @@
 - 当前结论是项目自带外部黑盒门禁通过，不等同于科大讯飞赛事方验收或获奖结果。
 - 当前动态添加、主动规则和夜间路径读取的是 MQTT 虚拟设备；真实毫米波/PIR、真实照度硬件、现场网络环境、团队信息和商业数据仍需在正式提交或现场阶段验证。
 
-阻塞问题：无工程阻塞。
+阻塞问题：无工程阻塞；完整外部门禁中的 llama.cpp 路由仍需要本机提供 GGUF 模型。

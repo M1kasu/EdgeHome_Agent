@@ -22,6 +22,7 @@ from device_simulator.spacebutler_simulator.app import (
     _illuminance_discovery,
     _illuminance_state,
     _light_discovery,
+    _load_devices,
     _normalize_device_definition,
     _power_discovery,
     _switch_discovery,
@@ -30,6 +31,48 @@ from device_simulator.spacebutler_simulator.store import DeviceStateStore
 
 
 class DynamicDeviceRegistryTest(unittest.TestCase):
+    def test_single_device_runtime_loads_only_selected_definition(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config = root / "devices.yaml"
+            config.write_text(
+                """devices:
+  first_light:
+    type: light
+    name: First Light
+    room: bedroom
+  second_light:
+    type: light
+    name: Second Light
+    room: study
+""",
+                encoding="utf-8",
+            )
+            store = DeviceStateStore(root / "devices.db")
+
+            devices = _load_devices(config, store, "second_light")
+
+            self.assertEqual(list(devices), ["second_light"])
+            self.assertEqual([item["device_id"] for item in store.definitions()], ["second_light"])
+
+    def test_inline_runtime_definition_must_match_container_device_id(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            store = DeviceStateStore(root / "devices.db")
+            definition = {
+                "device_id": "study_light",
+                "type": "light",
+                "name": "Study Light",
+                "room": "study",
+            }
+
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                _load_devices(root / "unused.yaml", store, "other_light", definition)
+
+            devices = _load_devices(root / "unused.yaml", store, "study_light", definition)
+            self.assertEqual(list(devices), ["study_light"])
+            self.assertEqual(store.definitions()[0]["source"], "runtime")
+
     def test_runtime_device_definition_and_state_survive_store_reconstruction(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             database_path = Path(temporary_directory) / "devices.db"

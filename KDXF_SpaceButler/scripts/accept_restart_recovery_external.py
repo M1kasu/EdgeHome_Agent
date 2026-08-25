@@ -1,4 +1,4 @@
-"""External recovery acceptance for simulator, MQTT and Home Assistant restarts."""
+"""External recovery acceptance for device, fleet, MQTT and HA restarts."""
 
 from __future__ import annotations
 
@@ -32,12 +32,16 @@ TOKEN = os.environ["HA_TOKEN"]
 COMPOSE = ROOT / "deployment" / "docker-compose.yml"
 CLIMATE = "climate.spacebutler_living_room_ac"
 DEVICE_ID = "living_room_ac"
+DEVICE_SERVICE = "spacebutler-device-living-room-ac"
+FLEET_SERVICE = "spacebutler-device-simulator"
+ISOLATION_WITNESS = "light.spacebutler_bedroom_reading_light"
 
 
 def main() -> int:
     cases: list[dict[str, Any]] = []
     services = (
-        "spacebutler-device-simulator",
+        DEVICE_SERVICE,
+        FLEET_SERVICE,
         "spacebutler-mqtt",
         "spacebutler-home-assistant",
     )
@@ -78,34 +82,40 @@ def main() -> int:
     try:
         client = HomeAssistantClient(HA_URL, TOKEN)
         _prepare_cool(client)
-        entity_ids = _simulator_entity_ids()
-        _wait_for(lambda: _all_entity_states(client, entity_ids, "available"), 30, "all simulator entities available")
-        container = _compose("ps", "-q", "spacebutler-device-simulator").strip()
+        entity_ids = _device_entity_ids()
+        _wait_for(lambda: _all_entity_states(client, entity_ids, "available"), 30, "target device entities available")
+        _wait_for(lambda: _ha_state(client, ISOLATION_WITNESS).get("state") != "unavailable", 30, "witness available")
+        container = _compose("ps", "-q", DEVICE_SERVICE).strip()
         if not container:
-            raise RuntimeError("compose service has no container: spacebutler-device-simulator")
+            raise RuntimeError(f"compose service has no container: {DEVICE_SERVICE}")
         _docker("update", "--restart=no", container)
         try:
             _docker("kill", "--signal=KILL", container)
-            _wait_for(lambda: _all_entity_states(client, entity_ids, "unavailable"), 30, "SIGKILL Last Will unavailable")
+            _wait_for(lambda: _all_entity_states(client, entity_ids, "unavailable"), 30, "target Last Will unavailable")
             unavailable_states = {entity_id: _ha_state(client, entity_id).get("state") for entity_id in entity_ids}
+            witness_state = _ha_state(client, ISOLATION_WITNESS).get("state")
             cases.append(
                 {
-                    "test_id": "simulator_sigkill_marks_all_entities_unavailable",
-                    "passed": all(state == "unavailable" for state in unavailable_states.values()),
-                    "entities_total": len(entity_ids),
-                    "ha_states": unavailable_states,
+                    "test_id": "device_sigkill_isolated_to_target_container",
+                    "passed": (
+                        all(state == "unavailable" for state in unavailable_states.values())
+                        and witness_state != "unavailable"
+                    ),
+                    "target_states": unavailable_states,
+                    "witness_entity": ISOLATION_WITNESS,
+                    "witness_state": witness_state,
                 }
             )
         finally:
-            _compose("up", "-d", "spacebutler-device-simulator")
-            restored_container = _compose("ps", "-q", "spacebutler-device-simulator").strip()
+            _compose("up", "-d", DEVICE_SERVICE)
+            restored_container = _compose("ps", "-q", DEVICE_SERVICE).strip()
             if restored_container:
                 _docker("update", "--restart=unless-stopped", restored_container)
-            _wait_for_infrastructure(client, "spacebutler-device-simulator", 90)
+            _wait_for_infrastructure(client, DEVICE_SERVICE, 90)
     except Exception as error:
         cases.append(
             {
-                "test_id": "simulator_sigkill_marks_all_entities_unavailable",
+                "test_id": "device_sigkill_isolated_to_target_container",
                 "passed": False,
                 "failure": str(error),
             }
@@ -136,8 +146,8 @@ def _prepare_cool(client: HomeAssistantClient) -> None:
 
 
 def _wait_for_infrastructure(client: HomeAssistantClient, service: str, timeout_seconds: float) -> None:
-    if service == "spacebutler-device-simulator":
-        _wait_for(lambda: _simulator_device().get("online") is True, timeout_seconds, "simulator recovery")
+    if service in {DEVICE_SERVICE, FLEET_SERVICE}:
+        _wait_for(lambda: _simulator_device().get("online") is True, timeout_seconds, "device fleet recovery")
     if service == "spacebutler-home-assistant":
         _wait_for(_ha_http_available, timeout_seconds, "Home Assistant HTTP recovery")
     _wait_for(lambda: client.state(CLIMATE).get("state") == "cool", timeout_seconds, "HA MQTT climate recovery")
@@ -157,25 +167,15 @@ def _execute_energy_loop(client: HomeAssistantClient):
     return response
 
 
-def _simulator_entity_ids() -> list[str]:
-    payload = _simulator_request("GET", "/devices")
-    devices = payload.get("devices")
-    if not isinstance(devices, list):
-        raise RuntimeError("simulator device list is missing")
+def _device_entity_ids() -> list[str]:
+    device = _simulator_device()
     entity_ids: list[str] = []
-    for device in devices:
-        if not isinstance(device, dict):
-            continue
-        for key in ("entity_id", "feedback_entity_id"):
-            value = device.get(key)
-            if isinstance(value, str) and value:
-                entity_ids.append(value)
-        if device.get("type") == "switch":
-            entity_id = device.get("entity_id")
-            if isinstance(entity_id, str) and entity_id.startswith("switch."):
-                entity_ids.append(entity_id.replace("switch.", "sensor.", 1) + "_power")
+    for key in ("entity_id", "feedback_entity_id"):
+        value = device.get(key)
+        if isinstance(value, str) and value:
+            entity_ids.append(value)
     if not entity_ids:
-        raise RuntimeError("simulator returned no HA entities")
+        raise RuntimeError("device runtime returned no HA entities")
     return sorted(set(entity_ids))
 
 

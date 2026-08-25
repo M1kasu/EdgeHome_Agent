@@ -24,7 +24,7 @@ Copy-Item .env.example deployment\.env
 
 ## 3. 启动服务
 
-先启动 MQTT、设备模拟器和 Home Assistant：
+先启动 MQTT、九个独立设备运行时、Fleet Gateway 和 Home Assistant：
 
 ```powershell
 docker compose -f deployment\docker-compose.yml up -d --build
@@ -46,8 +46,8 @@ python scripts\run_workbench.py --port 8765
 
 | 环节 | 端口 | 环境变量 |
 | --- | ---: | --- |
-| MQTT | `2884` | `SPACEBUTLER_MQTT_PORT` |
-| 设备模拟器 | `12891` | `SPACEBUTLER_SIMULATOR_PORT` |
+| MQTT | `18884` | `SPACEBUTLER_MQTT_PORT` |
+| 设备 Fleet Gateway | `12891` | `SPACEBUTLER_SIMULATOR_PORT` |
 | Home Assistant | `12900` | `SPACEBUTLER_HA_PORT` |
 | llama.cpp | `12881` | `SPACEBUTLER_MODEL_PORT` |
 | 工作台 | `8765` | 命令行参数 `--port` |
@@ -83,9 +83,30 @@ SPACEBUTLER_MODEL_PATH=/models/Home-Llama-3.2-3B.q4_k_m.gguf
 ## 6. 设备与故障测试
 
 - “空间与设备”可新增灯光、开关、空调、窗帘、人体存在、门窗和照度传感器。
+- 每个设备卡右上角的容器图标可查看专属运行时容器名；新增设备会创建新的受限容器，而不是加入已有进程。
 - 新设备通过 MQTT Discovery 自动注册到 Home Assistant。
 - 设备卡片可注入离线、拒绝、延迟、ACK 不变和无效状态等故障。
 - “执行事件”显示设备事件和协议反馈，用于核对是否真实到达目标状态。
+
+查看设备容器与聚合状态：
+
+```powershell
+docker compose -f deployment\docker-compose.yml ps
+Invoke-RestMethod http://127.0.0.1:12891/health
+Invoke-RestMethod http://127.0.0.1:12891/devices
+```
+
+验证单设备故障隔离：
+
+```powershell
+docker compose -f deployment\docker-compose.yml stop spacebutler-device-bedroom-illuminance
+Invoke-RestMethod http://127.0.0.1:12891/devices
+docker compose -f deployment\docker-compose.yml start spacebutler-device-bedroom-illuminance
+```
+
+停止照度容器后，照度实体会不可用，灯光和人体存在设备仍保持在线。规则会因为输入不完整而停止执行，不会使用陈旧照度补光。
+
+本地原型的 Fleet Gateway 挂载 Docker Socket 来创建动态设备容器。不要把 `12891` 暴露到公网；生产环境应改用 rootless 编排器或受限的远程编排 API，并为 MQTT 开启 TLS 和设备 ACL。完整设计见 [一设备一容器架构](DEVICE_CONTAINER_ARCHITECTURE.md)。
 
 ## 7. 验证
 
@@ -130,7 +151,7 @@ Invoke-RestMethod http://127.0.0.1:12891/health
 
 ### 页面显示“监听异常”
 
-确认 Home Assistant 和设备模拟器均可访问。工作台后台监听会在短暂故障后继续重试，不需要重建规则。
+确认 Home Assistant、Fleet Gateway 和目标设备容器均可访问。工作台后台监听会在短暂故障后继续重试，不需要重建规则。
 
 ### 停止服务
 

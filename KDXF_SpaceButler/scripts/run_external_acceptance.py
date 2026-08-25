@@ -149,7 +149,7 @@ def main() -> int:
         "checks_passed": len(results) - len(failures),
         "checks_failed": len(failures),
         "external_acceptance": "PASS" if passed else "FAIL",
-        "boundary": "separate process -> HA REST -> MQTT -> simulator -> SQLite -> readback, plus container restarts",
+        "boundary": "separate process -> HA REST -> MQTT -> dedicated device container -> SQLite -> readback, plus isolation and restarts",
     }
     (report_dir / "scorecard.json").write_text(
         json.dumps(scorecard, ensure_ascii=False, indent=2),

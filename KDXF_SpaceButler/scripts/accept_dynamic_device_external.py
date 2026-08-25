@@ -73,13 +73,16 @@ def main() -> int:
             }
         )
 
-        before_started_at = _container_started_at()
-        _compose("restart", "spacebutler-device-simulator")
-        after_started_at = _wait_for_restart(before_started_at)
+        runtime_container = str(created_device.get("runtime", {}).get("container", ""))
+        if not runtime_container:
+            raise RuntimeError("created device did not report its dedicated runtime container")
+        before_started_at = _container_started_at(runtime_container)
+        _docker("restart", runtime_container)
+        after_started_at = _wait_for_restart(runtime_container, before_started_at)
         recovered = _wait_for_device()
         cases.append(
             {
-                "test_id": "runtime_device_survives_simulator_restart",
+                "test_id": "runtime_device_survives_own_container_restart",
                 "passed": (
                     before_started_at != after_started_at
                     and recovered.get("state", {}).get("power") == "ON"
@@ -116,7 +119,7 @@ def main() -> int:
         json.dumps(
             {
                 "acceptance": "PASS" if passed else "FAIL",
-                "boundary": "workbench -> HA REST -> MQTT discovery -> dynamic simulator -> SQLite -> restart/readback/removal",
+                "boundary": "workbench -> Fleet Gateway -> dynamic device container -> HA/MQTT/SQLite -> restart/removal",
                 "cases_passed": sum(bool(case.get("passed")) for case in cases),
                 "cases_total": len(cases),
                 "cases": cases,
@@ -205,14 +208,29 @@ def _compose(*arguments: str) -> None:
         raise RuntimeError(completed.stderr.strip())
 
 
-def _container_started_at() -> str:
+def _docker(*arguments: str) -> None:
+    completed = subprocess.run(
+        ["docker", *arguments],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+        check=False,
+    )
+    if completed.returncode:
+        raise RuntimeError(completed.stderr.strip())
+
+
+def _container_started_at(container: str) -> str:
     completed = subprocess.run(
         [
             "docker",
             "inspect",
             "--format",
             "{{.State.StartedAt}}",
-            "spacebutler-spacebutler-device-simulator-1",
+            container,
         ],
         cwd=ROOT,
         capture_output=True,
@@ -227,12 +245,12 @@ def _container_started_at() -> str:
     return completed.stdout.strip()
 
 
-def _wait_for_restart(before_started_at: str) -> str:
+def _wait_for_restart(container: str, before_started_at: str) -> str:
     latest = before_started_at
 
     def restarted() -> bool:
         nonlocal latest
-        latest = _container_started_at()
+        latest = _container_started_at(container)
         return bool(latest and latest != before_started_at)
 
     _wait_for(restarted, 30, "simulator restart")

@@ -28,7 +28,13 @@ from .store import DeviceStateStore
 
 _LOGGER = logging.getLogger(__name__)
 _HA_BIRTH_TOPIC = "homeassistant/status"
-_SIMULATOR_AVAILABILITY_TOPIC = "spacebutler/simulator/availability"
+_SELECTED_DEVICE_ID = os.environ.get("DEVICE_ID", "").strip().lower()
+_RUNTIME_ID = _SELECTED_DEVICE_ID or "simulator"
+_SIMULATOR_AVAILABILITY_TOPIC = (
+    f"spacebutler/runtimes/{_RUNTIME_ID}/availability"
+    if _SELECTED_DEVICE_ID
+    else "spacebutler/simulator/availability"
+)
 _FAULT_DELAY_MS = 5_000
 _DEVICE_TYPES = frozenset({"light", "curtain", "climate", "switch", "presence", "contact", "illuminance"})
 _LEGACY_OBJECT_IDS = {
@@ -280,14 +286,26 @@ class _QueuedCommand:
 class DeviceSimulator:
     """Bridge MQTT commands to one device-owned SQLite state machine."""
 
-    def __init__(self, devices: dict[str, SimulatedDevice], store: DeviceStateStore, mqtt_host: str, mqtt_port: int) -> None:
+    def __init__(
+        self,
+        devices: dict[str, SimulatedDevice],
+        store: DeviceStateStore,
+        mqtt_host: str,
+        mqtt_port: int,
+        *,
+        allow_dynamic_devices: bool = True,
+    ) -> None:
         if not devices:
             raise ValueError("at least one simulated device is required")
         self._devices = devices
         self._store = store
         self._mqtt_host = mqtt_host
         self._mqtt_port = mqtt_port
-        self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="spacebutler-device-simulator")
+        self._allow_dynamic_devices = allow_dynamic_devices
+        self._client = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2,
+            client_id=f"spacebutler-device-{_RUNTIME_ID}",
+        )
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
@@ -425,6 +443,8 @@ class DeviceSimulator:
         return self.device_record(device_id)
 
     def add_device(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self._allow_dynamic_devices:
+            raise ValueError("single-device runtime cannot host another device")
         device_id, definition = _normalize_device_definition(payload)
         device = _device_from_definition(device_id, definition)
         with self._lock:
@@ -1394,16 +1414,37 @@ def _device_from_definition(device_id: str, raw: dict[str, Any]) -> SimulatedDev
     )
 
 
-def _load_devices(path: Path, store: DeviceStateStore) -> dict[str, SimulatedDevice]:
+def _load_devices(
+    path: Path,
+    store: DeviceStateStore,
+    selected_device_id: str | None = None,
+    inline_definition: dict[str, Any] | None = None,
+) -> dict[str, SimulatedDevice]:
+    selected_device_id = (selected_device_id or "").strip().lower() or None
+    if inline_definition is not None:
+        inline_device_id, definition = _normalize_device_definition(inline_definition)
+        if selected_device_id is not None and inline_device_id != selected_device_id:
+            raise ValueError("DEVICE_ID does not match DEVICE_DEFINITION_JSON")
+        selected_device_id = inline_device_id
+        store.save_definition(inline_device_id, definition, source="runtime", replace=True)
+        store.ensure_device(inline_device_id, _device_from_definition(inline_device_id, definition).initial_state)
+        return {inline_device_id: _device_from_definition(inline_device_id, definition)}
+
     existing = {item["device_id"]: item for item in store.definitions()}
-    for device_id, definition in _load_device_definitions(path).items():
+    configured = _load_device_definitions(path)
+    if selected_device_id is not None:
+        try:
+            configured = {selected_device_id: configured[selected_device_id]}
+        except KeyError as error:
+            raise ValueError(f"DEVICE_ID is not defined in devices.yaml: {selected_device_id}") from error
+    for device_id, definition in configured.items():
         current = existing.get(device_id)
         if current is None or current["source"] == "configured":
             store.save_definition(device_id, definition, source="configured", replace=True)
-    return {
-        item["device_id"]: _device_from_definition(item["device_id"], item["definition"])
-        for item in store.definitions()
-    }
+    definitions = store.definitions()
+    if selected_device_id is not None:
+        definitions = [item for item in definitions if item["device_id"] == selected_device_id]
+    return {item["device_id"]: _device_from_definition(item["device_id"], item["definition"]) for item in definitions}
 
 
 def _admin_handler(simulator: DeviceSimulator) -> type[BaseHTTPRequestHandler]:
@@ -1512,12 +1553,17 @@ def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
     config_path = Path(os.environ.get("DEVICE_CONFIG", "/app/config/devices.yaml"))
     database_path = Path(os.environ.get("STATE_DB", "/app/data/device_state.db"))
+    inline_raw = os.environ.get("DEVICE_DEFINITION_JSON")
+    inline_definition = json.loads(inline_raw) if inline_raw else None
+    if inline_definition is not None and not isinstance(inline_definition, dict):
+        raise ValueError("DEVICE_DEFINITION_JSON must contain a JSON object")
     store = DeviceStateStore(database_path)
     simulator = DeviceSimulator(
-        _load_devices(config_path, store),
+        _load_devices(config_path, store, _SELECTED_DEVICE_ID, inline_definition),
         store,
         os.environ.get("MQTT_HOST", "mqtt"),
         int(os.environ.get("MQTT_PORT", "1883")),
+        allow_dynamic_devices=not bool(_SELECTED_DEVICE_ID or inline_definition),
     )
     try:
         simulator.run(os.environ.get("ADMIN_HOST", "0.0.0.0"), int(os.environ.get("ADMIN_PORT", "8090")))

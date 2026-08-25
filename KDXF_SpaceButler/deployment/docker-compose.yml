@@ -1,5 +1,33 @@
 name: spacebutler
 
+x-device-environment: &device-environment
+  MQTT_HOST: spacebutler-mqtt
+  MQTT_PORT: "1883"
+  DEVICE_CONFIG: /app/config/devices.yaml
+  STATE_DB: /app/data/device_state.db
+  ADMIN_HOST: 0.0.0.0
+  ADMIN_PORT: "8090"
+
+x-device-runtime: &device-runtime
+  image: spacebutler-device-runtime:local
+  pull_policy: never
+  depends_on:
+    - spacebutler-mqtt
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m,noexec,nosuid
+  mem_limit: 96m
+  cpus: 0.25
+  pids_limit: 64
+  healthcheck:
+    test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8090/health', timeout=2)"]
+    interval: 5s
+    timeout: 3s
+    retries: 12
+  networks:
+    - spacebutler
+
 services:
   spacebutler-mqtt:
     image: eclipse-mosquitto:2
@@ -8,29 +36,206 @@ services:
       - ./runtime/mosquitto/data:/mosquitto/data
       - ./runtime/mosquitto/log:/mosquitto/log
     ports:
-      - "127.0.0.1:${SPACEBUTLER_MQTT_PORT:-2884}:1883"
+      - "127.0.0.1:${SPACEBUTLER_MQTT_PORT:-18884}:1883"
     restart: unless-stopped
     networks:
       - spacebutler
 
-  spacebutler-device-simulator:
+  spacebutler-device-bedroom-reading-light:
+    <<: *device-runtime
     build:
       context: ../device_simulator
+    environment:
+      <<: *device-environment
+      DEVICE_ID: bedroom_reading_light
+    volumes:
+      - ../device_simulator/config:/app/config:ro
+      - bedroom-reading-light-data:/app/data
+    labels:
+      spacebutler.device-runtime: "true"
+      spacebutler.device-id: bedroom_reading_light
+      spacebutler.device-source: configured
+      spacebutler.device-type: light
+      spacebutler.device-name: 卧室阅读灯
+      spacebutler.device-room: bedroom
+      spacebutler.state-volume: spacebutler-device-data-bedroom_reading_light
+
+  spacebutler-device-living-room-main-light:
+    <<: *device-runtime
+    environment:
+      <<: *device-environment
+      DEVICE_ID: living_room_main_light
+    volumes:
+      - ../device_simulator/config:/app/config:ro
+      - living-room-main-light-data:/app/data
+    labels:
+      spacebutler.device-runtime: "true"
+      spacebutler.device-id: living_room_main_light
+      spacebutler.device-source: configured
+      spacebutler.device-type: light
+      spacebutler.device-name: 客厅主灯
+      spacebutler.device-room: living_room
+      spacebutler.state-volume: spacebutler-device-data-living_room_main_light
+
+  spacebutler-device-living-room-curtain:
+    <<: *device-runtime
+    environment:
+      <<: *device-environment
+      DEVICE_ID: living_room_curtain
+    volumes:
+      - ../device_simulator/config:/app/config:ro
+      - living-room-curtain-data:/app/data
+    labels:
+      spacebutler.device-runtime: "true"
+      spacebutler.device-id: living_room_curtain
+      spacebutler.device-source: configured
+      spacebutler.device-type: curtain
+      spacebutler.device-name: 客厅窗帘
+      spacebutler.device-room: living_room
+      spacebutler.state-volume: spacebutler-device-data-living_room_curtain
+
+  spacebutler-device-living-room-ac:
+    <<: *device-runtime
+    environment:
+      <<: *device-environment
+      DEVICE_ID: living_room_ac
+    volumes:
+      - ../device_simulator/config:/app/config:ro
+      - living-room-ac-data:/app/data
+    labels:
+      spacebutler.device-runtime: "true"
+      spacebutler.device-id: living_room_ac
+      spacebutler.device-source: configured
+      spacebutler.device-type: climate
+      spacebutler.device-name: 客厅空调
+      spacebutler.device-room: living_room
+      spacebutler.state-volume: spacebutler-device-data-living_room_ac
+
+  spacebutler-device-living-room-presence:
+    <<: *device-runtime
+    environment:
+      <<: *device-environment
+      DEVICE_ID: living_room_presence_sensor
+    volumes:
+      - ../device_simulator/config:/app/config:ro
+      - living-room-presence-data:/app/data
+    labels:
+      spacebutler.device-runtime: "true"
+      spacebutler.device-id: living_room_presence_sensor
+      spacebutler.device-source: configured
+      spacebutler.device-type: presence
+      spacebutler.device-name: 客厅人体存在传感器
+      spacebutler.device-room: living_room
+      spacebutler.state-volume: spacebutler-device-data-living_room_presence_sensor
+
+  spacebutler-device-bedroom-illuminance:
+    <<: *device-runtime
+    environment:
+      <<: *device-environment
+      DEVICE_ID: bedroom_illuminance_sensor
+    volumes:
+      - ../device_simulator/config:/app/config:ro
+      - bedroom-illuminance-data:/app/data
+    labels:
+      spacebutler.device-runtime: "true"
+      spacebutler.device-id: bedroom_illuminance_sensor
+      spacebutler.device-source: configured
+      spacebutler.device-type: illuminance
+      spacebutler.device-name: 卧室照度传感器
+      spacebutler.device-room: bedroom
+      spacebutler.state-volume: spacebutler-device-data-bedroom_illuminance_sensor
+
+  spacebutler-device-bedroom-presence:
+    <<: *device-runtime
+    environment:
+      <<: *device-environment
+      DEVICE_ID: bedroom_presence_sensor
+    volumes:
+      - ../device_simulator/config:/app/config:ro
+      - bedroom-presence-data:/app/data
+    labels:
+      spacebutler.device-runtime: "true"
+      spacebutler.device-id: bedroom_presence_sensor
+      spacebutler.device-source: configured
+      spacebutler.device-type: presence
+      spacebutler.device-name: 卧室起身传感器
+      spacebutler.device-room: bedroom
+      spacebutler.state-volume: spacebutler-device-data-bedroom_presence_sensor
+
+  spacebutler-device-living-room-window:
+    <<: *device-runtime
+    environment:
+      <<: *device-environment
+      DEVICE_ID: living_room_window_sensor
+    volumes:
+      - ../device_simulator/config:/app/config:ro
+      - living-room-window-data:/app/data
+    labels:
+      spacebutler.device-runtime: "true"
+      spacebutler.device-id: living_room_window_sensor
+      spacebutler.device-source: configured
+      spacebutler.device-type: contact
+      spacebutler.device-name: 客厅窗户传感器
+      spacebutler.device-room: living_room
+      spacebutler.state-volume: spacebutler-device-data-living_room_window_sensor
+
+  spacebutler-device-living-room-tv:
+    <<: *device-runtime
+    environment:
+      <<: *device-environment
+      DEVICE_ID: living_room_tv
+    volumes:
+      - ../device_simulator/config:/app/config:ro
+      - living-room-tv-data:/app/data
+    labels:
+      spacebutler.device-runtime: "true"
+      spacebutler.device-id: living_room_tv
+      spacebutler.device-source: configured
+      spacebutler.device-type: switch
+      spacebutler.device-name: 客厅电视
+      spacebutler.device-room: living_room
+      spacebutler.state-volume: spacebutler-device-data-living_room_tv
+
+  spacebutler-device-simulator:
+    image: spacebutler-device-runtime:local
+    pull_policy: never
+    command: ["python", "-m", "spacebutler_simulator.fleet_gateway"]
     depends_on:
-      - spacebutler-mqtt
+      spacebutler-device-bedroom-reading-light:
+        condition: service_healthy
+      spacebutler-device-living-room-main-light:
+        condition: service_healthy
+      spacebutler-device-living-room-curtain:
+        condition: service_healthy
+      spacebutler-device-living-room-ac:
+        condition: service_healthy
+      spacebutler-device-living-room-presence:
+        condition: service_healthy
+      spacebutler-device-bedroom-illuminance:
+        condition: service_healthy
+      spacebutler-device-bedroom-presence:
+        condition: service_healthy
+      spacebutler-device-living-room-window:
+        condition: service_healthy
+      spacebutler-device-living-room-tv:
+        condition: service_healthy
     environment:
       MQTT_HOST: spacebutler-mqtt
       MQTT_PORT: "1883"
-      DEVICE_CONFIG: /app/config/devices.yaml
-      STATE_DB: /app/data/device_state.db
+      DEVICE_RUNTIME_IMAGE: spacebutler-device-runtime:local
+      DEVICE_RUNTIME_NETWORK: spacebutler
       ADMIN_HOST: 0.0.0.0
       ADMIN_PORT: "8090"
     volumes:
-      - ../device_simulator/config:/app/config:ro
-      - ./runtime/device-simulator:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "127.0.0.1:${SPACEBUTLER_SIMULATOR_PORT:-12891}:8090"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8090/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
     networks:
       - spacebutler
 
@@ -72,3 +277,23 @@ services:
 networks:
   spacebutler:
     name: spacebutler
+
+volumes:
+  bedroom-reading-light-data:
+    name: spacebutler-device-data-bedroom_reading_light
+  living-room-main-light-data:
+    name: spacebutler-device-data-living_room_main_light
+  living-room-curtain-data:
+    name: spacebutler-device-data-living_room_curtain
+  living-room-ac-data:
+    name: spacebutler-device-data-living_room_ac
+  living-room-presence-data:
+    name: spacebutler-device-data-living_room_presence_sensor
+  bedroom-illuminance-data:
+    name: spacebutler-device-data-bedroom_illuminance_sensor
+  bedroom-presence-data:
+    name: spacebutler-device-data-bedroom_presence_sensor
+  living-room-window-data:
+    name: spacebutler-device-data-living_room_window_sensor
+  living-room-tv-data:
+    name: spacebutler-device-data-living_room_tv

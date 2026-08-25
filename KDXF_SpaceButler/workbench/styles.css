@@ -466,6 +466,19 @@ code { font-family: "Cascadia Code", Consolas, monospace; }
 .device-identity h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .device-identity p { margin-top: 3px; color: var(--muted); font-size: 10px; }
 .device-tools { display: flex; align-items: center; gap: 5px; }
+.runtime-badge {
+  width: 23px;
+  height: 23px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+  background: var(--surface-subtle);
+}
+.runtime-badge.running { color: var(--green); border-color: #b9d7c2; background: var(--green-soft); }
+.runtime-badge.stopped { color: var(--red); border-color: #e2b8b1; background: var(--red-soft); }
+.runtime-badge svg { width: 13px; height: 13px; }
 .device-online {
   height: 23px;
   display: inline-flex;

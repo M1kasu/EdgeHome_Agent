@@ -628,6 +628,7 @@ function renderDeviceCard(device) {
   const meta = typeMeta[device.type] || { label: device.type, icon: "cpu", tone: "blue" };
   const status = deviceStateSummary(device);
   const discovered = device.discovered ? "HA 已发现" : "等待 HA";
+  const runtime = device.runtime && device.runtime.isolation === "dedicated" ? device.runtime : null;
   return `
     <article class="device-card" data-device-id="${escapeHtml(device.device_id)}">
       <div class="device-card-heading">
@@ -639,6 +640,7 @@ function renderDeviceCard(device) {
           </div>
         </div>
         <div class="device-tools">
+          ${runtime ? `<span class="runtime-badge ${runtime.status === "running" ? "running" : "stopped"}" title="独立容器：${escapeHtml(runtime.container)}"><i data-lucide="container"></i></span>` : ""}
           <span class="device-online ${device.online ? "online" : "offline"}">${device.online ? "在线" : "离线"}</span>
           ${device.removable ? `<button class="icon-button danger-ghost" data-device-action="delete" title="删除设备"><i data-lucide="trash-2"></i></button>` : ""}
         </div>
