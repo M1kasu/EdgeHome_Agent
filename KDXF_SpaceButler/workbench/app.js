@@ -977,6 +977,20 @@ function renderAgentActivity(data) {
         <p class="goal-title">🎬 ${escapeHtml(goal.title)}</p>
         <div class="constraint-list">${constraints}</div>
         <p class="goal-state-line">室温 <strong>${fmt(agentState(data).temperature)}</strong>°C · 灯 <strong>${fmt(agentState(data).brightness_pct)}%</strong> · 窗帘 <strong>${fmt(agentState(data).curtain_position)}%</strong> · 空调 <strong>${escapeHtml(agentState(data).ac_mode || "off")}</strong></p>`;
+      const interpretation = goal.semantic_view?.intent_summary;
+      if (interpretation) {
+        goalBody.insertAdjacentHTML(
+          "beforeend",
+          `<p class="model-interpretation-line">模型理解：${escapeHtml(String(interpretation))}</p>`,
+        );
+      }
+      const contribution = data.llm_contribution;
+      if (contribution) {
+        goalBody.insertAdjacentHTML(
+          "beforeend",
+          `<p class="llm-contribution-line">模型参与度：目标理解 ${contribution.goal_compiled_by_llm} · 候选 ${contribution.llm_candidates_valid}/${contribution.llm_candidates_generated} · 选中模型候选 ${contribution.selected_llm_candidate} · 评估 ${contribution.goal_evaluation_by_llm} · 重规划 ${contribution.replan_decision_by_llm}</p>`,
+        );
+      }
     }
   }
 
@@ -990,15 +1004,19 @@ function renderAgentActivity(data) {
         .map((candidate) => {
           const scores = candidate.scores || {};
           const actions = (candidate.actions || [])
-            .map((action) => `<li>${escapeHtml(action.device_name || action.device_id)} · ${escapeHtml(actionLabel(action))}</li>`)
+            .map((action) => `<li>${escapeHtml(action.device_name || action.device_id)} · ${escapeHtml(actionLabel(action))}${action.verified === true ? " ✓" : action.verified === false ? " ✗" : ""}</li>`)
             .join("");
           const rejected = (candidate.label || "").includes("拒绝");
+          const sourceBadge = candidate.source === "llm"
+            ? `<span class="source-tag source-llm">LLM</span>`
+            : `<span class="source-tag source-fallback">fallback</span>`;
           return `
           <div class="candidate-card ${candidate.selected ? "selected" : ""} ${rejected ? "rejected" : ""}">
             <div class="candidate-head">
-              <strong>${escapeHtml(candidate.label)}</strong>
+              <strong>${escapeHtml(candidate.label)} ${sourceBadge}</strong>
               <span class="candidate-score">${candidate.selected ? "★ " : ""}${candidate.total_score ?? "--"}</span>
             </div>
+            ${candidate.summary ? `<p class="candidate-summary">${escapeHtml(candidate.summary)}</p>` : ""}
             <div class="score-chips">
               <span>目标 ${(scores.goal_satisfaction ?? 0).toFixed(2)}</span>
               <span>舒适 ${(scores.comfort ?? 0).toFixed(2)}</span>

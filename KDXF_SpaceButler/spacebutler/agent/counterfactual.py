@@ -23,6 +23,34 @@ def _field(action: object, name: str, default: object = None) -> object:
 
 
 class CounterfactualPredictor:
+    """物理环境预测模型。速率参数通过 Online Calibration 从真实反馈校准：
+
+    每次执行后用 (预测温度, 实际温度) 的符号一致性更新制冷/回升速率的 EMA。
+    参数是校准的物理量，不冒充训练出来的模型；接口保持可替换为学习型模型。
+    """
+
+    def __init__(
+        self,
+        cooling_rate_per_min: float = COOLING_RATE_PER_MIN,
+        recovery_rate_per_min: float = RECOVERY_RATE_PER_MIN,
+        calibration_alpha: float = 0.25,
+    ) -> None:
+        self.cooling_rate = cooling_rate_per_min
+        self.recovery_rate = recovery_rate_per_min
+        self._alpha = calibration_alpha
+        self.calibration_samples = 0
+
+    def calibrate(self, predicted_temperature: float, observed_temperature: float, cooling_expected: bool) -> float:
+        """用预测 vs 观测的残差校准速率（EMA）。返回校准后的速率。"""
+        error = observed_temperature - predicted_temperature
+        if cooling_expected:
+            # 制冷不足（观测更热）说明实际降温更慢 -> 降低速率估计。
+            self.cooling_rate = max(2.0, self.cooling_rate - self._alpha * max(0.0, error))
+        else:
+            self.recovery_rate = max(0.5, self.recovery_rate + self._alpha * max(0.0, -error))
+        self.calibration_samples += 1
+        return self.cooling_rate if cooling_expected else self.recovery_rate
+
     def predict(
         self,
         actions: list[object],
@@ -55,14 +83,14 @@ class CounterfactualPredictor:
         notes: list[str] = []
         if ac_mode == "cool" and ac_target is not None:
             floor = ac_target - 1.0
-            predicted_temperature = max(current - COOLING_RATE_PER_MIN * horizon_minutes, floor)
+            predicted_temperature = max(current - self.cooling_rate * horizon_minutes, floor)
             trend = "decreasing"
             notes.append(f"制冷中，预计 {horizon_minutes:g} 分钟后约 {predicted_temperature:.1f}°C")
         elif ac_mode == "heat" and ac_target is not None:
-            predicted_temperature = min(current + COOLING_RATE_PER_MIN * horizon_minutes, ac_target + 1.0)
+            predicted_temperature = min(current + self.cooling_rate * horizon_minutes, ac_target + 1.0)
             trend = "increasing"
         else:
-            predicted_temperature = min(current + RECOVERY_RATE_PER_MIN * horizon_minutes, RECOVERY_CEILING)
+            predicted_temperature = min(current + self.recovery_rate * horizon_minutes, RECOVERY_CEILING)
             trend = "increasing" if predicted_temperature > current + 0.05 else "stable"
             if predicted_temperature >= RECOVERY_CEILING - 0.1:
                 notes.append("无制冷时室温将回到环境基线 30.2°C")

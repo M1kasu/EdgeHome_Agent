@@ -18,6 +18,7 @@ from spacebutler.agent.models import (
     AgentEvent,
     CompiledGoal,
     GoalStatus,
+    LlmContribution,
     RoomState,
     now,
 )
@@ -35,6 +36,7 @@ class HomeWorldModel:
         self._actions: deque[ActionRecord] = deque(maxlen=action_log_max)
         self._predictions: deque[dict[str, Any]] = deque(maxlen=20)
         self._planner_mode: str = "fallback"
+        self._contribution = LlmContribution()
 
     # ---- perception -------------------------------------------------
     def update_state(self, devices: list[dict[str, object]]) -> RoomState:
@@ -101,6 +103,15 @@ class HomeWorldModel:
         with self._lock:
             return self._planner_mode
 
+    # ---- LLM contribution metrics ------------------------------------
+    def set_contribution(self, contribution: LlmContribution) -> None:
+        with self._lock:
+            self._contribution = contribution
+
+    def contribution(self) -> LlmContribution:
+        with self._lock:
+            return self._contribution
+
     # ---- UI snapshot ------------------------------------------------
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -110,6 +121,7 @@ class HomeWorldModel:
                 "active_goal": goal.to_dict() if goal else None,
                 "goal_status": status.value,
                 "planner_mode": self._planner_mode,
+                "llm_contribution": self._contribution.to_dict(),
                 "recent_actions": [item.to_dict() for item in list(self._actions)[-12:]],
                 "last_prediction": self._predictions[-1] if self._predictions else None,
                 "timeline": [item.to_dict() for item in list(self._events)[-40:]],

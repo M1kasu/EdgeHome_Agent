@@ -76,12 +76,13 @@ class GoalConstraint:
 @dataclass
 class CompiledGoal:
     goal_id: str
-    activity: str  # watch_movie | thermal_comfort | ...
+    activity: str  # 自由活动标签（模型语义理解产物，如 watch_content/rest）
     room: str
     title: str
     constraints: list[GoalConstraint]
     created_at: float = field(default_factory=now)
     expires_at: float | None = None
+    semantic_view: dict[str, Any] | None = None  # 模型的语义解释（供 UI 展示）
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -92,6 +93,7 @@ class CompiledGoal:
             "constraints": [item.to_dict() for item in self.constraints],
             "created_at": self.created_at,
             "expires_at": self.expires_at,
+            "semantic_view": self.semantic_view,
         }
 
 
@@ -182,6 +184,8 @@ class CandidatePlan:
     scores: PlanScores
     rationale: str = ""
     selected: bool = False
+    source: str = "fallback"  # llm | fallback
+    summary: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -193,7 +197,25 @@ class CandidatePlan:
             "total_score": round(self.scores.total, 4),
             "rationale": self.rationale,
             "selected": self.selected,
+            "source": self.source,
+            "summary": self.summary,
         }
+
+
+@dataclass
+class LlmContribution:
+    """真实 LLM 参与度指标（Workbench 可见，禁止伪造）。"""
+
+    goal_compiled_by_llm: int = 0
+    llm_candidates_generated: int = 0
+    llm_candidates_valid: int = 0
+    llm_candidates_rejected: int = 0
+    selected_llm_candidate: int = 0
+    goal_evaluation_by_llm: int = 0
+    replan_decision_by_llm: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass

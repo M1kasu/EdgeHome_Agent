@@ -8,7 +8,7 @@ from copy import deepcopy
 import unittest
 
 from spacebutler.agent.counterfactual import CounterfactualPredictor
-from spacebutler.agent.goal_compiler import GoalCompiler, is_cancel_text, is_goal_text
+from spacebutler.agent.goal_compiler import GoalCompiler, is_cancel_text
 from spacebutler.agent.goal_manager import GoalManager
 from spacebutler.agent.models import CompiledGoal, GoalConstraint, GoalStatus, RoomState
 from spacebutler.agent.override_detector import OverrideDetector
@@ -109,64 +109,83 @@ class GoalCompilerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.compiler = GoalCompiler()
 
-    def test_movie_text_compiles_multi_constraints(self) -> None:
-        goal, mode = self.compiler.compile("我准备在客厅看会电影，有点热，灯别太亮。")
+    def test_movie_text_compiles_multi_constraints_via_fallback(self) -> None:
+        goal, mode, _semantic = self.compiler.compile("我准备在客厅看会电影，有点热，灯别太亮。")
         self.assertEqual(mode, "fallback")
-        self.assertEqual(goal.activity, "watch_movie")
+        self.assertIsNotNone(goal)
+        assert goal is not None
+        self.assertEqual(goal.activity, "watch_content")
         metrics = {item.metric for item in goal.constraints}
         self.assertIn("brightness", metrics)
         self.assertIn("temperature", metrics)
         self.assertIn("curtain_position", metrics)
 
+    def test_llm_semantic_goal_drives_compilation(self) -> None:
+        llm = FakeLlm(
+            {
+                "is_home_goal": True,
+                "location": "living_room",
+                "intent_summary": "想窝在沙发看点东西，别太黑",
+                "activity": "watch_content",
+                "constraints": [
+                    {"dimension": "thermal", "direction": "cooler", "strength": "moderate", "target_range": [24, 27], "reason": "有点闷"},
+                    {"dimension": "lighting", "direction": "dimmer", "strength": "moderate", "target_range": [30, 55], "reason": "别太黑"},
+                ],
+            }
+        )
+        goal, mode, semantic = self.compiler.compile("我想窝在沙发上看点东西，屋里有点闷，但是别搞得太黑。", llm)
+        self.assertEqual(mode, "llm")
+        assert goal is not None
+        self.assertEqual(goal.activity, "watch_content")
+        metrics = {item.metric for item in goal.constraints}
+        self.assertEqual(metrics, {"temperature", "brightness"})
+        self.assertTrue(semantic and semantic.get("intent_summary"))
+
+    def test_llm_non_goal_text_is_rejected(self) -> None:
+        llm = FakeLlm({"is_home_goal": False, "constraints": []})
+        goal, mode, _semantic = self.compiler.compile("今天天气怎么样", llm)
+        self.assertIsNone(goal)
+        self.assertEqual(mode, "llm")
+
     def test_not_too_bright_is_interval_not_fixed_value(self) -> None:
-        goal, _ = self.compiler.compile("我要看电影，灯别太亮")
+        goal, _mode, _semantic = self.compiler.compile("我要看电影，灯别太亮")
+        assert goal is not None
         brightness = next(item for item in goal.constraints if item.metric == "brightness")
         self.assertIsNotNone(brightness.lower)
         self.assertIsNotNone(brightness.upper)
         self.assertGreater(brightness.upper, brightness.lower)
 
     def test_avoid_complete_darkness_sets_lower_bound(self) -> None:
-        goal, _ = self.compiler.compile("看电影，但是别弄得完全黑")
+        goal, _mode, _semantic = self.compiler.compile("看电影，但是别弄得完全黑")
+        assert goal is not None
         brightness = next(item for item in goal.constraints if item.metric == "brightness")
         self.assertIsNotNone(brightness.lower)
         self.assertGreaterEqual(brightness.lower, 10)
 
-    def test_llm_goal_used_when_valid(self) -> None:
-        llm = FakeLlm(
-            {
-                "activity": "watch_movie",
-                "title": "观影模式",
-                "constraints": [{"metric": "brightness", "lower": 30, "upper": 40}],
-            }
-        )
-        goal, mode = self.compiler.compile("我想看电影", llm)
-        self.assertEqual(mode, "llm")
-        self.assertEqual(goal.constraints[0].lower, 30)
-
     def test_llm_malformed_output_falls_back(self) -> None:
         llm = FakeLlm({"unexpected": "shape"})
-        goal, mode = self.compiler.compile("我想看电影", llm)
+        goal, mode, _semantic = self.compiler.compile("我想看电影", llm)
         self.assertEqual(mode, "fallback")
+        assert goal is not None
         self.assertTrue(goal.constraints)
 
     def test_llm_out_of_range_values_clamped(self) -> None:
         llm = FakeLlm(
             {
-                "activity": "watch_movie",
-                "title": "x",
-                "constraints": [{"metric": "temperature", "target": 99, "lower": -5}],
+                "is_home_goal": True,
+                "activity": "rest",
+                "constraints": [{"dimension": "thermal", "target_range": [99, 120], "direction": "cooler"}],
             }
         )
-        goal, _ = self.compiler.compile("热", llm)
+        goal, _mode, _semantic = self.compiler.compile("热", llm)
+        assert goal is not None
         temperature = next(item for item in goal.constraints if item.metric == "temperature")
-        self.assertLessEqual(temperature.target, 30)
+        self.assertLessEqual(temperature.upper, 30)
         self.assertGreaterEqual(temperature.lower, 16)
 
     def test_text_classifiers(self) -> None:
-        self.assertTrue(is_goal_text("看电影"))
-        self.assertTrue(is_goal_text("有点热"))
         self.assertTrue(is_cancel_text("不看了"))
-        self.assertFalse(is_goal_text("你好"))
+        self.assertFalse(is_cancel_text("你好"))
 
 
 class PlannerTests(unittest.TestCase):
@@ -235,30 +254,60 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(light_actions)
         self.assertEqual(light_actions[0].device_id, "living_room_main_light")
 
-    def test_llm_candidate_joins_pool_when_valid(self) -> None:
+    def test_llm_candidates_drive_planning_when_valid(self) -> None:
         llm = FakeLlm(
             {
-                "actions": [
-                    {"device_id": "living_room_curtain", "capability": "set_position", "value": 20},
-                    {"device_id": "living_room_main_light", "capability": "set_brightness", "value": 25},
+                "candidates": [
+                    {
+                        "summary": "关窗帘并调暗灯光",
+                        "actions": [
+                            {"device_id": "living_room_curtain", "capability": "set_position", "value": 20},
+                            {"device_id": "living_room_main_light", "capability": "set_brightness", "value": 25},
+                        ],
+                    },
+                    {
+                        "summary": "只开空调降温和保留灯光",
+                        "actions": [
+                            {"device_id": "living_room_ac", "capability": "set_temperature", "value": 26, "mode": "cool"}
+                        ],
+                    },
+                    {
+                        "summary": "组合方案",
+                        "actions": [
+                            {"device_id": "living_room_curtain", "capability": "set_position", "value": 40},
+                            {"device_id": "living_room_main_light", "capability": "set_brightness", "value": 35},
+                            {"device_id": "living_room_ac", "capability": "set_temperature", "value": 25, "mode": "cool"},
+                        ],
+                    },
                 ]
             }
         )
         outcome = self.planner.plan(self.movie_goal(), demo_state(), self.registry, llm_client=llm)
         self.assertEqual(outcome.planner_mode, "llm")
-        self.assertTrue(any("本地模型" in item.label for item in outcome.candidates))
+        self.assertTrue(all(item.source == "llm" for item in outcome.candidates if item.source == "llm"))
+        self.assertTrue(any(item.source == "llm" for item in outcome.candidates))
+        self.assertEqual(outcome.llm_metrics.llm_candidates_generated, 3)
+        self.assertEqual(outcome.llm_metrics.llm_candidates_valid, 3)
+        self.assertIsNotNone(outcome.selected)
 
     def test_llm_illegal_actions_rejected_by_policy_guard(self) -> None:
         llm = FakeLlm(
             {
-                "actions": [
-                    {"device_id": "ghost_device", "capability": "set_brightness", "value": 30},
-                    {"device_id": "living_room_main_light", "capability": "set_brightness", "value": 900},
+                "candidates": [
+                    {
+                        "summary": "非法设备",
+                        "actions": [
+                            {"device_id": "ghost_device", "capability": "set_brightness", "value": 30},
+                            {"device_id": "living_room_main_light", "capability": "set_brightness", "value": 900},
+                        ],
+                    }
                 ]
             }
         )
         outcome = self.planner.plan(self.movie_goal(), demo_state(), self.registry, llm_client=llm)
         self.assertTrue(any("拒绝" in item.label for item in outcome.candidates))
+        self.assertEqual(outcome.llm_metrics.llm_candidates_rejected, 1)
+        self.assertEqual(outcome.llm_metrics.llm_candidates_valid, 0)
         self.assertFalse(any("ghost_device" == a.device_id for item in outcome.candidates for a in item.actions))
 
 
@@ -385,7 +434,7 @@ class OverrideDetectorTests(unittest.TestCase):
         )
         attribution = detector.classify("living_room_main_light", "light", "set_brightness", 30, 45, _now())
         self.assertEqual(attribution.value, "HUMAN_OVERRIDE")
-        estimate = preferences.estimate("watch_movie", "living_room", "brightness")
+        estimate = preferences.estimate("watch_content", "living_room", "brightness")
         self.assertIsNotNone(estimate)
         self.assertEqual(estimate.mean, 45.0)
 
@@ -499,20 +548,20 @@ class RuntimeFallbackTests(unittest.TestCase):
 
     def test_llm_unavailable_does_not_crash_and_reports_fallback(self) -> None:
         runtime = self._runtime(FakeLlm(fail=True))
-        history = runtime.submit_goal("我准备在客厅看会电影，有点热，灯别太亮。")
+        history = runtime.submit_text("我准备在客厅看会电影，有点热，灯别太亮。")
         self.assertEqual(runtime._world.planner_mode(), "fallback")
         self.assertTrue(history["messages"][-1]["content"])
 
     def test_malformed_llm_json_falls_back(self) -> None:
         runtime = self._runtime(FakeLlm({"bogus": 1}))
-        history = runtime.submit_goal("我准备在客厅看会电影，有点热，灯别太亮。")
+        history = runtime.submit_text("我准备在客厅看会电影，有点热，灯别太亮。")
         self.assertEqual(runtime._world.planner_mode(), "fallback")
         self.assertTrue(history["messages"])
 
     def test_cancel_ends_active_goal(self) -> None:
         runtime = self._runtime(None)
-        runtime.submit_goal("我准备在客厅看会电影")
-        history = runtime.submit_goal("不看了")
+        runtime.submit_text("我准备在客厅看会电影")
+        history = runtime.submit_text("不看了")
         self.assertIn("已结束", history["messages"][-1]["content"])
         _, status = runtime._world.active_goal()
         self.assertEqual(status, GoalStatus.CANCELLED)

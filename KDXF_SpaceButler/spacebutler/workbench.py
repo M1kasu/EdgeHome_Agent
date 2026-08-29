@@ -877,10 +877,12 @@ class WorkbenchController:
             return {"response": to_jsonable(self._last_response), "status": self.status()}
 
     def chat(self, text: str) -> dict[str, object]:
-        # 目标类话语走自治智能体（Goal Compiler -> Counterfactual Planner -> 执行回读）；
-        # 其余保持既有对话能力。
-        if self._agent_runtime.handles(text):
-            return self._agent_runtime.submit_goal(text)
+        # 全部文本先经自治智能体的模型目标理解：是家居目标走 Agent 链路
+        # （Goal Reasoner -> Counterfactual Planner -> 执行回读），
+        # 不是目标（或模型不可用且非目标）转回普通对话。
+        agent_result = self._agent_runtime.submit_text(text)
+        if agent_result is not None:
+            return agent_result
         return self._conversation.submit(text)
 
     def agent_status(self) -> dict[str, object]:

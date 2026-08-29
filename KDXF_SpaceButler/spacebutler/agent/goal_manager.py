@@ -43,10 +43,46 @@ class GoalManager:
         self._was_satisfied = False
 
     def evaluate(self, goal: CompiledGoal, state: RoomState) -> tuple[GoalStatus, str]:
-        """One goal-evaluation tick. Returns (new_status, reason)."""
+        """确定性数值评估：现在只作为 GoalEvaluator 的 fallback signal。"""
+        return self.apply_evaluation(goal, state, None, None, "")
+
+    def apply_evaluation(
+        self,
+        goal: CompiledGoal,
+        state: RoomState,
+        semantic_status: GoalStatus | None,
+        need_replan: bool | None,
+        semantic_reason: str,
+    ) -> tuple[GoalStatus, str]:
+        """把语义评估结论（或数值 fallback）套上 guardrail：
+        debounce（偏离需连续确认）、cooldown（重规划间隔）、max retries、超时。"""
         at = now()
         if goal.expires_at is not None and at > goal.expires_at:
             return GoalStatus.EXPIRED, "目标超时，自动结束。"
+
+        if semantic_status is not None:
+            # 模型语义结论：SATISFIED 直接采纳；DEGRADED+need_replan 才走重规划管线。
+            if semantic_status == GoalStatus.SATISFIED:
+                self._deviation_streak = 0
+                self._was_satisfied = True
+                return GoalStatus.SATISFIED, semantic_reason or "模型判断目标已满足。"
+            if semantic_status == GoalStatus.ACTIVE or not need_replan:
+                self._deviation_streak = 0
+                return GoalStatus.ACTIVE, semantic_reason or "模型判断目标正在满足，无需动作。"
+            # DEGRADED 且 need_replan：仍要过 debounce + cooldown + 上限。
+            self._deviation_streak += 1
+            if self._deviation_streak < self._debounce_ticks:
+                return GoalStatus.DEGRADED, f"模型判断偏离（连续 {self._deviation_streak} 次观测，等待确认）。{semantic_reason}"
+            if at - self._last_replan_at < self._cooldown_seconds:
+                return GoalStatus.DEGRADED, f"偏离已确认但处于重规划冷却期。{semantic_reason}"
+            if self._replan_count >= self._max_replans:
+                return GoalStatus.PAUSED, "重规划次数已达上限，暂停自动调整，等待用户新指令。"
+            self._deviation_streak = 0
+            self._replan_count += 1
+            self._last_replan_at = at
+            return GoalStatus.REPLANNING, f"模型确认目标偏离，触发第 {self._replan_count} 次重规划。{semantic_reason}"
+
+        # 数值 fallback 路径（原逻辑）。
         values = _constraint_values(state)
         unmet = [c for c in goal.constraints if not c.satisfied_by(values.get(c.metric))]
         if not unmet:
@@ -58,7 +94,6 @@ class GoalManager:
             return GoalStatus.ACTIVE, "存在轻微偏离，仍在容忍范围内，不动作。"
         if not self._was_satisfied:
             return GoalStatus.ACTIVE, "目标尚未达成过，首次规划仍在执行中。"
-        # 曾经满足过，现在显著偏离 -> 可能需要重规划，但要有 debounce + cooldown。
         self._deviation_streak += 1
         if self._deviation_streak < self._debounce_ticks:
             return GoalStatus.DEGRADED, f"检测到目标偏离（连续 {self._deviation_streak} 次观测，等待确认）。"
