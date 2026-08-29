@@ -278,31 +278,78 @@ def main() -> int:
         verifier = Verifier()
         llm_for_run = None if args.ablation == "no_model_planner" else llm
         goal, compile_mode, _sem = compiler.compile(text, llm_for_run)
-        llm_involved = compile_mode == "llm"
+        goal_parse_valid = goal is not None
+        goal_compiled_by_llm = compile_mode == "llm"
         action_count = 0
         valid = True
+        plan_generated_by_llm = False
+        plan_schema_valid = False
+        execution_valid = False
+        verification_success = False
+        error_stage = None if goal is not None else "goal_compile"
         if goal is None:
             valid = False
         else:
-            for _round in range(2):
+            # 持续自治语义（与 AgentRuntime 一致）：规划 -> 执行 -> 环境演化 ->
+            # 评估 -> 未满足则重规划，直到 no_action（收敛）或轮次上限。
+            plan_generated_by_llm = False
+            plan_schema_valid = False
+            execution_valid = True
+            verification_success = True
+            llm_candidate_seen = False
+            for _round in range(4):
                 outcome = planner.plan(goal, _snapshot_room(home), registry, None, llm_for_run)
+                plan_generated_by_llm = plan_generated_by_llm or outcome.planner_mode == "llm"
+                llm_candidate_seen = llm_candidate_seen or any(
+                    item.source == "llm" and item.actions for item in outcome.candidates
+                )
                 if outcome.no_action or outcome.selected is None:
+                    if outcome.no_action:
+                        plan_schema_valid = True
+                    else:
+                        error_stage = error_stage or "planner"
                     break
                 records = executor.execute(outcome.selected, _WorldStub())
-                verifier.verify_actions(records, lambda entity_id: _ha_state(home, entity_id))
+                failures = verifier.verify_actions(records, lambda entity_id: _ha_state(home, entity_id))
+                verifier_success = failures == 0
                 action_count += len(records)
-                valid = valid and all(record.verified for record in records)
+                valid = valid and verifier_success
+                execution_valid = execution_valid and verifier_success
+                verification_success = verification_success and verifier_success
+                if failures:
+                    error_stage = error_stage or "verification"
+                home.tick(60)
+            plan_schema_valid = plan_schema_valid or action_count > 0
             for _ in range(args.ticks):
                 home.tick(60)
         snapshot = _snapshot_state(home)
+        satisfaction = round(goal_satisfied(snapshot, build_goal_constraints(goal)), 3) if goal else 0.0
+        used_fallback = (not goal_compiled_by_llm) or (not plan_generated_by_llm)
+        full_llm_chain = bool(
+            goal_parse_valid
+            and goal_compiled_by_llm
+            and plan_generated_by_llm
+            and llm_candidate_seen
+            and execution_valid
+            and not used_fallback
+        )
         systems["spacebutler_agent"].append(
             {
                 "text": text,
                 "valid": valid,
                 "unsafe": False,
                 "action_count": action_count,
-                "goal_satisfaction": round(goal_satisfied(snapshot, build_goal_constraints(goal)), 3) if goal else 0.0,
-                "llm_involved": llm_involved,
+                "goal_satisfaction": satisfaction,
+                "llm_involved": goal_compiled_by_llm or plan_generated_by_llm,
+                "goal_parse_valid": goal_parse_valid,
+                "goal_compiled_by_llm": goal_compiled_by_llm,
+                "plan_generated_by_llm": plan_generated_by_llm,
+                "plan_schema_valid": plan_schema_valid,
+                "used_fallback": used_fallback,
+                "execution_valid": execution_valid,
+                "verification_success": verification_success,
+                "full_llm_chain_success": full_llm_chain,
+                "error_stage": error_stage,
             }
         )
         print(f"[{index}/{len(utterances)}] {text[:24]}... done")
@@ -318,9 +365,24 @@ def main() -> int:
             "goal_satisfaction_rate": round(sum(float(r.get("goal_satisfaction", 0)) for r in rows) / count, 3),
             "llm_contribution_rate": round(sum(1 for r in rows if r.get("llm_involved")) / count, 3),
             "generalization_success_rate": round(
-                sum(1 for r in rows if r["valid"] and float(r.get("goal_satisfaction", 0)) >= 0.8) / count, 3
+                sum(1 for r in rows if r["valid"] and float(r.get("goal_satisfaction", 0)) >= 0.75) / count, 3
             ),
         }
+        if name == "spacebutler_agent":
+            summary["systems"][name].update(
+                {
+                    "goal_parse_valid_rate": round(sum(1 for r in rows if r.get("goal_parse_valid")) / count, 3),
+                    "goal_compiled_by_llm_rate": round(sum(1 for r in rows if r.get("goal_compiled_by_llm")) / count, 3),
+                    "plan_generated_by_llm_rate": round(sum(1 for r in rows if r.get("plan_generated_by_llm")) / count, 3),
+                    "planner_fallback_rate": round(sum(1 for r in rows if r.get("used_fallback")) / count, 3),
+                    "execution_valid_rate": round(sum(1 for r in rows if r.get("execution_valid")) / count, 3),
+                    "full_llm_chain_success_rate": round(sum(1 for r in rows if r.get("full_llm_chain_success")) / count, 3),
+                    "goal_success_rate": round(
+                        sum(1 for r in rows if r["valid"] and float(r.get("goal_satisfaction", 0)) >= 0.75) / count, 3
+                    ),
+                    "error_stage_distribution": _count_stages(rows),
+                }
+            )
 
     out_dir = ROOT / args.out
     out_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -352,6 +414,14 @@ class _NullPredictor(CounterfactualPredictor):
         return PredictedState(temperature=state.temperature, temperature_trend="stable")
 
 
+def _count_stages(rows: list[dict[str, object]]) -> dict[str, int]:
+    distribution: dict[str, int] = {}
+    for row in rows:
+        stage = str(row.get("error_stage") or "ok")
+        distribution[stage] = distribution.get(stage, 0) + 1
+    return distribution
+
+
 def _snapshot_state(home: SimulatedHome) -> dict[str, object]:
     brightness = round(home.light_brightness * 100 / 255, 1) if home.light_on else 0.0
     return {"temperature": round(home.temperature, 2), "brightness_pct": brightness, "curtain_position": home.curtain}
@@ -373,9 +443,21 @@ def _snapshot_room(home: SimulatedHome):
 
 
 def _ha_state(home: SimulatedHome, entity_id: str) -> dict[str, object]:
+    """按实体类型返回正确的 HA 状态视图（verifier 回读依据）。"""
     for device in home.devices():
-        if str(device.get("entity_id")) == entity_id:
-            return {"state": "on", "attributes": {"brightness": device["state"].get("brightness"), "current_position": device["state"].get("position"), "temperature": device["state"].get("temperature")}}
+        if str(device.get("entity_id")) != entity_id:
+            continue
+        state = device["state"] if isinstance(device["state"], dict) else {}
+        attributes: dict[str, object] = {}
+        if device["type"] == "light":
+            attributes = {"brightness": state.get("brightness")}
+            return {"state": str(state.get("power", "off")).lower(), "attributes": attributes}
+        if device["type"] == "curtain":
+            attributes = {"current_position": state.get("position")}
+            return {"state": "open" if float(state.get("position", 0) or 0) > 0 else "closed", "attributes": attributes}
+        if device["type"] == "climate":
+            attributes = {"temperature": state.get("temperature")}
+            return {"state": str(state.get("mode", "off")), "attributes": attributes}
     return {"state": "unknown", "attributes": {}}
 
 

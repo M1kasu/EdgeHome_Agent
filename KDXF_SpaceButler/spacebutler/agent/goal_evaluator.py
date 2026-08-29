@@ -14,16 +14,20 @@ from spacebutler.agent.models import CompiledGoal, GoalStatus, RoomState
 from spacebutler.llm.client import LlmClient
 
 _EVALUATOR_SYSTEM_PROMPT = (
-    "你是家庭智能体的目标评估器。根据目标、当前真实状态、趋势、上一个计划的"
-    "执行结果和用户的人工纠正，语义判断目标当前是否仍被满足、是否需要重新规划。"
-    "只输出一个 JSON 对象：\n"
-    '{"status": "SATISFIED|DEGRADED|ACTIVE", "need_replan": true/false, '
-    '"reason_summary": "一句话中文理由"}\n'
-    "判断要点：\n"
-    "- 设备正在朝目标方向改善（例如空调制冷中、温度在下降）不是偏离；\n"
-    "- 人工纠正表达的用户偏好优先于原计划；\n"
-    "- 目标已满足或正在自然满足时输出 NO ACTION 语义（need_replan=false）。"
+    "你是家庭智能体的目标评估器。根据目标、当前真实状态、上一个计划结果和人工纠正，"
+    "语义判断目标是否仍满足、是否需要重新规划。设备正在朝目标改善（制冷中温度下降）"
+    "不算偏离；人工纠正表达的用户偏好优先于原计划；已满足或正在自然满足时 need_replan=false。"
 )
+
+_EVALUATOR_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string", "enum": ["SATISFIED", "DEGRADED", "ACTIVE"]},
+        "need_replan": {"type": "boolean"},
+        "reason_summary": {"type": "string"},
+    },
+    "required": ["status", "need_replan", "reason_summary"],
+}
 
 
 @dataclass
@@ -66,6 +70,7 @@ class GoalEvaluator:
                     f"近期人工纠正：{recent_overrides}\n"
                     "请语义评估目标状态。"
                 ),
+                schema=_EVALUATOR_SCHEMA,
             )
             if isinstance(raw, dict) and str(raw.get("status", "")).upper() in {"SATISFIED", "DEGRADED", "ACTIVE"}:
                 status = GoalStatus(str(raw["status"]).upper())

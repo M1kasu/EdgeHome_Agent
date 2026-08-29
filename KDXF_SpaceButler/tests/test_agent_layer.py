@@ -96,7 +96,7 @@ class FakeLlm:
     def available(self, force_refresh: bool = False) -> bool:
         return not self.fail
 
-    def chat_json(self, system: str, user: str, max_attempts: int = 2) -> dict | None:
+    def chat_json(self, system: str, user: str, max_attempts: int = 2, schema: dict | None = None) -> dict | None:
         self.calls += 1
         if self.fail:
             raise RuntimeError("llm down")

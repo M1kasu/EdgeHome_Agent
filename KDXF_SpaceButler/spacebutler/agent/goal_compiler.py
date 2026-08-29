@@ -32,23 +32,50 @@ _METRIC_RULES: dict[str, tuple[float, float]] = {
 }
 
 _GOAL_SYSTEM_PROMPT = (
-    "你是家庭智能体的目标理解器。判断用户这句话是否表达了一个可执行的家居环境目标，"
-    "并把它编译为语义目标 JSON。只允许输出一个 JSON 对象，不要解释。格式：\n"
-    '{"is_home_goal": true/false, "location": "房间id或null", '
-    '"intent_summary": "一句话中文概括用户想要什么", '
-    '"activity": "简短活动标签（自由命名，如 watch_content/rest/work/relax）", '
-    '"constraints": [{"dimension": "thermal|lighting|glare|energy", '
-    '"direction": "cooler|warmer|dimmer|brighter|reduce|conserve|null", '
-    '"strength": "slight|moderate|strong", '
-    '"target_range": [下界, 上界] 或 null, '
-    '"reason": "模型给出该区间/方向的简短理由"}]}\n'
-    "规则：\n"
-    "1. 不是家居环境目标时输出 {\"is_home_goal\": false, \"constraints\": []}。\n"
-    "2. 约束表达语义偏好而不是设备指令；数值区间由你根据语义推理给出"
-    "（例如'别太亮'通常意味着保留可见照明但明显变暗），并填写 reason。\n"
-    "3. 不要假设特定活动必须操作特定设备；设备选择由下游规划器完成。\n"
-    "4. energy 维度表达节能意向，不设数值区间（target_range 填 null）。"
+    "你是家庭智能体的目标理解器。判断用户的话是否表达了一个可执行的家居环境目标，"
+    "并编译为语义目标。约束表达语义偏好而非设备指令；数值区间由你根据语义推理给出并填写 reason。"
+    "注意：身体感受（刺眼、闷、热、冷、暗）和活动准备（看电影、休息、工作）都是家居目标；"
+    "'不想睡''别太黑'这类否定约束也是目标的一部分。"
+    "不要假设特定活动必须操作特定设备。energy 维度不设数值区间。"
+    "不是家居目标时 constraints 返回空数组。"
+    "\n示例：\n"
+    '用户：客厅有点刺眼，我想安静坐会 → {"is_home_goal": true, "location": "living_room", '
+    '"intent_summary": "降低刺眼光线，安静休息", "activity": "relax", "constraints": '
+    '[{"dimension": "lighting", "direction": "dimmer", "strength": "moderate", '
+    '"target_range": [15, 40], "reason": "刺眼说明当前过亮"}]}\n'
+    '用户：有点困但还不想睡 → {"is_home_goal": true, "location": null, '
+    '"intent_summary": "保持清醒舒适", "activity": "rest", "constraints": '
+    '[{"dimension": "lighting", "direction": "dimmer", "strength": "slight", '
+    '"target_range": [30, 55], "reason": "困但不想睡，适合柔和偏暗"}, '
+    '{"dimension": "thermal", "direction": "cooler", "strength": "slight", '
+    '"target_range": [24, 28], "reason": "凉爽帮助清醒"}]}'
 )
+
+# JSON Schema（llama.cpp 约束解码 + 校验共用）。
+_GOAL_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "is_home_goal": {"type": "boolean"},
+        "location": {"type": "string"},
+        "intent_summary": {"type": "string"},
+        "activity": {"type": "string"},
+        "constraints": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "dimension": {"type": "string", "enum": ["thermal", "lighting", "glare", "energy"]},
+                    "direction": {"type": "string"},
+                    "strength": {"type": "string", "enum": ["slight", "moderate", "strong"]},
+                    "target_range": {"type": "array", "items": {"type": "number"}},
+                    "reason": {"type": "string"},
+                },
+                "required": ["dimension"],
+            },
+        },
+    },
+    "required": ["is_home_goal", "intent_summary", "constraints"],
+}
 
 # fallback 专用：LLM 不可用时才使用（planner_mode 如实标注 fallback）。
 _ACTIVITY_WORDS = re.compile(r"看(?:会|场|个)?(?:电影|电视|剧|片)|观影|追剧|休息|放松|睡觉|工作|阅读")
@@ -67,7 +94,19 @@ class GoalCompiler:
         semantic_view 是模型原始语义判断（供 UI 展示 MODEL INTERPRETATION）。
         """
         if llm_client is not None and llm_client.available():
-            raw = llm_client.chat_json(_GOAL_SYSTEM_PROMPT, text)
+            raw = llm_client.chat_json(_GOAL_SYSTEM_PROMPT, text, schema=_GOAL_SCHEMA)
+            # 语义 retry（max 2 次）：小模型对隐含目标的布尔判定有波动，
+            # 用 repair prompt 再确认一次（任务书 max_model_retry=2）。
+            if isinstance(raw, dict) and raw.get("is_home_goal") is False and raw.get("constraints") in (None, []):
+                repair = llm_client.chat_json(
+                    _GOAL_SYSTEM_PROMPT
+                    + "\n注意：用户描述身体感受（闷/热/冷/困/刺眼）或活动准备（看剧/休息/工作）时，"
+                    "几乎总是表达家居环境目标。请再判断一次。",
+                    text,
+                    schema=_GOAL_SCHEMA,
+                )
+                if isinstance(repair, dict) and repair.get("is_home_goal") is True:
+                    raw = repair
             goal = self._goal_from_semantics(raw, text)
             if goal is not None:
                 semantic = raw if isinstance(raw, dict) else {}
@@ -81,10 +120,14 @@ class GoalCompiler:
 
     # ---- LLM semantic path ------------------------------------------
     def _goal_from_semantics(self, raw: object, text: str) -> CompiledGoal | None:
-        if not isinstance(raw, dict) or raw.get("is_home_goal") is not True:
+        if not isinstance(raw, dict):
             return None
         constraints_raw = raw.get("constraints")
-        if not isinstance(constraints_raw, list):
+        has_constraints = isinstance(constraints_raw, list) and any(
+            isinstance(item, dict) for item in constraints_raw
+        )
+        # schema repair：模型布尔标志与约束自相矛盾（false 但给出有效约束）时以约束为准。
+        if raw.get("is_home_goal") is not True and not has_constraints:
             return None
         constraints: list[GoalConstraint] = []
         for item in constraints_raw[:6]:
@@ -141,19 +184,28 @@ class GoalCompiler:
         return goal
 
     def _range_from_direction(self, direction: str, state_hint: str) -> tuple[float | None, float | None]:
-        """模型只给了方向没给数值时，从当前环境推导宽区间（数学推导，非场景答案）。
+        """模型只给了方向没给数值区间时，从方向关键词与当前环境推导宽区间。
 
-        需要 environment.current_state() 的温度/亮度作锚点，由调用方注入。
+        这是数学推导（方向 + 当前值锚点 + 模型给的 strength 语义），不是场景答案表。
         """
         anchor = self._state_anchor
-        if direction in {"cooler", "dimmer", "reduce"}:
+        normalized = direction.lower()
+        cooling_words = ("cool", "lower", "reduce", "闷", "热", "凉")
+        dimming_words = ("dark", "black", "dim", "lower", "reduce")
+        brightening_words = ("bright", "warmer", "亮")
+        if any(word in normalized for word in dimming_words):
+            # 调暗：从当前亮度向下推一个宽区间。
             if anchor is None:
-                return None, None
-            return (max(anchor - 10, 1), max(anchor - 1, 2))
-        if direction in {"warmer", "brighter"}:
+                return 15.0, 50.0
+            return (max(5.0, anchor - 50.0), max(15.0, anchor - 5.0))
+        if any(word in normalized for word in cooling_words):
             if anchor is None:
-                return None, None
-            return (min(anchor + 1, 99), min(anchor + 10, 100))
+                return 22.0, 27.0
+            return (max(16.0, anchor - 6.0), max(23.0, anchor - 0.5))
+        if any(word in normalized for word in brightening_words):
+            if anchor is None:
+                return 40.0, 85.0
+            return (min(anchor + 5.0, 100.0), min(anchor + 40.0, 100.0))
         return None, None
 
     _state_anchor: float | None = None

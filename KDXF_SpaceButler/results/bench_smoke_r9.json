@@ -1,0 +1,243 @@
+{
+  "summary": {
+    "ablation": "full",
+    "llm_available": true,
+    "samples": 6,
+    "systems": {
+      "scene_baseline": {
+        "plan_validity_rate": 0.667,
+        "unsafe_plan_rate": 0.0,
+        "avg_action_count": 2.17,
+        "goal_satisfaction_rate": 0.0,
+        "llm_contribution_rate": 0.0,
+        "generalization_success_rate": 0.0
+      },
+      "llm_direct_tool": {
+        "plan_validity_rate": 0.833,
+        "unsafe_plan_rate": 0.167,
+        "avg_action_count": 0.83,
+        "goal_satisfaction_rate": 0.197,
+        "llm_contribution_rate": 1.0,
+        "generalization_success_rate": 0.0
+      },
+      "spacebutler_agent": {
+        "plan_validity_rate": 1.0,
+        "unsafe_plan_rate": 0.0,
+        "avg_action_count": 4.33,
+        "goal_satisfaction_rate": 0.818,
+        "llm_contribution_rate": 1.0,
+        "generalization_success_rate": 0.833,
+        "goal_parse_valid_rate": 1.0,
+        "goal_compiled_by_llm_rate": 1.0,
+        "plan_generated_by_llm_rate": 1.0,
+        "planner_fallback_rate": 0.0,
+        "execution_valid_rate": 1.0,
+        "full_llm_chain_success_rate": 1.0,
+        "goal_success_rate": 0.833,
+        "error_stage_distribution": {
+          "ok": 6
+        }
+      }
+    }
+  },
+  "rows": {
+    "scene_baseline": [
+      {
+        "text": "我准备在客厅看会电影，有点热，但是别弄得完全黑。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 4,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "我想窝在沙发上看点东西，屋里有点闷，但是别搞得太黑。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 4,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "我准备休息一会，但不睡觉，凉快一点，给我留点光。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 4,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "客厅现在有点刺眼，我想安静坐会。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "我就待半小时，舒服点就行，但别太耗电。",
+        "valid": false,
+        "unsafe": false,
+        "action_count": 0,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "我有点困，不过现在还不想睡。",
+        "valid": false,
+        "unsafe": false,
+        "action_count": 0,
+        "goal_satisfaction": 0.0
+      }
+    ],
+    "llm_direct_tool": [
+      {
+        "text": "我准备在客厅看会电影，有点热，但是别弄得完全黑。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.0,
+        "llm_involved": true
+      },
+      {
+        "text": "我想窝在沙发上看点东西，屋里有点闷，但是别搞得太黑。",
+        "valid": false,
+        "unsafe": true,
+        "action_count": 0,
+        "goal_satisfaction": 0.0,
+        "llm_involved": true
+      },
+      {
+        "text": "我准备休息一会，但不睡觉，凉快一点，给我留点光。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.304,
+        "llm_involved": true
+      },
+      {
+        "text": "客厅现在有点刺眼，我想安静坐会。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.4,
+        "llm_involved": true
+      },
+      {
+        "text": "我就待半小时，舒服点就行，但别太耗电。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.0,
+        "llm_involved": true
+      },
+      {
+        "text": "我有点困，不过现在还不想睡。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.48,
+        "llm_involved": true
+      }
+    ],
+    "spacebutler_agent": [
+      {
+        "text": "我准备在客厅看会电影，有点热，但是别弄得完全黑。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 3,
+        "goal_satisfaction": 0.984,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      },
+      {
+        "text": "我想窝在沙发上看点东西，屋里有点闷，但是别搞得太黑。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 4,
+        "goal_satisfaction": 0.0,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      },
+      {
+        "text": "我准备休息一会，但不睡觉，凉快一点，给我留点光。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 4,
+        "goal_satisfaction": 0.984,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      },
+      {
+        "text": "客厅现在有点刺眼，我想安静坐会。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 7,
+        "goal_satisfaction": 0.984,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      },
+      {
+        "text": "我就待半小时，舒服点就行，但别太耗电。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 2,
+        "goal_satisfaction": 0.984,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      },
+      {
+        "text": "我有点困，不过现在还不想睡。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 6,
+        "goal_satisfaction": 0.97,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      }
+    ]
+  }
+}

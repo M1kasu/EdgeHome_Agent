@@ -29,18 +29,96 @@ from spacebutler.llm.client import LlmClient
 _MAX_CANDIDATES = 5
 
 _PLANNER_SYSTEM_PROMPT = (
-    "你是家庭智能体的规划器。你不是在执行固定场景——没有任何'看电影必须关窗帘、"
-    "热必须开空调'的预设。你必须根据当前用户目标、家庭真实状态、设备能力、"
-    "近期事件与用户偏好，重新推理出多个合理的候选计划。只输出一个 JSON 对象：\n"
-    '{"candidates": [{"summary": "一句话中文说明该方案的思路", "actions": ['
-    '{"device_id": "...", "capability": "能力名", "value": 数值或字符串, "mode": "cool|heat|null"}]}]}\n'
-    "要求：\n"
-    "1. 生成 3 到 5 个思路明显不同的候选（例如不同设备组合、不同激进程度）。\n"
-    "2. 只能使用给定设备与能力；目标约束已满足的设备不要输出动作。\n"
-    "3. 数值用数字而不是字符串；没有把握的动作宁可不输出。\n"
-    "4. 用户偏好里学到的亮度偏好应反映在至少一个候选中。\n"
-    "5. 若目标已经全部满足，输出 {\"candidates\": []}。"
+    "你是家庭智能体的规划器。没有任何'看电影必须关窗帘、热必须开空调'的预设。"
+    "根据当前目标、家庭真实状态、设备能力、近期事件与用户偏好，推理出多个思路不同的候选计划。"
+    "只能用给定设备（device_id 必须原样照抄）；capability 必须从该设备的 actions 列表里选；"
+    "数值用数字；目标约束已满足的设备不要输出动作；"
+    "用户历史偏好应反映在至少一个候选中；目标已全部满足时输出空数组。"
 )
+
+def _coerce_number(value: object) -> object:
+    """LLM 常把数字输出成 "32"、"32%"、"26°C"；尽力提取数字，失败交 Policy Guard。"""
+    if isinstance(value, str):
+        match = re.search(r"-?\d+(?:\.\d+)?", value)
+        if match:
+            return float(match.group())
+    return value
+
+
+def _normalize_action_value(capability: str, value: object) -> tuple[object, str | None]:
+    """把模型常见输出风格归一化为内部动作 schema（纯格式对齐，非业务决策）：
+    - 参数对象风格 {"brightness": 0.8} / {"hvac_mode": "off"} -> 标量值
+    - 0~1 比例亮度 -> 百分比
+    - 数字字符串 "32" -> 32.0
+    返回 (value, extra_mode)。"""
+    if isinstance(value, dict):
+        for key in ("brightness", "position", "temperature"):
+            if key in value and isinstance(value[key], (int, float)) and not isinstance(value[key], bool):
+                number = float(value[key])
+                if key == "brightness" and 0 < number <= 1.0:
+                    number = round(number * 100, 1)
+                return number, None
+        for key in ("hvac_mode", "mode"):
+            if key in value and isinstance(value[key], str):
+                return value[key], None
+        for inner in value.values():
+            if isinstance(inner, (int, float)) and not isinstance(inner, bool):
+                return float(inner), None
+            if isinstance(inner, str):
+                return inner, None
+        return value, None
+    return _coerce_number(value), None
+
+
+def _normalize_mode(value: object) -> str | None:
+    """mode 可能是 "cool" 或嵌套 {"hvac_mode": "off"}；归一化为合法字符串。"""
+    if isinstance(value, dict):
+        value = value.get("hvac_mode") or value.get("mode")
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    return normalized or None
+
+
+_PLANNER_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "candidates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "actions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "device_id": {"type": "string"},
+                                "capability": {
+                                    "type": "string",
+                                    "enum": [
+                                        "set_brightness",
+                                        "set_position",
+                                        "set_temperature",
+                                        "set_hvac_mode",
+                                        "turn_on",
+                                        "turn_off",
+                                    ],
+                                },
+                                "value": {},
+                                "mode": {"type": "string"},
+                            },
+                            "required": ["device_id", "capability", "value"],
+                        },
+                    },
+                },
+                "required": ["actions"],
+            },
+        }
+    },
+    "required": ["candidates"],
+}
 
 
 @dataclass
@@ -194,7 +272,7 @@ class CounterfactualPlanner:
             f"近期事件：{(recent_events or [])[-5:]}\n"
             "请根据以上真实上下文生成 3~5 个思路不同的候选计划。"
         )
-        raw = llm_client.chat_json(_PLANNER_SYSTEM_PROMPT, user_prompt)
+        raw = llm_client.chat_json(_PLANNER_SYSTEM_PROMPT, user_prompt, schema=_PLANNER_SCHEMA)
         if not isinstance(raw, dict) or not isinstance(raw.get("candidates"), list):
             return []
         results: list[tuple[str, list[dict[str, object]]]] = []
@@ -205,18 +283,14 @@ class CounterfactualPlanner:
             for entry in item.get("actions", [])[:8]:
                 if not isinstance(entry, dict):
                     continue
-                value = entry.get("value")
-                if isinstance(value, str):
-                    try:
-                        value = float(value.strip())
-                    except ValueError:
-                        pass
+                capability = str(entry.get("capability", ""))
+                value, extra_mode = _normalize_action_value(capability, entry.get("value"))
                 actions.append(
                     {
                         "device_id": str(entry.get("device_id", "")),
-                        "capability": str(entry.get("capability", "")),
+                        "capability": capability,
                         "value": value,
-                        "mode": entry.get("mode"),
+                        "mode": _normalize_mode(entry.get("mode")) or extra_mode,
                     }
                 )
             if actions:
