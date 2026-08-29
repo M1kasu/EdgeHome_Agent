@@ -62,6 +62,7 @@ services:
 
   spacebutler-device-living-room-main-light:
     <<: *device-runtime
+    profiles: ["legacy-mqtt-living"]
     environment:
       <<: *device-environment
       DEVICE_ID: living_room_main_light
@@ -79,6 +80,7 @@ services:
 
   spacebutler-device-living-room-curtain:
     <<: *device-runtime
+    profiles: ["legacy-mqtt-living"]
     environment:
       <<: *device-environment
       DEVICE_ID: living_room_curtain
@@ -96,6 +98,7 @@ services:
 
   spacebutler-device-living-room-ac:
     <<: *device-runtime
+    profiles: ["legacy-mqtt-living"]
     environment:
       <<: *device-environment
       DEVICE_ID: living_room_ac
@@ -113,6 +116,7 @@ services:
 
   spacebutler-device-living-room-presence:
     <<: *device-runtime
+    profiles: ["legacy-mqtt-living"]
     environment:
       <<: *device-environment
       DEVICE_ID: living_room_presence_sensor
@@ -203,14 +207,6 @@ services:
     depends_on:
       spacebutler-device-bedroom-reading-light:
         condition: service_healthy
-      spacebutler-device-living-room-main-light:
-        condition: service_healthy
-      spacebutler-device-living-room-curtain:
-        condition: service_healthy
-      spacebutler-device-living-room-ac:
-        condition: service_healthy
-      spacebutler-device-living-room-presence:
-        condition: service_healthy
       spacebutler-device-bedroom-illuminance:
         condition: service_healthy
       spacebutler-device-bedroom-presence:
@@ -244,12 +240,86 @@ services:
     depends_on:
       - spacebutler-mqtt
       - spacebutler-device-simulator
+      - spacebutler-esphome-light
+      - spacebutler-esphome-curtain
+      - spacebutler-esphome-ac
+      - spacebutler-esphome-presence
     environment:
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - ./homeassistant:/config
     ports:
       - "127.0.0.1:${SPACEBUTLER_HA_PORT:-12900}:8123"
+    restart: unless-stopped
+    networks:
+      - spacebutler
+
+  # ESPHome Host 虚拟设备：与真实 ESP32 设备同款 C++ 组件与 Native API 链路。
+  # 健康检查探测 Native API 端口 6053（Dashboard 是 6052）；/cache 缓存编译工具链。
+  spacebutler-esphome-light:
+    image: ghcr.io/esphome/esphome:2026.8.1
+    init: true
+    command: ["run", "/config/light.yaml"]
+    volumes:
+      - ../deployment/esphome:/config
+      - esphome-cache:/cache
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6053'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 240s
+    restart: unless-stopped
+    networks:
+      - spacebutler
+
+  spacebutler-esphome-curtain:
+    image: ghcr.io/esphome/esphome:2026.8.1
+    init: true
+    command: ["run", "/config/curtain.yaml"]
+    volumes:
+      - ../deployment/esphome:/config
+      - esphome-cache:/cache
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6053'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 240s
+    restart: unless-stopped
+    networks:
+      - spacebutler
+
+  spacebutler-esphome-ac:
+    image: ghcr.io/esphome/esphome:2026.8.1
+    init: true
+    command: ["run", "/config/ac.yaml"]
+    volumes:
+      - ../deployment/esphome:/config
+      - esphome-cache:/cache
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6053'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 240s
+    restart: unless-stopped
+    networks:
+      - spacebutler
+
+  spacebutler-esphome-presence:
+    image: ghcr.io/esphome/esphome:2026.8.1
+    init: true
+    command: ["run", "/config/presence.yaml"]
+    volumes:
+      - ../deployment/esphome:/config
+      - esphome-cache:/cache
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6053'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 240s
     restart: unless-stopped
     networks:
       - spacebutler
@@ -279,6 +349,8 @@ networks:
     name: spacebutler
 
 volumes:
+  esphome-cache:
+    name: spacebutler-esphome-cache
   bedroom-reading-light-data:
     name: spacebutler-device-data-bedroom_reading_light
   living-room-main-light-data:

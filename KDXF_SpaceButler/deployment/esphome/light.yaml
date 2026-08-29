@@ -1,0 +1,34 @@
+esphome:
+  name: spacebutler-living-light
+  friendly_name: SpaceButler Living Room
+  on_boot:
+    priority: -100
+    then:
+      - delay: 1s
+      - light.turn_on:
+          id: living_room_light
+          brightness: 80%
+
+host:
+  mac_address: "02:00:00:01:00:11"
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_key
+
+output:
+  - platform: template
+    id: virtual_light_output
+    type: float
+    write_action:
+      - lambda: |-
+          ESP_LOGI("virtual_light", "Brightness: %.0f%%", state * 100.0f);
+
+light:
+  - platform: monochromatic
+    id: living_room_light
+    name: Main
+    output: virtual_light_output
+    default_transition_length: 1s

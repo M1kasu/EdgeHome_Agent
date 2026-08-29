@@ -1,10 +1,10 @@
-"""SpaceButler orchestration entry point."""
+"""SpaceButler orchestration kernel (moved from the former agent.py module)."""
 
 from __future__ import annotations
 
-from .memory import HouseholdMemory
-from .models import ServicePlan, SpatialSnapshot
-from .services import ProactiveServiceEngine
+from spacebutler.memory import HouseholdMemory
+from spacebutler.models import ServicePlan, SpatialSnapshot
+from spacebutler.services import ProactiveServiceEngine
 
 
 class SpaceButlerAgent:
@@ -17,4 +17,3 @@ class SpaceButlerAgent:
     def observe_and_plan(self, snapshot: SpatialSnapshot) -> list[ServicePlan]:
         """Return proactive or semi-proactive plans for the current home-space state."""
         return self._services.propose(snapshot)
-

@@ -18,6 +18,7 @@ from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
 from .agent import SpaceButlerAgent
+from .agent.runtime import AgentRuntime
 from .control_context import ControlContextRegistry, ManualControlContext
 from .conversation import ConversationAgent
 from .edge_language import EdgeLanguageRouter, EdgeLlmClient
@@ -37,6 +38,7 @@ class WorkbenchController:
         memory: HouseholdMemory,
         language_router: EdgeLanguageRouter | None = None,
         edge_llm_client: EdgeLlmClient | None = None,
+        agent_llm_client: object | None = None,
     ) -> None:
         self._ha = ha_client
         self._simulator_url = simulator_url.rstrip("/")
@@ -61,6 +63,14 @@ class WorkbenchController:
             edge_llm_client,
             memory.database_path,
         )
+        # 自治智能体运行时：反事实规划 + 偏好学习 + 物理反馈重规划。
+        self._agent_runtime = AgentRuntime(
+            self.devices,
+            self.control_device,
+            agent_llm_client,
+            memory.database_path,
+        )
+        self._agent_runtime.start()
 
     def status(self) -> dict[str, object]:
         with self._lock:
@@ -613,16 +623,63 @@ class WorkbenchController:
                     continue
                 entity_id = str(item.get("entity_id", ""))
                 feedback_entity_id = str(item.get("feedback_entity_id", ""))
-                devices.append(
-                    {
-                        **item,
-                        "ha_state": ha_states.get(entity_id),
-                        "feedback": ha_states.get(feedback_entity_id),
-                        "discovered": entity_id in ha_states,
-                    }
-                )
+                device = {
+                    **item,
+                    "ha_state": ha_states.get(entity_id),
+                    "feedback": ha_states.get(feedback_entity_id),
+                    "discovered": entity_id in ha_states,
+                }
+                device["ui"] = _device_ui(device)
+                devices.append(device)
+            devices.extend(self._esphome_devices(ha_states, {str(item.get("device_id", "")) for item in devices}))
             rooms = _room_summaries(devices)
-            return {"devices": devices, "rooms": rooms}
+            dashboard = _dashboard_projection(devices, rooms)
+            favorite_ids = set(dashboard["favorite_device_ids"])
+            for device in devices:
+                ui = device.get("ui")
+                if isinstance(ui, dict):
+                    ui["favorite"] = str(device.get("device_id", "")) in favorite_ids
+            return {"devices": devices, "rooms": rooms, "dashboard": dashboard}
+
+    @staticmethod
+    def _esphome_devices(
+        ha_states: dict[str, dict[str, object]],
+        known_device_ids: set[str],
+    ) -> list[dict[str, object]]:
+        """Synthesize inventory records for ESPHome entities that HA already exposes."""
+        devices: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for entity_id, ha_state in ha_states.items():
+            record = _esphome_match(entity_id, ha_state)
+            if record is None:
+                continue
+            device_id = str(record["device_id"])
+            if device_id in known_device_ids or device_id in seen:
+                # legacy MQTT 容器同时在线时以 Fleet 记录为准，避免同 id 重复。
+                continue
+            seen.add(device_id)
+            device_type = str(record["type"])
+            value = str(ha_state.get("state", "unavailable"))
+            room = str(record["room"])
+            device: dict[str, object] = {
+                "device_id": device_id,
+                "entity_id": entity_id,
+                "type": device_type,
+                "name": record["name"],
+                "room": room,
+                "room_name": _ESPHOME_ROOM_NAMES.get(room, room),
+                "source": "esphome",
+                "online": value not in {"unknown", "unavailable"},
+                "readonly": device_type in _ESPHOME_READONLY_TYPES,
+                "state": _esphome_device_state(device_type, ha_state),
+                "ha_state": ha_state,
+                "feedback": None,
+                "discovered": True,
+                "capabilities": list(record.get("capabilities", [])),
+            }
+            device["ui"] = _device_ui(device)
+            devices.append(device)
+        return devices
 
     def add_device(self, payload: dict[str, object]) -> dict[str, object]:
         with self._lock:
@@ -636,11 +693,16 @@ class WorkbenchController:
 
     def remove_device(self, device_id: str) -> dict[str, object]:
         with self._lock:
+            if _esphome_record(device_id) is not None:
+                raise ValueError("ESPHome 设备由 deployment/esphome 固件定义，不能从工作台删除")
             removed = self._simulator("DELETE", f"/admin/devices/{device_id}")
             return {"removed": removed.get("removed"), **self.devices()}
 
     def control_device(self, device_id: str, payload: dict[str, object]) -> dict[str, object]:
         with self._lock:
+            esphome_entity_id = self._esphome_entity_id(device_id)
+            if esphome_entity_id is not None:
+                return self._control_esphome_device(device_id, esphome_entity_id, payload)
             device = self._simulator("GET", f"/devices/{device_id}")
             entity_id = str(device.get("entity_id", ""))
             device_type = str(device.get("type", ""))
@@ -707,6 +769,8 @@ class WorkbenchController:
             "stuck",
         }:
             raise ValueError("unsupported fault mode")
+        if _esphome_record(device_id) is not None:
+            raise ValueError("ESPHome 设备故障由节点容器生命周期决定，不支持故障注入")
         with self._lock:
             result = self._simulator(
                 "POST",
@@ -813,7 +877,32 @@ class WorkbenchController:
             return {"response": to_jsonable(self._last_response), "status": self.status()}
 
     def chat(self, text: str) -> dict[str, object]:
+        # 目标类话语走自治智能体（Goal Compiler -> Counterfactual Planner -> 执行回读）；
+        # 其余保持既有对话能力。
+        if self._agent_runtime.handles(text):
+            return self._agent_runtime.submit_goal(text)
         return self._conversation.submit(text)
+
+    def agent_status(self) -> dict[str, object]:
+        return self._agent_runtime.status()
+
+    def demo_override(self, brightness: int) -> dict[str, object]:
+        """Simulate a human override by REALLY changing the light through HA."""
+        if not 1 <= int(brightness) <= 100:
+            raise ValueError("brightness must be between 1 and 100")
+        result = self.control_device("living_room_main_light", {"power": "on", "brightness": int(brightness)})
+        return {"override_sent": {"brightness": int(brightness)}, **result}
+
+    def demo_disturbance(self, temperature: float) -> dict[str, object]:
+        """Inject heat through the ESPHome firmware service (real physical-path disturbance)."""
+        if not 16 <= float(temperature) <= 40:
+            raise ValueError("temperature must be between 16 and 40")
+        self._ha.call_service(
+            "esphome",
+            "spacebutler_living_ac_demo_heat_injection",
+            {"target_temperature": float(temperature)},
+        )
+        return {"disturbance_sent": {"temperature": float(temperature)}, "status": self.status()}
 
     def chat_history(self) -> dict[str, object]:
         return self._conversation.history()
@@ -865,6 +954,42 @@ class WorkbenchController:
             "total": len(devices),
             "online": sum(bool(item.get("online")) for item in devices if isinstance(item, dict)),
             "rooms": len(payload.get("rooms", [])),
+        }
+
+    def _esphome_entity_id(self, device_id: str) -> str | None:
+        # devices() 使用可重入锁，运行时解析实际 entity_id（可能带 _2 后缀）。
+        for item in self.devices()["devices"]:
+            if str(item.get("device_id")) == device_id and item.get("source") == "esphome":
+                return str(item["entity_id"])
+        return None
+
+    def _control_esphome_device(
+        self,
+        device_id: str,
+        entity_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        """Control an ESPHome Host device through HA services with state read-back."""
+        record = _esphome_record(device_id)
+        if record is None:
+            raise RuntimeError(f"unknown ESPHome device: {device_id}")
+        device_type = str(record["type"])
+        if device_type in _ESPHOME_READONLY_TYPES:
+            raise ValueError("ESPHome 传感器为只读设备，不支持控制指令")
+        ha_state = self._optional_ha_state(entity_id)
+        if ha_state is None or str(ha_state.get("state", "")) in {"unknown", "unavailable"}:
+            raise ValueError("device is not available for control")
+        expected = self._call_device_service(entity_id, device_type, payload)
+        # time_based 窗帘全行程 10s，回读窗口放宽到 30s。
+        self._wait_for(
+            lambda: _control_matches(self._ha.state(entity_id), expected),
+            timeout_seconds=30,
+        )
+        return {
+            "controlled": device_id,
+            "expected": expected,
+            "night_response": None,
+            **self.devices(),
         }
 
     def _call_device_service(
@@ -968,6 +1093,416 @@ class WorkbenchController:
                 pass
             time.sleep(0.25)
         raise TimeoutError("workbench scene did not stabilize")
+
+
+# ESPHome Host 设备注册表：按 friendly_name + domain 匹配 HA 实体。
+# entity_id 运行时动态解析（HA 注册表残留旧 MQTT 条目时实体可能带 _2 后缀）。
+# device_id 与被停用的 MQTT 客厅容器保持一致，主动规则、收藏位、夜间看护的
+# 既有绑定无需迁移即落到 ESPHome 设备；传感器实体只读。
+_ESPHOME_DEVICE_REGISTRY: dict[str, dict[str, object]] = {
+    "SpaceButler Living Room Main": {
+        "domain": "light",
+        "device_id": "living_room_main_light",
+        "type": "light",
+        "name": "客厅主灯",
+        "room": "living_room",
+        "capabilities": ["power", "brightness"],
+    },
+    "SpaceButler Living Room Curtain": {
+        "domain": "cover",
+        "device_id": "living_room_curtain",
+        "type": "curtain",
+        "name": "客厅窗帘",
+        "room": "living_room",
+        "capabilities": ["position"],
+    },
+    "SpaceButler Living Room AC": {
+        "domain": "climate",
+        "device_id": "living_room_ac",
+        "type": "climate",
+        "name": "客厅空调",
+        "room": "living_room",
+        "capabilities": ["mode", "temperature"],
+    },
+    "SpaceButler Living Room Presence": {
+        "domain": "binary_sensor",
+        "device_id": "living_room_presence_sensor",
+        "type": "presence",
+        "name": "客厅人体存在传感器",
+        "room": "living_room",
+        "capabilities": [],
+    },
+    "SpaceButler Living Room Temperature": {
+        "domain": "sensor",
+        "device_id": "living_room_temperature_sensor",
+        "type": "temperature",
+        "name": "客厅温度传感器",
+        "room": "living_room",
+        "capabilities": [],
+    },
+}
+
+_ESPHOME_ROOM_NAMES = {"living_room": "客厅", "bedroom": "卧室", "home": "全屋"}
+_ESPHOME_READONLY_TYPES = {"presence", "contact", "illuminance", "temperature"}
+
+
+def _esphome_record(device_id: str) -> dict[str, object] | None:
+    """Return the registry record for a merged ESPHome device id, else None."""
+    for record in _ESPHOME_DEVICE_REGISTRY.values():
+        if str(record.get("device_id")) == device_id:
+            return dict(record)
+    return None
+
+
+def _esphome_match(entity_id: str, ha_state: dict[str, object]) -> dict[str, object] | None:
+    """Match one HA entity to the ESPHome registry by friendly name and domain."""
+    attributes = ha_state.get("attributes")
+    friendly = str(attributes.get("friendly_name", "")) if isinstance(attributes, dict) else ""
+    record = _ESPHOME_DEVICE_REGISTRY.get(friendly)
+    if record is None or not entity_id.startswith(f"{record['domain']}."):
+        return None
+    return {**record, "entity_id": entity_id}
+
+
+def _esphome_device_state(device_type: str, ha_state: dict[str, object]) -> dict[str, object]:
+    """Project one HA entity state into the fleet-style state dict used by the UI."""
+    value = str(ha_state.get("state", "unavailable"))
+    attributes = ha_state.get("attributes")
+    if not isinstance(attributes, dict):
+        attributes = {}
+    if device_type == "light":
+        brightness = attributes.get("brightness")
+        if not isinstance(brightness, (int, float)):
+            brightness = 255 if value == "on" else 0
+        return {"power": "ON" if value == "on" else "OFF", "brightness": float(brightness)}
+    if device_type == "curtain":
+        position = attributes.get("current_position")
+        return {"position": int(float(position)) if isinstance(position, (int, float)) else 0}
+    if device_type == "climate":
+        return {
+            "mode": value if value in {"off", "cool", "heat"} else "off",
+            "temperature": float(attributes.get("temperature", 26) or 26),
+            "current_temperature": float(attributes.get("current_temperature", 0) or 0),
+        }
+    if device_type == "presence":
+        return {"occupied": value == "on"}
+    if device_type == "temperature":
+        try:
+            return {"temperature": float(value)}
+        except ValueError:
+            return {"temperature": 0.0}
+    return {}
+
+
+_DEVICE_UI_META: dict[str, tuple[str, str, str, str]] = {
+    "light": ("灯光", "lightbulb", "amber", "lamp"),
+    "switch": ("智能开关", "toggle-right", "blue", "switch"),
+    "climate": ("空调", "air-vent", "cyan", "thermostat"),
+    "curtain": ("窗帘", "blinds", "green", "cover"),
+    "presence": ("存在传感器", "user-round-check", "green", "presence"),
+    "contact": ("门窗传感器", "panel-top-open", "amber", "contact"),
+    "illuminance": ("照度传感器", "sun-medium", "amber", "meter"),
+    "temperature": ("温度传感器", "thermometer", "cyan", "meter"),
+}
+
+
+def _device_ui(device: dict[str, object]) -> dict[str, object]:
+    """Build a complete UI descriptor so the browser never knows concrete devices."""
+    device_type = str(device.get("type", ""))
+    type_label, icon, tone, floor_shape = _DEVICE_UI_META.get(
+        device_type,
+        (device_type or "设备", "cpu", "blue", "device"),
+    )
+    raw_state = device.get("state")
+    state = raw_state if isinstance(raw_state, dict) else {}
+    online = bool(device.get("online"))
+    controls: list[dict[str, object]] = []
+    primary_action: dict[str, object] | None = None
+    active = False
+    warning = False
+    floor_readout = ""
+    state_primary = "设备离线" if not online else "状态未知"
+    state_secondary = f"故障：{device.get('fault_mode', 'unknown')}" if not online else "等待状态"
+
+    if device_type in {"light", "switch"}:
+        active = str(state.get("power", "")).upper() == "ON"
+        state_primary = "已开启" if active else "已关闭"
+        if device_type == "light":
+            brightness = round(float(state.get("brightness", 0)) * 100 / 255)
+            state_secondary = f"亮度 {brightness}%" if active else "功耗 0 W"
+        else:
+            state_secondary = f"{float(state.get('power_w', 0)):.1f} W"
+        primary_action = {
+            "label": "关闭" if active else "开启",
+            "payload": {"power": "off" if active else "on"},
+        }
+        controls.append(
+            {
+                "kind": "toggle",
+                "label": "电源",
+                "status": "设备运行中" if active else "设备已关闭",
+                "active": active,
+                "payload": primary_action["payload"],
+            }
+        )
+        if device_type == "light":
+            controls.append(
+                {
+                    "kind": "range",
+                    "label": "亮度",
+                    "field": "brightness",
+                    "value": max(brightness, 1),
+                    "min": 1,
+                    "max": 100,
+                    "step": 1,
+                    "unit": "%",
+                    "payload": {"power": "on"},
+                }
+            )
+    elif device_type == "curtain":
+        position = int(state.get("position", 0))
+        active = position > 0
+        state_primary = f"{position}%"
+        state_secondary = "已打开" if active else "已关闭"
+        primary_action = {
+            "label": "关闭" if active else "打开",
+            "payload": {"position": 0 if active else 100},
+        }
+        controls.extend(
+            [
+                {
+                    "kind": "toggle",
+                    "label": "窗帘",
+                    "status": state_secondary,
+                    "active": active,
+                    "payload": primary_action["payload"],
+                },
+                {
+                    "kind": "range",
+                    "label": "开合位置",
+                    "field": "position",
+                    "value": position,
+                    "min": 0,
+                    "max": 100,
+                    "step": 5,
+                    "unit": "%",
+                    "payload": {},
+                },
+            ]
+        )
+    elif device_type == "climate":
+        mode = str(state.get("mode", "off"))
+        temperature = float(state.get("temperature", 24))
+        current_temperature = float(state.get("current_temperature", 0))
+        floor_readout = f"{current_temperature:g}°"
+        active = mode != "off"
+        mode_label = {"cool": "制冷", "heat": "制热", "off": "已关闭"}.get(mode, mode)
+        state_primary = mode_label
+        state_secondary = f"设定 {temperature:g}°C · 室温 {current_temperature:g}°C"
+        primary_action = {
+            "label": "关闭" if active else "开启",
+            "payload": {
+                "mode": "off" if active else "cool",
+                "temperature": temperature,
+            },
+        }
+        controls.extend(
+            [
+                {
+                    "kind": "toggle",
+                    "label": "电源",
+                    "status": mode_label,
+                    "active": active,
+                    "payload": primary_action["payload"],
+                },
+                {
+                    "kind": "segmented",
+                    "label": "空调模式",
+                    "options": [
+                        {
+                            "label": label,
+                            "value": value,
+                            "active": mode == value,
+                            "payload": {"mode": value, "temperature": temperature},
+                        }
+                        for value, label in (("off", "关闭"), ("cool", "制冷"), ("heat", "制热"))
+                    ],
+                },
+                {
+                    "kind": "stepper",
+                    "label": "设定温度",
+                    "field": "temperature",
+                    "value": temperature,
+                    "min": 16,
+                    "max": 30,
+                    "step": 0.5,
+                    "unit": "°C",
+                    "payload": {"mode": mode if active else "cool"},
+                },
+            ]
+        )
+    elif device_type in {"presence", "contact"}:
+        field = "occupied" if device_type == "presence" else "open"
+        active = bool(state.get(field))
+        if device_type == "presence":
+            state_primary = "检测到有人" if active else "空间无人"
+            reported_status = "有人" if active else "无人"
+        else:
+            state_primary = "窗户打开" if active else "窗户关闭"
+            reported_status = "打开" if active else "关闭"
+        state_secondary = "ESPHome 固件上报" if bool(device.get("readonly")) else "实时传感器上报"
+        warning = device_type == "contact" and active
+        if not bool(device.get("readonly")):
+            controls.append(
+                {
+                    "kind": "toggle",
+                    "label": "模拟上报",
+                    "status": reported_status,
+                    "active": active,
+                    "payload": {field: not active},
+                    "test_control": True,
+                }
+            )
+    elif device_type == "illuminance":
+        illuminance = int(state.get("illuminance", 0))
+        state_primary = f"{illuminance} lux"
+        state_secondary = "实时环境照度"
+        if not bool(device.get("readonly")):
+            controls.append(
+                {
+                    "kind": "range",
+                    "label": "模拟照度上报",
+                    "field": "illuminance",
+                    "value": illuminance,
+                    "min": 0,
+                    "max": 500,
+                    "step": 1,
+                    "unit": " lux",
+                    "payload": {},
+                    "test_control": True,
+                }
+            )
+    elif device_type == "temperature":
+        temperature = float(state.get("temperature", 0) or 0)
+        state_primary = f"{temperature:g}°C"
+        state_secondary = "ESPHome 实时室温"
+        floor_readout = f"{temperature:g}°"
+
+    state_label = state_primary if state_secondary == "等待状态" else f"{state_primary} · {state_secondary}"
+    fault_options = [
+        {"value": "none", "label": "正常"},
+        {"value": "offline", "label": "离线"},
+    ]
+    if device_type not in {"presence", "contact", "illuminance", "temperature"}:
+        fault_options.extend(
+            [
+                {"value": "reject", "label": "拒绝命令"},
+                {"value": "delay", "label": "响应延迟"},
+                {"value": "ack_without_state_change", "label": "ACK 不变"},
+                {"value": "invalid_state", "label": "无效状态"},
+            ]
+        )
+    return {
+        "type_label": type_label,
+        "icon": icon,
+        "tone": tone,
+        "name": str(device.get("name", "设备")),
+        "state_primary": state_primary,
+        "state_secondary": state_secondary,
+        "state_label": state_label,
+        "active": active,
+        "warning": warning,
+        "controls": controls,
+        "primary_action": primary_action,
+        "fault_options": fault_options,
+        "floorplan": {
+            "shape": floor_shape,
+            "readout": floor_readout,
+        },
+    }
+
+
+def _dashboard_projection(
+    devices: list[dict[str, object]],
+    rooms: list[dict[str, object]],
+) -> dict[str, object]:
+    """Project inventory into a generic, responsive dashboard layout."""
+    candidates = [
+        device
+        for device in devices
+        if isinstance(device.get("ui"), dict)
+        and isinstance(device["ui"].get("primary_action"), dict)
+    ]
+    candidates.sort(
+        key=lambda item: (
+            not bool(item.get("online")),
+            not bool(item["ui"].get("active")),
+            -len(item.get("capabilities", []))
+            if isinstance(item.get("capabilities"), list)
+            else 0,
+            str(item.get("room_name", "")),
+            str(item.get("name", "")),
+        )
+    )
+    favorite_device_ids = [str(item.get("device_id", "")) for item in candidates[:4]]
+
+    room_count = len(rooms)
+    columns = 1 if room_count <= 1 else 2
+    rows = max(1, (room_count + columns - 1) // columns)
+    cell_width = 100 / columns
+    cell_height = 100 / rows
+    projected_rooms: list[dict[str, object]] = []
+    device_positions: dict[str, dict[str, float]] = {}
+    for room_index, room in enumerate(rooms):
+        column = room_index % columns
+        row = room_index // columns
+        left = column * cell_width
+        top = row * cell_height
+        room_devices = [item for item in devices if item.get("room") == room.get("room")]
+        device_columns = min(3, max(1, len(room_devices)))
+        device_rows = max(1, (len(room_devices) + device_columns - 1) // device_columns)
+        header_height = min(16.0, cell_height * 0.28)
+        usable_height = max(10.0, cell_height - header_height)
+        for device_index, device in enumerate(room_devices):
+            device_column = device_index % device_columns
+            device_row = device_index // device_columns
+            device_positions[str(device.get("device_id", ""))] = {
+                "left": round(
+                    left + (device_column + 0.5) * cell_width / device_columns,
+                    2,
+                ),
+                "top": round(
+                    top + header_height + (device_row + 0.5) * usable_height / device_rows,
+                    2,
+                ),
+            }
+        projected_rooms.append(
+            {
+                **room,
+                "left": round(left, 2),
+                "top": round(top, 2),
+                "width": round(cell_width, 2),
+                "height": round(cell_height, 2),
+                "theme": room_index % 4,
+            }
+        )
+
+    total_power = round(sum(float(room.get("power_w", 0)) for room in rooms), 1)
+    now = datetime.now().astimezone()
+    elapsed_hours = now.hour + now.minute / 60
+    return {
+        "device_types": [
+            {"value": device_type, "label": meta[0]}
+            for device_type, meta in _DEVICE_UI_META.items()
+        ],
+        "favorite_device_ids": favorite_device_ids,
+        "rooms": projected_rooms,
+        "device_positions": device_positions,
+        "energy": {
+            "current_power_w": total_power,
+            "estimated_today_kwh": round(total_power * elapsed_hours / 1000, 1),
+        },
+    }
 
 
 def _room_summaries(devices: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -1424,6 +1959,9 @@ def serve_workbench(
             if path == "/api/chat":
                 self._api(controller.chat_history)
                 return
+            if path == "/api/agent":
+                self._api(controller.agent_status)
+                return
             if path == "/api/events":
                 self._api(controller.events)
                 return
@@ -1465,6 +2003,8 @@ def serve_workbench(
                 "/api/chat/confirm": lambda _body: controller.confirm_chat(),
                 "/api/chat/cancel": lambda _body: controller.cancel_chat(),
                 "/api/chat/clear": lambda _body: controller.clear_chat(),
+                "/api/agent/demo-override": lambda body: controller.demo_override(int(body.get("brightness", 45))),
+                "/api/agent/demo-disturbance": lambda body: controller.demo_disturbance(float(body.get("temperature", 31))),
                 "/api/fault": lambda body: controller.set_fault(
                     str(body.get("mode", "none")),
                     int(body.get("delay_ms", 0)),

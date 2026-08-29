@@ -52,6 +52,34 @@ python scripts\run_workbench.py --port 8765
 
 没有 GGUF 模型时，工作台会明确使用确定性语言降级；主动规则、设备控制和状态回读仍可完整运行。完整安装、夜间安全场景操作、端口覆盖和故障排查见 [使用指南](docs/USAGE.md)。
 
+## 客厅舒适观影 Demo（ESPHome 真实设备链路 + 自治智能体）
+
+客厅主灯、电动窗帘、空调温控（含室温环境模型）和人体存在传感器由 **ESPHome Host** 固件节点提供：每个节点是独立 Docker 容器，运行 ESPHome 官方 C++ 设备组件，经 ESPHome Native API（TCP + Protobuf）接入 Home Assistant，与真实 ESP32 设备的软件链路一致。同一配方（配置见 `deployment/esphome/`，非 `legacy-mqtt-living` profile 的 MQTT 容器已停用）。
+
+在既有设备链路之上，SpaceButler 现在是一个**自治家庭智能体**（架构详见 [docs/AGENT_ARCHITECTURE.md](docs/AGENT_ARCHITECTURE.md)），三个核心机制全部在真实执行链路中：
+
+1. **反事实规划**：目标编译为约束区间（"别太亮"→亮度 [20,45]，而非固定 20%）→ 读取世界模型 → 生成多个候选计划 → 逐个预测执行后的未来状态（温度趋势/亮度/能耗）→ 确定性多目标评分（目标满足/舒适/偏好/安全/能耗/动作成本）→ 选最优执行。LLM 参与目标理解与候选生成（`SPACEBUTLER_LLM_BASE_URL` 配置，OpenAI 兼容）；不可用时确定性规划接管，UI 如实显示 `planner_mode`。
+2. **人工纠正的隐式偏好学习**：目标活跃期间用户手动调整设备 → 识别为 Human Override（与 Agent 自身动作、环境漂移严格归因区分）→ 写入偏好观测 → 至少两次相近纠正后，后续规划自动生成并偏向"偏好匹配"候选。用户从不需要说"记住我喜欢 45%"。
+3. **物理反馈驱动的持续自治**：说出目标后无需继续对话——后台运行时持续感知环境；通过 ESPHome 固件服务注入热量等真实扰动会触发 目标偏离 → 自动重规划 → 重新执行验证（含防震荡：debounce、冷却期、重试上限）。
+
+按交付方案演示（工作台 AI 管家对话框 + "Agent Activity" 决策链面板）：
+
+```powershell
+# 首次编译 ESPHome 固件约需数分钟；先启动基础栈与四个 ESPHome 节点
+docker compose -f deployment\docker-compose.yml up -d
+python scripts\run_workbench.py --port 8765   # 自动等待节点编译并完成 HA 接入
+python scripts\demo_reset.py                  # 恢复演示初始状态：灯 80%、窗帘全开、空调关、30.2°C
+```
+
+| Demo | 操作 | 预期现象 |
+|---|---|---|
+| 1. AI 动态规划 | 输入 `我准备在客厅看会电影，有点热，灯别太亮。` | 多候选计划 + 反事实预测 + 评分选优展示在 Agent Activity；3 项动作执行并逐项 HA 回读验证 |
+| 2. 已满足则不动 | 立即再问 `现在适合看电影了吗？` | 判定目标已满足，零设备命令，回复"无需重复调整" |
+| 3. 人工纠正学习 | 工作台手动调灯（或 `python scripts\demo_override.py --brightness 45`）×3 | 时间线出现 Human Override；偏好观测置信度上升；再说"我要看电影，别太暗"时选中偏好匹配候选（≈45%） |
+| 4. 扰动自治重规划 | `python scripts\demo_disturbance.py --temperature 31`，之后不要说话 | 固件注入热量 → 目标偏离 → 自动重规划 → 新计划执行验证（区分 Agent 与 Chatbot 的关键） |
+
+执行结果与完整决策链（候选评分、预测 vs 观测、预测误差、归因、时间线）在工作台 "AI 管家" 视图底部的 **Agent Activity** 面板实时展示，也可用 `python scripts\demo_status.py` 在命令行查看。
+
 运行本地验证：
 
 ```powershell

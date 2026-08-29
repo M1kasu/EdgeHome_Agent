@@ -33,6 +33,11 @@ _CANCEL_WORDS = {"取消", "取消执行", "不用了", "先别执行", "放弃�
 _DIRECT_EXECUTION = re.compile(r"立即执行|直接执行|马上执行|现在执行|不用确认")
 _QUERY_WORDS = re.compile(r"状态|怎么样|开着吗|关着吗|多少|几度|查询|查看|有没有")
 _PROACTIVE_WORDS = re.compile(r"主动服务|节能机会|节能分析|能耗分析|空调.*(?:窗户|门窗|开窗)|(?:窗户|门窗|开窗).*空调")
+_MOVIE_WORDS = re.compile(r"看(?:会|场|个)?电影|观影|看片")
+# 客厅舒适观影场景目标（交付方案）：窗帘全关、主灯 20%、空调制冷 26°C。
+_MOVIE_TARGET_BRIGHTNESS = 20
+_MOVIE_TARGET_POSITION = 0
+_MOVIE_TARGET_TEMPERATURE = 26.0
 _NUMBER = re.compile(r"(?<!\d)(\d{1,3}(?:\.\d+)?)")
 _ROOM_NAMES = {
     "living_room": "客厅",
@@ -213,6 +218,10 @@ class ConversationAgent:
         devices: list[dict[str, object]],
         context: list[dict[str, object]],
     ) -> tuple[dict[str, object], str, str | None]:
+        if _MOVIE_WORDS.search(text):
+            # Adaptive Scene Planner：先读真实状态，再生成受当前状态约束的步骤；
+            # 已满足的目标直接省略，避免“观影模式→固定脚本”。
+            return self._movie_candidate(devices), "adaptive_scene", None
         model_error = None
         if self._llm_client is not None:
             try:
@@ -222,6 +231,100 @@ class ConversationAgent:
             except (RuntimeError, TimeoutError, ValueError, OSError) as error:
                 model_error = type(error).__name__
         return self._deterministic_candidate(text, devices, context), "deterministic_fallback", model_error
+
+    def _movie_candidate(self, devices: list[dict[str, object]]) -> dict[str, object]:
+        """State-driven movie-scene plan: only emit steps the current state still needs."""
+        curtain = _movie_device(devices, "curtain", "living_room_curtain")
+        light = _movie_device(devices, "light", "living_room_main_light")
+        climate = _movie_device(devices, "climate", "living_room_ac")
+        steps: list[dict[str, object]] = []
+        skipped: list[str] = []
+
+        if curtain is not None:
+            position = _movie_percent(curtain, "position")
+            if position is not None and position <= 0:
+                skipped.append("窗帘已关闭")
+            else:
+                steps.append(
+                    {
+                        "device_id": curtain.get("device_id"),
+                        "action": "set_position",
+                        "value": _MOVIE_TARGET_POSITION,
+                        "reason": f"窗帘当前开合 {position if position is not None else '?'}%，关闭以遮挡环境光",
+                    }
+                )
+        if light is not None:
+            state = light.get("state") if isinstance(light.get("state"), dict) else {}
+            power = str(state.get("power", "")).upper()
+            brightness = state.get("brightness")
+            percent = (
+                round(float(brightness) * 100 / 255) if isinstance(brightness, (int, float)) else None
+            )
+            if power == "ON" and percent is not None and abs(percent - _MOVIE_TARGET_BRIGHTNESS) <= 2:
+                skipped.append(f"主灯已保持 {_MOVIE_TARGET_BRIGHTNESS}% 观影亮度")
+            else:
+                steps.append(
+                    {
+                        "device_id": light.get("device_id"),
+                        "action": "set_brightness",
+                        "value": _MOVIE_TARGET_BRIGHTNESS,
+                        "reason": f"主灯当前 {_MOVIE_BRIGHTNESS_TEXT(power, percent)}，调到 {_MOVIE_TARGET_BRIGHTNESS}% 观影亮度",
+                    }
+                )
+        if climate is not None:
+            state = climate.get("state") if isinstance(climate.get("state"), dict) else {}
+            mode = str(state.get("mode", "off"))
+            temperature = state.get("temperature")
+            satisfied = mode == "cool" and isinstance(temperature, (int, float)) and abs(float(temperature) - _MOVIE_TARGET_TEMPERATURE) <= 0.5
+            if satisfied:
+                skipped.append(f"空调已在 {_MOVIE_TARGET_TEMPERATURE:g}°C 制冷")
+            else:
+                steps.append(
+                    {
+                        "device_id": climate.get("device_id"),
+                        "action": "set_temperature",
+                        "value": _MOVIE_TARGET_TEMPERATURE,
+                        "mode": "cool",
+                        "reason": f"空调当前 {_MOVIE_CLIMATE_TEXT(mode, temperature)}，转制冷并设定 {_MOVIE_TARGET_TEMPERATURE:g}°C",
+                    }
+                )
+
+        if not steps and not skipped:
+            return {
+                "intent": "clarification",
+                "summary": "客厅观影设备尚未接入",
+                "reasoning": "Adaptive Scene Planner 未在注册表中找到可用的窗帘、主灯或空调。",
+                "steps": [],
+            }
+        if not steps:
+            # 当前状态已完全满足观影目标：只回读空调状态，明确不重复执行。
+            target = climate or light or curtain
+            return {
+                "intent": "query_state",
+                "summary": "确认客厅观影状态",
+                "reasoning": "Adaptive Scene Planner 读取真实状态后判断目标已全部满足，不重复执行设备动作。",
+                "reply": "当前客厅已经处于适合观影的状态"
+                + ("，" + "、".join(skipped) if skipped else "")
+                + "，无需重复调整。",
+                "steps": [
+                    {
+                        "device_id": target.get("device_id") if target else None,
+                        "action": "read_state",
+                        "value": None,
+                        "reason": "回读当前观影环境状态",
+                    }
+                ],
+            }
+        reasoning = "Adaptive Scene Planner 读取真实状态后生成受约束步骤"
+        if skipped:
+            reasoning += f"（已满足、跳过：{'、'.join(skipped)}）"
+        return {
+            "intent": "device_control",
+            "summary": "客厅舒适观影调整",
+            "reasoning": reasoning,
+            "direct_execution": True,
+            "steps": steps,
+        }
 
     def _validate_plan(
         self,
@@ -392,7 +495,12 @@ class ConversationAgent:
             ]
 
         has_writes = any(step["action"] in _WRITE_ACTIONS for step in steps)
-        requires_confirmation = has_writes and len(steps) > 1 and not _DIRECT_EXECUTION.search(text)
+        requires_confirmation = (
+            has_writes
+            and len(steps) > 1
+            and not _DIRECT_EXECUTION.search(text)
+            and not bool(candidate.get("direct_execution"))
+        )
         status = "awaiting_confirmation" if requires_confirmation else "ready"
         if intent == "clarification":
             status = "clarification"
@@ -872,6 +980,43 @@ def _normalize_action(action: str) -> str:
     return aliases.get(action, action)
 
 
+def _movie_device(
+    devices: list[dict[str, object]],
+    device_type: str,
+    preferred_id: str,
+) -> dict[str, object] | None:
+    """Pick the scene device by type, preferring the canonical living-room device."""
+    candidates = [
+        item
+        for item in devices
+        if item.get("type") == device_type and item.get("online") and item.get("entity_id")
+    ]
+    for item in candidates:
+        if str(item.get("device_id")) == preferred_id:
+            return item
+    return candidates[0] if candidates else None
+
+
+def _movie_percent(device: dict[str, object], field: str) -> float | None:
+    state = device.get("state")
+    if not isinstance(state, dict):
+        return None
+    value = state.get(field)
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _MOVIE_BRIGHTNESS_TEXT(power: str, percent: float | None) -> str:
+    if power == "OFF":
+        return "关闭"
+    return f"{percent if percent is not None else '?'}% 亮度"
+
+
+def _MOVIE_CLIMATE_TEXT(mode: str, temperature: object) -> str:
+    mode_label = {"cool": "制冷", "heat": "制热", "off": "关闭"}.get(mode, mode)
+    target = f"，设定 {float(temperature):g}°C" if isinstance(temperature, (int, float)) else ""
+    return f"{mode_label}{target}"
+
+
 def _validate_action(
     action: str,
     value: object,
@@ -1028,7 +1173,13 @@ def _execution_reply(plan: dict[str, object]) -> str:
             for step in steps
             if step.get("status") == "success"
         ]
-        return "；".join(descriptions) if descriptions else "没有读取到可用设备状态。"
+        detail = "；".join(descriptions) if descriptions else "没有读取到可用设备状态。"
+        if _MOVIE_WORDS.search(str(plan.get("user_text", ""))):
+            return (
+                f"当前客厅已经处于适合观影的状态，空调正在向 {_MOVIE_TARGET_TEMPERATURE:g}°C 制冷，"
+                f"无需重复调整。（{detail}）"
+            )
+        return detail
     if plan.get("intent") == "proactive_service":
         step = steps[0] if steps else {}
         after = step.get("after")

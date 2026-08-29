@@ -5,8 +5,11 @@ const state = {
   status: null,
   devices: [],
   rooms: [],
+  dashboard: null,
+  favoriteDeviceIds: null,
   roomFilter: "all",
-  view: "assistant",
+  view: "home",
+  floorSelectedId: null,
   proactive: null,
   conversation: null,
   lastMessageId: null,
@@ -20,16 +23,8 @@ const state = {
   nightDraftRevision: 0,
   nightBusy: false,
   nightPathOrder: [],
-};
-
-const typeMeta = {
-  light: { label: "灯光", icon: "lightbulb", tone: "amber" },
-  switch: { label: "智能开关", icon: "toggle-right", tone: "blue" },
-  climate: { label: "空调", icon: "air-vent", tone: "cyan" },
-  curtain: { label: "窗帘", icon: "blinds", tone: "green" },
-  presence: { label: "存在传感器", icon: "user-round-check", tone: "green" },
-  contact: { label: "门窗传感器", icon: "panel-top-open", tone: "amber" },
-  illuminance: { label: "照度传感器", icon: "sun-medium", tone: "amber" },
+  floorLongPressTimer: null,
+  floorLongPressTriggered: false,
 };
 
 const intentLabels = {
@@ -85,6 +80,30 @@ function renderStatus(payload) {
   $("#health-dot").className = `status-dot ${healthy ? "healthy" : "error"}`;
   $("#health-label").textContent = healthy ? "链路正常" : "链路异常";
   $("#snapshot-time").textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  const proactiveCopy = $("#dashboard-proactive-copy");
+  if (proactiveCopy && payload.proactive) {
+    const passed = (payload.proactive.conditions || []).filter((item) => item.met).length;
+    const total = (payload.proactive.conditions || []).length;
+    const targetName = payload.proactive.sources?.climate?.name || "执行设备";
+    $("#dashboard-proactive-title").textContent = payload.proactive.rule_name || "主动服务建议";
+    proactiveCopy.textContent = payload.proactive.complete
+      ? `已满足 ${passed}/${total} 条件，建议关闭${targetName}`
+      : `当前满足 ${passed}/${total} 条件，持续守护中`;
+    $("#advice-count").textContent = payload.proactive.trigger_ready ? "1 条主动建议" : "暂无待处理建议";
+    const climate = payload.proactive.sources?.climate;
+    const climateState = climate?.state || {};
+    $("#indoor-temperature").textContent = Number.isFinite(Number(climateState.current_temperature))
+      ? `${Number(climateState.current_temperature)}°C`
+      : "--°C";
+    $("#temperature-source").textContent = climate?.room_name ? `${climate.room_name}室温` : "室内环境";
+  }
+  const deviceSummary = payload.device_summary || {};
+  $("#household-device-status").textContent = `${deviceSummary.online || 0}/${deviceSummary.total || 0} 台设备在线`;
+  if (payload.night_safety) {
+    const config = payload.night_safety.config || {};
+    const room = (payload.night_safety.available_rooms || []).find((item) => item.room === config.origin_room);
+    $("#household-member-status").textContent = `${config.member_name || "家庭成员"} · ${room?.name || config.origin_room || "家中"}`;
+  }
   if (payload.proactive) renderProactive(payload.proactive);
   if (payload.night_safety) renderNightSafety(payload.night_safety);
   renderDecision(payload.last_response);
@@ -576,19 +595,168 @@ function renderMemory(preferences) {
     </div>`).join("");
 }
 
+function deviceIsActive(device) {
+  return Boolean(device.ui?.active);
+}
+
+function dashboardDeviceName(device) {
+  return device.ui?.name || device.name;
+}
+
+function dashboardDeviceState(device) {
+  return device.ui?.state_label || (device.online ? "状态未知" : "设备离线");
+}
+
+function dashboardDeviceTone(device) {
+  if (!device.online) return "offline";
+  if (device.ui?.warning) return "warning";
+  if (device.ui?.tone === "cyan") return "climate";
+  return deviceIsActive(device) ? "active" : "idle";
+}
+
+function controlPayloadAttribute(payload) {
+  return escapeHtml(JSON.stringify(payload || {}));
+}
+
+function renderPrimaryAction(device) {
+  const action = device.ui?.primary_action;
+  if (!action) {
+    return `<button class="icon-button" data-favorite-open title="查看状态"><i data-lucide="search"></i></button>`;
+  }
+  return `
+    <button class="power-button ${deviceIsActive(device) ? "on" : ""}"
+      data-control-payload="${controlPayloadAttribute(action.payload)}" title="${escapeHtml(action.label)}">
+      <i data-lucide="power"></i>
+    </button>`;
+}
+
+function renderFavoriteDevices() {
+  const grid = $("#favorite-devices");
+  if (!grid) return;
+  const configuredIds = state.favoriteDeviceIds || state.dashboard?.favorite_device_ids || [];
+  const devices = configuredIds
+    .map((deviceId) => state.devices.find((item) => item.device_id === deviceId))
+    .filter(Boolean);
+  grid.innerHTML = devices.map((device) => {
+    const icon = device.ui?.icon || "cpu";
+    return `
+      <article class="favorite-device" data-device-id="${escapeHtml(device.device_id)}">
+        <span class="favorite-device-icon ${dashboardDeviceTone(device)}"><i data-lucide="${escapeHtml(icon)}"></i></span>
+        <div class="favorite-device-copy">
+          <strong>${escapeHtml(dashboardDeviceName(device))}</strong>
+          <span>${escapeHtml(dashboardDeviceState(device))}</span>
+        </div>
+        ${renderPrimaryAction(device)}
+        <button data-favorite-open>在空间图中查看</button>
+      </article>`;
+  }).join("");
+}
+
+function floorplanPosition(device, index) {
+  return state.dashboard?.device_positions?.[device.device_id] || {
+    left: 12 + (index % 4) * 24,
+    top: 28 + Math.floor(index / 4) * 30,
+  };
+}
+
+function renderFloorplanRooms() {
+  const roomLayer = $("#floorplan-rooms");
+  if (!roomLayer) return;
+  const rooms = state.dashboard?.rooms || [];
+  roomLayer.innerHTML = rooms.map((room) => `
+    <section class="floorplan-space" data-theme="${Number(room.theme || 0)}"
+      style="left:${Number(room.left || 0)}%;top:${Number(room.top || 0)}%;width:${Number(room.width || 100)}%;height:${Number(room.height || 100)}%"
+      aria-label="${escapeHtml(room.name)}">
+      <div class="room-title"><strong>${escapeHtml(room.name)}</strong><span>${Number(room.online || 0)}/${Number(room.devices || 0)} 台在线 · ${Math.round(Number(room.power_w || 0))} W</span></div>
+    </section>`).join("");
+}
+
+function renderFloorControlPanel(device) {
+  const panel = $("#floor-device-panel");
+  if (!panel) return;
+  if (!device) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  panel.hidden = false;
+  panel.dataset.deviceId = device.device_id;
+  panel.innerHTML = `
+    <div class="floor-control-heading">
+      <div><strong>${escapeHtml(dashboardDeviceName(device))}</strong><span>${escapeHtml(dashboardDeviceState(device))}</span></div>
+      <button class="icon-button" data-floor-close title="关闭控制面板"><i data-lucide="x"></i></button>
+    </div>
+    ${renderDeviceControls(device)}
+    <button class="floor-detail-link" data-floor-detail>更多详情 <i data-lucide="arrow-right"></i></button>`;
+}
+
+function renderFloorplan() {
+  const layer = $("#floorplan-devices");
+  if (!layer) return;
+  renderFloorplanRooms();
+  if (state.floorSelectedId && !state.devices.some((item) => item.device_id === state.floorSelectedId)) {
+    state.floorSelectedId = null;
+  }
+  layer.innerHTML = state.devices.map((device, index) => {
+    const icon = device.ui?.icon || "cpu";
+    const floorVisual = device.ui?.floorplan || {};
+    const floorShape = floorVisual.shape || "device";
+    const floorReadout = floorVisual.readout || "";
+    const position = floorplanPosition(device, index);
+    const selected = state.floorSelectedId === device.device_id;
+    return `
+      <button class="floor-device ${dashboardDeviceTone(device)} ${selected ? "selected" : ""}"
+        style="left:${position.left}%;top:${position.top}%" data-floor-device-id="${escapeHtml(device.device_id)}"
+        data-floor-shape="${escapeHtml(floorShape)}"
+        aria-label="${escapeHtml(dashboardDeviceName(device))}，${escapeHtml(dashboardDeviceState(device))}" aria-pressed="${selected}">
+        <span class="floor-device-visual" aria-hidden="true">
+          <span class="floor-device-icon"><i data-lucide="${escapeHtml(icon)}"></i></span>
+          ${floorReadout ? `<strong class="floor-device-readout">${escapeHtml(floorReadout)}</strong>` : ""}
+        </span>
+        <span class="floor-device-copy"><strong>${escapeHtml(dashboardDeviceName(device))}</strong><span>${escapeHtml(dashboardDeviceState(device))}</span></span>
+      </button>`;
+  }).join("");
+  const selected = state.devices.find((item) => item.device_id === state.floorSelectedId);
+  renderFloorControlPanel(selected);
+}
+
+function renderSpatialDashboard() {
+  renderFavoriteDevices();
+  renderFloorplan();
+  refreshIcons();
+}
+
 function renderInventory(payload) {
   state.devices = payload.devices || [];
   state.rooms = payload.rooms || [];
+  state.dashboard = payload.dashboard || { favorite_device_ids: [], rooms: [], device_positions: {}, energy: {} };
+  const availableIds = new Set(state.devices.map((item) => item.device_id));
+  if (state.favoriteDeviceIds === null) {
+    try {
+      const saved = JSON.parse(localStorage.getItem("spacebutler.favoriteDeviceIds") || "null");
+      state.favoriteDeviceIds = Array.isArray(saved) ? saved : [...(state.dashboard.favorite_device_ids || [])];
+    } catch {
+      state.favoriteDeviceIds = [...(state.dashboard.favorite_device_ids || [])];
+    }
+  }
+  state.favoriteDeviceIds = state.favoriteDeviceIds.filter((deviceId) => availableIds.has(deviceId));
   const totalPower = state.rooms.reduce((sum, room) => sum + Number(room.power_w || 0), 0);
   const online = state.devices.filter((device) => device.online).length;
   $("#room-count").textContent = state.rooms.length;
   $("#device-count").textContent = state.devices.length;
   $("#online-count").textContent = `${online}/${state.devices.length}`;
   $("#total-power").textContent = `${Math.round(totalPower)} W`;
+  $("#estimated-today-energy").textContent = text(state.dashboard.energy?.estimated_today_kwh, "--");
   $("#inventory-summary").textContent = `${state.devices.length} 台设备 · ${state.rooms.length} 个空间`;
+  $("#new-device-type").innerHTML = (state.dashboard.device_types || []).map((item) => `
+    <option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join("");
+  $("#room-options").innerHTML = state.rooms.map((room) => `<option value="${escapeHtml(room.room)}">${escapeHtml(room.name)}</option>`).join("");
+  if (!$("#new-device-room").value && state.rooms[0]) $("#new-device-room").value = state.rooms[0].room;
   renderRoomTabs();
   const grid = $("#device-grid");
   if (!grid.contains(document.activeElement)) renderDeviceGrid();
+  const floorplan = $("#floorplan-stage");
+  if (!floorplan?.contains(document.activeElement)) renderSpatialDashboard();
 }
 
 function renderRoomTabs() {
@@ -625,8 +793,15 @@ function renderDeviceGrid() {
 }
 
 function renderDeviceCard(device) {
-  const meta = typeMeta[device.type] || { label: device.type, icon: "cpu", tone: "blue" };
-  const status = deviceStateSummary(device);
+  const meta = {
+    label: device.ui?.type_label || "设备",
+    icon: device.ui?.icon || "cpu",
+    tone: device.ui?.tone || "blue",
+  };
+  const status = {
+    primary: device.ui?.state_primary || (device.online ? "状态未知" : "设备离线"),
+    secondary: device.ui?.state_secondary || "等待设备上报",
+  };
   const discovered = device.discovered ? "HA 已发现" : "等待 HA";
   const runtime = device.runtime && device.runtime.isolation === "dedicated" ? device.runtime : null;
   return `
@@ -640,6 +815,10 @@ function renderDeviceCard(device) {
           </div>
         </div>
         <div class="device-tools">
+          <button class="icon-button favorite-toggle ${state.favoriteDeviceIds?.includes(device.device_id) ? "selected" : ""}"
+            data-favorite-toggle title="${state.favoriteDeviceIds?.includes(device.device_id) ? "取消收藏" : "加入收藏"}">
+            <i data-lucide="star"></i>
+          </button>
           ${runtime ? `<span class="runtime-badge ${runtime.status === "running" ? "running" : "stopped"}" title="独立容器：${escapeHtml(runtime.container)}"><i data-lucide="container"></i></span>` : ""}
           <span class="device-online ${device.online ? "online" : "offline"}">${device.online ? "在线" : "离线"}</span>
           ${device.removable ? `<button class="icon-button danger-ghost" data-device-action="delete" title="删除设备"><i data-lucide="trash-2"></i></button>` : ""}
@@ -657,148 +836,63 @@ function renderDeviceCard(device) {
       <label class="fault-control">
         <span>故障模式</span>
         <select data-device-fault>
-          ${faultOptions(device.fault_mode, ["presence", "contact", "illuminance"].includes(device.type))}
+          ${faultOptions(device.fault_mode, device.ui?.fault_options || [])}
         </select>
       </label>
     </article>`;
 }
 
 function renderDeviceControls(device) {
-  const deviceState = device.state || {};
-  if (device.type === "light") {
-    const on = String(deviceState.power).toUpperCase() === "ON";
-    const brightness = Math.round(Number(deviceState.brightness || 0) * 100 / 255);
+  const controls = device.ui?.controls || [];
+  if (!controls.length) return `<div class="readonly-control"><i data-lucide="eye"></i><span>只读设备</span></div>`;
+  return `<div class="configured-controls">${controls.map(renderControlDescriptor).join("")}</div>`;
+}
+
+function renderControlDescriptor(control) {
+  const payload = controlPayloadAttribute(control.payload);
+  if (control.kind === "toggle") {
     return `
-      <div class="device-control-row">
-        <button class="power-button ${on ? "on" : ""}" data-device-action="toggle" title="${on ? "关闭" : "开启"}">
-          <i data-lucide="power"></i>
-        </button>
-        <label class="inline-slider">
-          <span>亮度</span>
-          <input type="range" min="1" max="100" value="${Math.max(brightness, 1)}" data-device-brightness>
-          <output>${brightness}%</output>
-        </label>
-      </div>`;
-  }
-  if (device.type === "switch") {
-    const on = String(deviceState.power).toUpperCase() === "ON";
-    return `
-      <div class="switch-control">
-        <span>${on ? "设备运行中" : "设备已关闭"}</span>
-        <button class="power-button ${on ? "on" : ""}" data-device-action="toggle" title="${on ? "关闭" : "开启"}">
+      <div class="switch-control ${control.test_control ? "test-control" : ""}">
+        <span>${escapeHtml(control.status || control.label)}</span>
+        <button class="power-button ${control.active ? "on" : ""}" data-control-payload="${payload}" title="${escapeHtml(control.label)}">
           <i data-lucide="power"></i>
         </button>
       </div>`;
   }
-  if (device.type === "curtain") {
-    const position = Number(deviceState.position || 0);
+  if (control.kind === "range") {
     return `
-      <label class="curtain-control">
-        <span>开合位置</span>
-        <input type="range" min="0" max="100" step="5" value="${position}" data-device-position>
-        <output>${position}%</output>
+      <label class="curtain-control ${control.test_control ? "test-control" : ""}">
+        <span>${escapeHtml(control.label)}</span>
+        <input type="range" min="${Number(control.min)}" max="${Number(control.max)}" step="${Number(control.step)}"
+          value="${Number(control.value)}" data-control-range data-control-field="${escapeHtml(control.field)}" data-control-payload="${payload}">
+        <output>${escapeHtml(control.value)}${escapeHtml(control.unit || "")}</output>
       </label>`;
   }
-  if (device.type === "presence") {
-    const occupied = Boolean(deviceState.occupied);
+  if (control.kind === "segmented") {
     return `
-      <div class="sensor-control">
-        <div>
-          <span>空间占用上报</span>
-          <strong>${occupied ? "有人" : "无人"}</strong>
-        </div>
-        <button class="sensor-state-button ${occupied ? "active" : ""}" data-device-action="sensor-toggle">
-          <i data-lucide="${occupied ? "user-round-check" : "user-round-x"}"></i>
-          <span>${occupied ? "切换为无人" : "切换为有人"}</span>
-        </button>
-      </div>`;
-  }
-  if (device.type === "contact") {
-    const open = Boolean(deviceState.open);
-    return `
-      <div class="sensor-control">
-        <div>
-          <span>门窗状态上报</span>
-          <strong>${open ? "打开" : "关闭"}</strong>
-        </div>
-        <button class="sensor-state-button ${open ? "active" : ""}" data-device-action="sensor-toggle">
-          <i data-lucide="${open ? "panel-top-open" : "panel-top-close"}"></i>
-          <span>${open ? "上报关闭" : "上报打开"}</span>
-        </button>
-      </div>`;
-  }
-  if (device.type === "illuminance") {
-    const illuminance = Number(deviceState.illuminance || 0);
-    return `
-      <label class="curtain-control">
-        <span>照度上报</span>
-        <input type="range" min="0" max="500" step="1" value="${illuminance}" data-device-illuminance>
-        <output>${illuminance} lux</output>
-      </label>`;
-  }
-  const mode = String(deviceState.mode || "off");
-  const temperature = Number(deviceState.temperature || 24);
-  return `
-    <div class="climate-control">
-      <div class="segmented" aria-label="空调模式">
-        ${["off", "cool", "heat"].map((item) => `
-          <button class="${mode === item ? "active" : ""}" data-device-action="climate-mode" data-mode="${item}">
-            ${item === "off" ? "关闭" : item === "cool" ? "制冷" : "制热"}
+      <div class="segmented configured-segmented" aria-label="${escapeHtml(control.label)}">
+        ${(control.options || []).map((option) => `
+          <button class="${option.active ? "active" : ""}" data-control-payload="${controlPayloadAttribute(option.payload)}">
+            ${escapeHtml(option.label)}
           </button>`).join("")}
-      </div>
-      <div class="temperature-stepper">
-        <button data-device-action="temperature-down" title="降低温度"><i data-lucide="minus"></i></button>
-        <input type="number" min="16" max="30" step="0.5" value="${temperature}" data-device-temperature>
-        <button data-device-action="temperature-up" title="提高温度"><i data-lucide="plus"></i></button>
-        <button class="apply-temperature" data-device-action="apply-temperature" title="应用温度"><i data-lucide="check"></i></button>
-      </div>
-    </div>`;
+      </div>`;
+  }
+  if (control.kind === "stepper") {
+    return `
+      <div class="temperature-stepper" aria-label="${escapeHtml(control.label)}">
+        <button data-control-step="-${Number(control.step)}" title="减少"><i data-lucide="minus"></i></button>
+        <input type="number" min="${Number(control.min)}" max="${Number(control.max)}" step="${Number(control.step)}"
+          value="${Number(control.value)}" data-control-value data-control-field="${escapeHtml(control.field)}" data-control-payload="${payload}">
+        <button data-control-step="${Number(control.step)}" title="增加"><i data-lucide="plus"></i></button>
+        <button class="apply-temperature" data-control-apply title="应用"><i data-lucide="check"></i></button>
+      </div>`;
+  }
+  return "";
 }
 
-function deviceStateSummary(device) {
-  const value = device.state || {};
-  if (!device.online) return { primary: "设备离线", secondary: `故障：${device.fault_mode}` };
-  if (device.type === "light") {
-    const on = String(value.power).toUpperCase() === "ON";
-    const brightness = Math.round(Number(value.brightness || 0) * 100 / 255);
-    return { primary: on ? "已开启" : "已关闭", secondary: on ? `亮度 ${brightness}%` : "功耗 0 W" };
-  }
-  if (device.type === "switch") {
-    const on = String(value.power).toUpperCase() === "ON";
-    return { primary: on ? "已开启" : "已关闭", secondary: `${Number(value.power_w || 0).toFixed(1)} W` };
-  }
-  if (device.type === "curtain") {
-    return { primary: `${Number(value.position || 0)}%`, secondary: value.status === "open" ? "已打开" : value.status === "closed" ? "已关闭" : text(value.status) };
-  }
-  if (device.type === "presence") {
-    return {
-      primary: value.occupied ? "检测到有人" : "空间无人",
-      secondary: value.occupied ? "占用状态 ON" : `起始 ${formatTimestamp(value.unoccupied_since)}`,
-    };
-  }
-  if (device.type === "contact") {
-    return { primary: value.open ? "窗户打开" : "窗户关闭", secondary: value.open ? "状态 ON" : "状态 OFF" };
-  }
-  if (device.type === "illuminance") {
-    return { primary: `${Number(value.illuminance || 0)} lux`, secondary: "实时环境照度" };
-  }
-  const mode = value.mode === "cool" ? "制冷" : value.mode === "heat" ? "制热" : "已关闭";
-  return { primary: mode, secondary: `设定 ${Number(value.temperature || 24)}°C · 室温 ${Number(value.current_temperature || 0)}°C` };
-}
-
-function faultOptions(selected, sensor = false) {
-  const options = sensor ? [
-    ["none", "正常"],
-    ["offline", "离线"],
-  ] : [
-    ["none", "正常"],
-    ["offline", "离线"],
-    ["reject", "拒绝命令"],
-    ["delay", "响应延迟"],
-    ["ack_without_state_change", "ACK 不变"],
-    ["invalid_state", "无效状态"],
-  ];
-  return options.map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
+function faultOptions(selected, options) {
+  return options.map((option) => `
+    <option value="${escapeHtml(option.value)}" ${selected === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
 }
 
 async function loadStatus() {
@@ -842,8 +936,166 @@ async function loadConversation() {
   }
 }
 
+async function loadAgentActivity() {
+  try {
+    renderAgentActivity(await api("/api/agent"));
+  } catch (error) {
+    // Agent 面板失败不打断其他视图。
+  }
+}
+
+function renderAgentActivity(data) {
+  const plannerBadge = $("#agent-planner-badge span");
+  if (plannerBadge) {
+    const llmAvailable = Boolean(data.llm_available);
+    const mode = data.planner_mode === "llm" ? "LLM 规划" : `${data.planner_mode || "fallback"} 规划`;
+    plannerBadge.textContent = `${mode} · ${llmAvailable ? "LLM 在线" : "LLM 离线"}`;
+    $("#agent-planner-badge")?.classList.toggle("planner-llm", data.planner_mode === "llm");
+  }
+
+  const statusLabel = $("#agent-goal-status");
+  const goalBody = $("#agent-goal-body");
+  const goal = data.active_goal;
+  if (statusLabel) {
+    statusLabel.textContent = goal ? `${goal.title} · ${data.goal_status}` : "无活动目标";
+    statusLabel.classList.toggle("idle", !goal);
+    statusLabel.classList.toggle("active", data.goal_status === "ACTIVE" || data.goal_status === "REPLANNING");
+    statusLabel.classList.toggle("satisfied", data.goal_status === "SATISFIED");
+  }
+  if (goalBody) {
+    if (!goal) {
+      goalBody.innerHTML = `<div class="empty-state compact"><span>说出一个目标即可启动</span></div>`;
+    } else {
+      const constraints = (goal.constraints || [])
+        .map((item) => {
+          const lower = item.lower ?? "∞";
+          const upper = item.upper ?? "∞";
+          return `<span class="constraint-chip">${escapeHtml(metricLabel(item.metric))} ${lower}~${upper}</span>`;
+        })
+        .join("");
+      goalBody.innerHTML = `
+        <p class="goal-title">🎬 ${escapeHtml(goal.title)}</p>
+        <div class="constraint-list">${constraints}</div>
+        <p class="goal-state-line">室温 <strong>${fmt(agentState(data).temperature)}</strong>°C · 灯 <strong>${fmt(agentState(data).brightness_pct)}%</strong> · 窗帘 <strong>${fmt(agentState(data).curtain_position)}%</strong> · 空调 <strong>${escapeHtml(agentState(data).ac_mode || "off")}</strong></p>`;
+    }
+  }
+
+  const candidatesBody = $("#agent-candidates-body");
+  if (candidatesBody) {
+    const outcome = data.last_outcome;
+    if (!outcome || !outcome.candidates || !outcome.candidates.length) {
+      candidatesBody.innerHTML = `<div class="empty-state compact"><span>等待规划</span></div>`;
+    } else {
+      const rows = outcome.candidates
+        .map((candidate) => {
+          const scores = candidate.scores || {};
+          const actions = (candidate.actions || [])
+            .map((action) => `<li>${escapeHtml(action.device_name || action.device_id)} · ${escapeHtml(actionLabel(action))}</li>`)
+            .join("");
+          const rejected = (candidate.label || "").includes("拒绝");
+          return `
+          <div class="candidate-card ${candidate.selected ? "selected" : ""} ${rejected ? "rejected" : ""}">
+            <div class="candidate-head">
+              <strong>${escapeHtml(candidate.label)}</strong>
+              <span class="candidate-score">${candidate.selected ? "★ " : ""}${candidate.total_score ?? "--"}</span>
+            </div>
+            <div class="score-chips">
+              <span>目标 ${(scores.goal_satisfaction ?? 0).toFixed(2)}</span>
+              <span>舒适 ${(scores.comfort ?? 0).toFixed(2)}</span>
+              <span>偏好 ${(scores.preference_match ?? 0).toFixed(2)}</span>
+              <span>能耗 ${(scores.energy_cost ?? 0).toFixed(2)}</span>
+            </div>
+            ${actions ? `<ul class="candidate-actions">${actions}</ul>` : ""}
+            <p class="candidate-prediction">预测 5 分钟后 ${fmt(candidate.predicted?.temperature)}°C（${escapeHtml(candidate.predicted?.temperature_trend || "-")}）</p>
+          </div>`;
+        })
+        .join("");
+      const errorLine = data.last_prediction?.prediction_error !== undefined && data.last_prediction?.prediction_error !== null
+        ? `<p class="prediction-error-line">预测误差（预测 vs 回读）：<strong>${data.last_prediction.prediction_error}°C</strong></p>`
+        : "";
+      candidatesBody.innerHTML = `${rows}${errorLine}<p class="selection-reason">${escapeHtml(outcome.reason || "")}</p>`;
+    }
+  }
+
+  const feedbackBody = $("#agent-feedback-body");
+  if (feedbackBody) {
+    const preference = data.preference;
+    const overrides = (data.timeline || []).filter((event) => event.kind === "human_override").slice(-2);
+    if (!preference && !overrides.length) {
+      feedbackBody.innerHTML = `<div class="empty-state compact"><span>暂无人工纠正</span></div>`;
+    } else {
+      const preferenceHtml = preference
+        ? `<p class="preference-line">观影亮度偏好：<strong>${fmt(preference.mean)}%</strong>（观测 ${preference.count} 次，置信 ${preference.confidence}）</p>`
+        : "";
+      const overrideHtml = overrides
+        .map((event) => `<p class="override-line">🖐 ${escapeHtml(event.message)}</p>`)
+        .join("");
+      feedbackBody.innerHTML = `${preferenceHtml}${overrideHtml}`;
+    }
+  }
+
+  const timeline = $("#agent-timeline");
+  if (timeline) {
+    const events = (data.timeline || []).slice(-12).reverse();
+    timeline.innerHTML = events.length
+      ? events
+          .map(
+            (event) => `
+        <div class="timeline-row kind-${escapeHtml(event.kind)}">
+          <span class="timeline-time">${escapeHtml(event.time)}</span>
+          <span class="timeline-kind">${escapeHtml(kindLabel(event.kind))}</span>
+          <span class="timeline-msg">${escapeHtml(event.message)}</span>
+        </div>`
+          )
+          .join("")
+      : `<div class="empty-state compact"><span>暂无事件</span></div>`;
+  }
+}
+
+function agentState(data) {
+  return data.current_state || {};
+}
+
+function metricLabel(metric) {
+  return { brightness: "亮度%", temperature: "温度°C", curtain_position: "窗帘%" }[metric] || metric;
+}
+
+function kindLabel(kind) {
+  return {
+    goal_received: "目标",
+    goal_compiled: "编译",
+    world_snapshot: "感知",
+    candidates_generated: "候选",
+    plan_selected: "选优",
+    policy_check: "校验",
+    execution: "执行",
+    verification: "回读",
+    no_action: "无需动作",
+    goal_evaluated: "评估",
+    human_override: "人工纠正",
+    attribution: "归因",
+    goal_cancelled: "取消",
+    replan: "重规划",
+  }[kind] || kind;
+}
+
+function actionLabel(action) {
+  const map = {
+    set_brightness: `亮度 → ${action.value}%`,
+    set_position: `窗帘 → ${action.value}%`,
+    set_temperature: `温度 → ${action.value}°C 制冷`,
+    set_hvac_mode: `模式 → ${action.value}`,
+    turn_off: "关闭",
+  };
+  return map[action.capability] || action.capability;
+}
+
+function fmt(value) {
+  return value === null || value === undefined ? "--" : `${Number(value).toFixed(Number.isInteger(value) ? 0 : 1)}`;
+}
+
 async function loadAll() {
-  await Promise.all([loadStatus(), loadDevices(), loadConversation()]);
+  await Promise.all([loadStatus(), loadDevices(), loadConversation(), loadAgentActivity()]);
   if (state.view === "events") await loadEvents();
 }
 
@@ -865,14 +1117,122 @@ async function post(path, body, successMessage) {
 async function controlDevice(device, body, message = "设备状态已更新") {
   const payload = await post(`/api/devices/${encodeURIComponent(device.device_id)}/control`, body, message);
   if (payload?.devices) renderInventory(payload);
+  return payload;
 }
 
 function switchView(view) {
   state.view = view;
   $$(".view").forEach((element) => element.classList.toggle("active", element.dataset.view === view));
-  $$(".rail-button[data-view-target]").forEach((button) => button.classList.toggle("active", button.dataset.viewTarget === view));
+  $$(".rail-button[data-view-target]").forEach((button) => {
+    const active = button.dataset.viewTarget === view && !(view === "home" && button.dataset.homeSection);
+    button.classList.toggle("active", active);
+  });
   if (view === "events") loadEvents();
   if (view === "assistant") loadConversation();
+}
+
+function selectFloorDevice(deviceId) {
+  state.floorSelectedId = deviceId;
+  renderFloorplan();
+  refreshIcons();
+}
+
+function showDeviceDetails(device) {
+  if (!device) return;
+  switchView("home");
+  state.roomFilter = device.room;
+  renderRoomTabs();
+  renderDeviceGrid();
+  requestAnimationFrame(() => {
+    const card = $(`[data-device-id="${CSS.escape(device.device_id)}"]`, $("#device-grid"));
+    card?.scrollIntoView({ behavior: "smooth", block: "center" });
+    card?.classList.add("attention");
+    setTimeout(() => card?.classList.remove("attention"), 1600);
+  });
+}
+
+async function activateFloorDevice(device) {
+  if (!device?.online) {
+    toast(`${device?.name || "设备"}当前离线`, true);
+    return;
+  }
+  const action = device.ui?.primary_action;
+  if (!action?.payload) return;
+  await controlDevice(device, action.payload, `${device.name}${action.label || "状态已更新"}`);
+}
+
+async function handleFloorplanClick(event) {
+  if (state.floorLongPressTriggered) {
+    state.floorLongPressTriggered = false;
+    event.preventDefault();
+    return;
+  }
+  const button = event.target.closest("[data-floor-device-id]");
+  if (!button) return;
+  const device = state.devices.find((item) => item.device_id === button.dataset.floorDeviceId);
+  if (!device) return;
+  selectFloorDevice(device.device_id);
+  await activateFloorDevice(device);
+}
+
+function beginFloorLongPress(event) {
+  const button = event.target.closest("[data-floor-device-id]");
+  if (!button) return;
+  clearTimeout(state.floorLongPressTimer);
+  state.floorLongPressTriggered = false;
+  state.floorLongPressTimer = setTimeout(() => {
+    const device = state.devices.find((item) => item.device_id === button.dataset.floorDeviceId);
+    if (!device) return;
+    state.floorLongPressTriggered = true;
+    selectFloorDevice(device.device_id);
+    showDeviceDetails(device);
+    setTimeout(() => { state.floorLongPressTriggered = false; }, 900);
+  }, 560);
+}
+
+function cancelFloorLongPress() {
+  clearTimeout(state.floorLongPressTimer);
+  state.floorLongPressTimer = null;
+}
+
+async function handleFloorPanelClick(event) {
+  if (event.target.closest("[data-floor-close]")) {
+    state.floorSelectedId = null;
+    renderFloorplan();
+    refreshIcons();
+    return;
+  }
+  if (event.target.closest("[data-floor-detail]")) {
+    showDeviceDetails(state.devices.find((item) => item.device_id === state.floorSelectedId));
+    return;
+  }
+  await handleDeviceClick(event);
+}
+
+async function handleFavoriteClick(event) {
+  const card = event.target.closest("[data-device-id]");
+  if (!card) return;
+  const device = state.devices.find((item) => item.device_id === card.dataset.deviceId);
+  if (!device) return;
+  if (event.target.closest("[data-favorite-open]")) {
+    selectFloorDevice(device.device_id);
+    $("#floorplan-stage")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+  await handleDeviceClick(event);
+}
+
+async function confirmDashboardRecommendation() {
+  const button = $("#dashboard-proactive-confirm");
+  button.disabled = true;
+  try {
+    const observation = await post("/api/observe", {}, null);
+    if (!observation) return;
+    await post("/api/message", { text: "确认" }, "主动节能建议已确认执行");
+    await Promise.all([loadStatus(), loadDevices()]);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function sendChat(textValue) {
@@ -1099,13 +1459,27 @@ async function handleDeviceClick(event) {
     $("#add-device-dialog").showModal();
     return;
   }
-  const actionButton = event.target.closest("[data-device-action]");
+  const favoriteButton = event.target.closest("[data-favorite-toggle]");
+  if (favoriteButton) {
+    const card = favoriteButton.closest("[data-device-id]");
+    const deviceId = card?.dataset.deviceId;
+    if (!deviceId) return;
+    state.favoriteDeviceIds = state.favoriteDeviceIds.includes(deviceId)
+      ? state.favoriteDeviceIds.filter((item) => item !== deviceId)
+      : [...state.favoriteDeviceIds, deviceId];
+    localStorage.setItem("spacebutler.favoriteDeviceIds", JSON.stringify(state.favoriteDeviceIds));
+    renderDeviceGrid();
+    renderFavoriteDevices();
+    refreshIcons();
+    toast(state.favoriteDeviceIds.includes(deviceId) ? "已加入收藏" : "已取消收藏");
+    return;
+  }
+  const actionButton = event.target.closest("[data-device-action], [data-control-payload], [data-control-step], [data-control-apply]");
   if (!actionButton) return;
   const card = actionButton.closest("[data-device-id]");
   const device = state.devices.find((item) => item.device_id === card?.dataset.deviceId);
   if (!device) return;
-  const action = actionButton.dataset.deviceAction;
-  if (action === "delete") {
+  if (actionButton.dataset.deviceAction === "delete") {
     if (!window.confirm(`删除“${device.name}”？`)) return;
     try {
       const payload = await api(`/api/devices/${encodeURIComponent(device.device_id)}`, { method: "DELETE" });
@@ -1117,54 +1491,36 @@ async function handleDeviceClick(event) {
     }
     return;
   }
-  if (action === "toggle") {
-    const on = String(device.state?.power).toUpperCase() === "ON";
-    const body = { power: on ? "off" : "on" };
-    if (device.type === "light" && !on) {
-      body.brightness = Number($("[data-device-brightness]", card)?.value || 80);
-    }
-    await controlDevice(device, body);
+  if (actionButton.matches("[data-control-payload]")) {
+    const payload = JSON.parse(actionButton.dataset.controlPayload || "{}");
+    actionButton.blur();
+    await controlDevice(device, payload);
     return;
   }
-  if (action === "sensor-toggle") {
-    const body = device.type === "presence"
-      ? { occupied: !Boolean(device.state?.occupied) }
-      : { open: !Boolean(device.state?.open) };
-    await controlDevice(device, body, "传感器状态已上报");
-    await loadStatus();
+  const valueInput = $("[data-control-value]", card);
+  if (!valueInput) return;
+  if (actionButton.matches("[data-control-step]")) {
+    const nextValue = Number(valueInput.value) + Number(actionButton.dataset.controlStep);
+    valueInput.value = Math.min(Number(valueInput.max), Math.max(Number(valueInput.min), nextValue));
     return;
   }
-  if (action === "climate-mode") {
-    const temperature = Number($("[data-device-temperature]", card)?.value || 24);
-    await controlDevice(device, { mode: actionButton.dataset.mode, temperature });
-    return;
-  }
-  const temperatureInput = $("[data-device-temperature]", card);
-  if (!temperatureInput) return;
-  if (action === "temperature-up" || action === "temperature-down") {
-    const delta = action === "temperature-up" ? 0.5 : -0.5;
-    temperatureInput.value = Math.min(30, Math.max(16, Number(temperatureInput.value) + delta));
-    return;
-  }
-  if (action === "apply-temperature") {
-    const mode = device.state?.mode === "off" ? "cool" : device.state?.mode;
-    await controlDevice(device, { mode, temperature: Number(temperatureInput.value) });
+  if (actionButton.matches("[data-control-apply]")) {
+    const payload = JSON.parse(valueInput.dataset.controlPayload || "{}");
+    payload[valueInput.dataset.controlField] = Number(valueInput.value);
+    actionButton.blur();
+    await controlDevice(device, payload);
   }
 }
 
 async function handleDeviceChange(event) {
+  const fromInventory = Boolean(event.target.closest("#device-grid"));
   const card = event.target.closest("[data-device-id]");
   const device = state.devices.find((item) => item.device_id === card?.dataset.deviceId);
   if (!device) return;
-  if (event.target.matches("[data-device-brightness]")) {
-    await controlDevice(device, { power: "on", brightness: Number(event.target.value) }, "亮度已更新");
-  }
-  if (event.target.matches("[data-device-position]")) {
-    await controlDevice(device, { position: Number(event.target.value) }, "窗帘位置已更新");
-  }
-  if (event.target.matches("[data-device-illuminance]")) {
-    await controlDevice(device, { illuminance: Number(event.target.value) }, "照度已上报");
-    await loadStatus();
+  if (event.target.matches("[data-control-range]")) {
+    const payload = JSON.parse(event.target.dataset.controlPayload || "{}");
+    payload[event.target.dataset.controlField] = Number(event.target.value);
+    await controlDevice(device, payload, `${device.name}已更新`);
   }
   if (event.target.matches("[data-device-fault]")) {
     const mode = event.target.value;
@@ -1175,6 +1531,9 @@ async function handleDeviceChange(event) {
     );
     if (payload?.devices) renderInventory(payload);
   }
+  event.target.blur();
+  if (fromInventory) renderDeviceGrid();
+  renderSpatialDashboard();
 }
 
 async function addDevice(event) {
@@ -1182,26 +1541,12 @@ async function addDevice(event) {
   const name = $("#new-device-name").value.trim();
   const type = $("#new-device-type").value;
   const room = $("#new-device-room").value;
-  const power = $("#new-device-power").value;
   if (!name) return;
-  const initialState = type === "light"
-    ? { power: power.toUpperCase(), brightness: power === "on" ? 204 : 0 }
-    : type === "switch"
-      ? { power: power.toUpperCase(), power_w: power === "on" ? 95 : 1.5 }
-      : type === "climate"
-        ? { mode: power === "on" ? "cool" : "off", temperature: 24, current_temperature: 26 }
-        : type === "curtain"
-          ? { position: power === "on" ? 100 : 0, target_position: power === "on" ? 100 : 0, status: power === "on" ? "open" : "closed" }
-          : type === "presence"
-            ? { occupied: power === "on" }
-            : type === "contact"
-              ? { open: power === "on" }
-              : { illuminance: power === "on" ? 100 : 8 };
   $("#submit-add-device").disabled = true;
   try {
     const payload = await api("/api/devices", {
       method: "POST",
-      body: JSON.stringify({ name, type, room, initial_state: initialState }),
+      body: JSON.stringify({ name, type, room }),
     });
     renderInventory(payload);
     $("#add-device-dialog").close();
@@ -1226,9 +1571,20 @@ function toast(message, error = false) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  $("#welcome-date").textContent = new Intl.DateTimeFormat("zh-CN", {
+    month: "long",
+    day: "numeric",
+    weekday: "long",
+  }).format(new Date());
   $$(".rail-button[data-view-target]").forEach((button) => {
-    button.addEventListener("click", () => switchView(button.dataset.viewTarget));
+    button.addEventListener("click", () => {
+      switchView(button.dataset.viewTarget);
+      if (button.dataset.homeSection === "inventory") {
+        requestAnimationFrame(() => $("#home-inventory")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      }
+    });
   });
+  $$('[data-view-jump]').forEach((button) => button.addEventListener("click", () => switchView(button.dataset.viewJump)));
   $("#refresh-all").addEventListener("click", loadAll);
   $("#clear-chat").addEventListener("click", clearConversation);
   $("#chat-form").addEventListener("submit", (event) => {
@@ -1246,6 +1602,14 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("#confirm-chat-plan").addEventListener("click", () => chatPlanAction("/api/chat/confirm"));
   $("#cancel-chat-plan").addEventListener("click", () => chatPlanAction("/api/chat/cancel"));
+  $("#agent-demo-override")?.addEventListener("click", async () => {
+    await post("/api/agent/demo-override", { brightness: 45 }, "已通过 Home Assistant 调整主灯，等待智能体识别");
+    await loadAgentActivity();
+  });
+  $("#agent-demo-disturbance")?.addEventListener("click", async () => {
+    await post("/api/agent/demo-disturbance", { temperature: 31 }, "已注入热扰动，智能体将自动重规划");
+    await loadAgentActivity();
+  });
   $("#devices-reload").addEventListener("click", loadDevices);
   $("#events-reload").addEventListener("click", loadEvents);
   $("#open-add-device").addEventListener("click", () => $("#add-device-dialog").showModal());
@@ -1261,6 +1625,16 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("#device-grid").addEventListener("click", handleDeviceClick);
   $("#device-grid").addEventListener("change", handleDeviceChange);
+  $("#favorite-devices").addEventListener("click", handleFavoriteClick);
+  $("#floorplan-devices").addEventListener("click", handleFloorplanClick);
+  $("#floorplan-devices").addEventListener("pointerdown", beginFloorLongPress);
+  ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => {
+    $("#floorplan-devices").addEventListener(eventName, cancelFloorLongPress);
+  });
+  $("#floor-device-panel").addEventListener("click", handleFloorPanelClick);
+  $("#floor-device-panel").addEventListener("change", handleDeviceChange);
+  $("#dashboard-proactive-review").addEventListener("click", () => switchView("agent"));
+  $("#dashboard-proactive-confirm").addEventListener("click", confirmDashboardRecommendation);
   $("#minutes-range").addEventListener("input", (event) => {
     markSceneDraftDirty();
     $("#minutes-output").textContent = event.target.value;

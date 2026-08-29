@@ -13,3 +13,5 @@ deployment/homeassistant/*.db*
 deployment/homeassistant/*.log*
 deployment/homeassistant/.HA_VERSION
 deployment/runtime/
+deployment/esphome/secrets.yaml
+deployment/esphome/.esphome/

@@ -1,0 +1,20 @@
+esphome:
+  name: spacebutler-living-presence
+  friendly_name: SpaceButler Living Room
+
+host:
+  mac_address: "02:00:00:01:00:13"
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_key
+
+binary_sensor:
+  - platform: template
+    id: living_room_presence
+    name: Presence
+    device_class: presence
+    lambda: |-
+      return true;

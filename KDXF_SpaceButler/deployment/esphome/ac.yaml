@@ -1,0 +1,99 @@
+esphome:
+  name: spacebutler-living-ac
+  friendly_name: SpaceButler Living Room
+
+host:
+  mac_address: "02:00:00:01:00:14"
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_key
+  # 演示扰动通道：HA 服务 esphome.spacebutler_living_ac_demo_heat_injection
+  # 直接注入环境温度（真实链路 HA -> ESPHome API -> 环境模型），供 Demo 4 触发目标偏离。
+  actions:
+    - action: demo_heat_injection
+      variables:
+        target_temperature: float
+      then:
+        - lambda: |-
+            id(room_temp) = target_temperature;
+            ESP_LOGI("ac_sim", "Demo heat injection: %.1f C", id(room_temp));
+
+globals:
+  - id: room_temp
+    type: float
+    restore_value: no
+    initial_value: "30.2"
+  - id: compressor_on
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+sensor:
+  - platform: template
+    id: living_room_temperature
+    name: Temperature
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 1s
+    lambda: |-
+      return id(room_temp);
+
+climate:
+  - platform: thermostat
+    id: living_room_ac
+    name: AC
+    sensor: living_room_temperature
+    min_cooling_off_time: 1s
+    min_cooling_run_time: 1s
+    min_idle_time: 1s
+    cool_deadband: 0.3 °C
+    cool_overrun: 0.3 °C
+    cool_action:
+      - lambda: |-
+          id(compressor_on) = true;
+          ESP_LOGI("ac_sim", "Compressor ON | Current temperature: %.1f C", id(room_temp));
+    idle_action:
+      - lambda: |-
+          id(compressor_on) = false;
+          ESP_LOGI("ac_sim", "Compressor IDLE | Current temperature: %.1f C", id(room_temp));
+    cool_mode:
+      - logger.log:
+          level: INFO
+          format: "AC mode -> COOL"
+    off_mode:
+      - lambda: |-
+          id(compressor_on) = false;
+          ESP_LOGI("ac_sim", "AC mode -> OFF");
+    default_preset: Demo
+    on_boot_restore_from: default_preset
+    preset:
+      - name: Demo
+        default_target_temperature_high: 26 °C
+        mode: cool
+    visual:
+      min_temperature: 16 °C
+      max_temperature: 30 °C
+      temperature_step: 0.5 °C
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          if (id(compressor_on)) {
+            id(room_temp) -= 0.20f;
+            if (id(room_temp) < 16.0f) {
+              id(room_temp) = 16.0f;
+            }
+          } else {
+            if (id(room_temp) < 30.2f) {
+              id(room_temp) += 0.05f;
+            }
+            if (id(room_temp) > 30.2f) {
+              id(room_temp) = 30.2f;
+            }
+          }
