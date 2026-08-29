@@ -1,0 +1,43 @@
+{
+  "planner_failure_distribution": {
+    "empty_candidates": 2
+  },
+  "compile_failures": [
+    "看完电影了，帮我把客厅恢复成日常状态。",
+    "宝宝在客厅睡着啦，灯光弄暗，室温保持舒服。",
+    "我就想凉快点，别的无所谓。",
+    "想看部电影，帮我布置一下客厅。"
+  ],
+  "records": [
+    {
+      "text": "开会前把客厅弄得亮堂一点，别热。",
+      "planner_mode": "fallback",
+      "rejections": [
+        {
+          "code": "empty_candidates",
+          "reason": "模型返回空候选或输出未通过 schema/解析"
+        }
+      ]
+    },
+    {
+      "text": "想在客厅做做拉伸，通风凉快点，灯别晃眼。",
+      "planner_mode": "fallback",
+      "rejections": [
+        {
+          "code": "empty_candidates",
+          "reason": "模型返回空候选或输出未通过 schema/解析"
+        }
+      ]
+    },
+    {
+      "text": "要在这个屋子里练瑜伽，亮但别刺眼，凉快些。",
+      "planner_mode": "deterministic",
+      "rejections": []
+    },
+    {
+      "text": "爸妈要来坐坐，客厅弄得舒适大方，亮度适中。",
+      "planner_mode": "deterministic",
+      "rejections": []
+    }
+  ]
+}

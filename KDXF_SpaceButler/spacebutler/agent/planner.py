@@ -12,6 +12,7 @@ UI 不冒充模型规划。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 
 from spacebutler.agent.capabilities import DeviceCapability
 from spacebutler.agent.counterfactual import CounterfactualPredictor
@@ -22,7 +23,7 @@ from spacebutler.agent.models import (
     PreferenceEstimate,
     RoomState,
 )
-from spacebutler.agent.policy_guard import PolicyGuard
+from spacebutler.agent.policy_guard import PolicyGuard, classify_issue
 from spacebutler.agent.scorer import PlanScorer
 from spacebutler.llm.client import LlmClient
 
@@ -48,6 +49,7 @@ def _coerce_number(value: object) -> object:
 def _normalize_action_value(capability: str, value: object) -> tuple[object, str | None]:
     """把模型常见输出风格归一化为内部动作 schema（纯格式对齐，非业务决策）：
     - 参数对象风格 {"brightness": 0.8} / {"hvac_mode": "off"} -> 标量值
+    - 空对象/空占位 -> None（调用方丢弃该动作）
     - 0~1 比例亮度 -> 百分比
     - 数字字符串 "32" -> 32.0
     返回 (value, extra_mode)。"""
@@ -66,7 +68,7 @@ def _normalize_action_value(capability: str, value: object) -> tuple[object, str
                 return float(inner), None
             if isinstance(inner, str):
                 return inner, None
-        return value, None
+        return None, None
     return _coerce_number(value), None
 
 
@@ -106,7 +108,7 @@ _PLANNER_SCHEMA: dict = {
                                         "turn_off",
                                     ],
                                 },
-                                "value": {},
+                                "value": {"type": ["number", "string"]},
                                 "mode": {"type": "string"},
                             },
                             "required": ["device_id", "capability", "value"],
@@ -129,6 +131,7 @@ class PlanningOutcome:
     candidates: list[CandidatePlan] = field(default_factory=list)
     selected: CandidatePlan | None = None
     llm_metrics: LlmContribution = field(default_factory=LlmContribution)
+    llm_rejections: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -138,6 +141,7 @@ class PlanningOutcome:
             "candidates": [item.to_dict() for item in self.candidates],
             "selected": self.selected.to_dict() if self.selected is not None else None,
             "llm_metrics": self.llm_metrics.to_dict(),
+            "llm_rejections": self.llm_rejections,
         }
 
 
@@ -166,6 +170,7 @@ class CounterfactualPlanner:
             goal_evaluation_by_llm=self.contribution.goal_evaluation_by_llm,
             replan_decision_by_llm=self.contribution.replan_decision_by_llm,
         )
+        llm_rejections: list[dict[str, object]] = []
         current = self._constraint_values(state)
 
         if all(constraint.satisfied_by(current.get(constraint.metric)) for constraint in goal.constraints):
@@ -174,12 +179,17 @@ class CounterfactualPlanner:
                 no_action=True,
                 reason="Goal already satisfied：当前状态已满足全部目标约束，无需动作。",
                 llm_metrics=metrics,
+                llm_rejections=llm_rejections,
             )
 
         raw_candidates: list[tuple[list[dict[str, object]], str, str, str]] = []
         planner_mode = "fallback"
+        empty_llm_candidates = False
         if llm_client is not None and llm_client.available():
             llm_raw = self._llm_candidates(goal, state, registry, preferences, recent_events, llm_client)
+            if not llm_raw:
+                empty_llm_candidates = True
+                llm_rejections.append({"code": "empty_candidates", "reason": "模型返回空候选或输出未通过 schema/解析"})
             generated = len(llm_raw)
             valid = 0
             rejected = 0
@@ -187,6 +197,13 @@ class CounterfactualPlanner:
                 problems = guard.issues(actions)
                 if problems:
                     rejected += 1
+                    llm_rejections.append(
+                        {
+                            "code": classify_issue(problems[0]),
+                            "reason": problems[0],
+                            "normalized_actions": actions,
+                        }
+                    )
                     raw_candidates.append((actions, f"候选 L{index} · 模型提出", summary or "", "llm"))
                     # 非法候选不入最终候选空间，仅计入指标。
                     continue
@@ -229,6 +246,7 @@ class CounterfactualPlanner:
                 reason="所有候选均被 Policy Guard 拒绝，未执行任何动作。",
                 candidates=scored,
                 llm_metrics=metrics,
+            llm_rejections=llm_rejections,
             )
         best = max(actionable, key=lambda item: (item.scores.total, -len(item.actions)))
         best.selected = True
@@ -242,6 +260,7 @@ class CounterfactualPlanner:
             candidates=scored,
             selected=best,
             llm_metrics=metrics,
+            llm_rejections=llm_rejections,
         )
 
     # ---- model-driven candidate generation ---------------------------
@@ -285,6 +304,9 @@ class CounterfactualPlanner:
                     continue
                 capability = str(entry.get("capability", ""))
                 value, extra_mode = _normalize_action_value(capability, entry.get("value"))
+                if value is None:
+                    # 模型给了空占位（如 {}）时丢弃该条动作，而不是连坐整个候选。
+                    continue
                 actions.append(
                     {
                         "device_id": str(entry.get("device_id", "")),

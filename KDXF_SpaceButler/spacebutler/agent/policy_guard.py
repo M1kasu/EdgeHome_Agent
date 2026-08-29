@@ -3,12 +3,35 @@
 LLM 的任何输出都必须经过这里：设备必须存在于 Capability Registry、
 动作必须在设备能力白名单内、参数必须在固件同样的边界内、不允许
 重复或互相冲突的动作。非法动作直接拒绝，不会到达 Home Assistant。
+
+classify_issue 把拒绝原因归一化为机器可统计的错误码（供 planner
+fallback 长尾诊断）；这些 code 描述的是 guard 自身的检查维度，
+不是业务场景。
 """
 
 from __future__ import annotations
 
 from spacebutler.agent.capabilities import build_capability_registry
 from spacebutler.agent.models import DeviceCapability
+
+_FAILURE_CODES = {
+    "不可用设备": "unknown_device",
+    "只读传感器": "readonly_device",
+    "不支持动作": "unsupported_action",
+    "参数必须是数字": "invalid_parameter_type",
+    "超出": "out_of_range",
+    "不受支持": "unsupported_action",
+    "重复": "duplicate_action",
+    "不是对象": "schema_failure",
+    "无法解析": "schema_failure",
+}
+
+
+def classify_issue(message: str) -> str:
+    for keyword, code in _FAILURE_CODES.items():
+        if keyword in message:
+            return code
+    return "other"
 
 
 class PolicyGuard:
