@@ -1,0 +1,386 @@
+{
+  "category_distribution": {
+    "C_scorer_choice": 7
+  },
+  "compile_raw_failures": [
+    {
+      "text": "看完电影了，帮我把客厅恢复成日常状态。",
+      "raw_model_json": {
+        "is_home_goal": false,
+        "intent_summary": "恢复客厅到正常状态",
+        "constraints": []
+      },
+      "is_home_goal": false,
+      "extracted_constraints": [],
+      "failure_reason": "model returned no usable constraints after retry"
+    },
+    {
+      "text": "宝宝在客厅睡着啦，灯光弄暗，室温保持舒服。",
+      "raw_model_json": {
+        "is_home_goal": false,
+        "intent_summary": "宝宝在客厅睡着啦，灯光弄暗，室温保持舒服",
+        "constraints": []
+      },
+      "is_home_goal": false,
+      "extracted_constraints": [],
+      "failure_reason": "model returned no usable constraints after retry"
+    },
+    {
+      "text": "我就想凉快点，别的无所谓。",
+      "raw_model_json": {
+        "is_home_goal": false,
+        "intent_summary": "凉快",
+        "constraints": []
+      },
+      "is_home_goal": false,
+      "extracted_constraints": [],
+      "failure_reason": "model returned no usable constraints after retry"
+    },
+    {
+      "text": "想看部电影，帮我布置一下客厅。",
+      "raw_model_json": {
+        "is_home_goal": false,
+        "intent_summary": "帮助你布置客厅",
+        "constraints": []
+      },
+      "is_home_goal": false,
+      "extracted_constraints": [],
+      "failure_reason": "model returned no usable constraints after retry"
+    }
+  ],
+  "records": [
+    {
+      "text": "我准备休息一会，但不睡觉，凉快一点，给我留点光。",
+      "goal_satisfaction": 0.0,
+      "constraints": [
+        {
+          "metric": "brightness",
+          "lower": 15.0,
+          "upper": 40.0,
+          "target": 27.5,
+          "unit": ""
+        }
+      ],
+      "selected_actions": [
+        {
+          "device_id": "living_room_main_light",
+          "capability": "turn_on",
+          "value": 0.0
+        },
+        {
+          "device_id": "living_room_curtain",
+          "capability": "set_position",
+          "value": 0.0
+        },
+        {
+          "device_id": "living_room_ac",
+          "capability": "set_hvac_mode",
+          "value": "cool"
+        }
+      ],
+      "predicted": {
+        "temperature": 25.0,
+        "temperature_trend": "decreasing",
+        "brightness_pct": 80.0,
+        "curtain_position": 0.0,
+        "ac_mode": "cool",
+        "horizon_minutes": 5.0,
+        "notes": [
+          "制冷中，预计 5 分钟后约 25.0°C"
+        ]
+      },
+      "observed_final": {
+        "temperature": 25.0,
+        "brightness_pct": 80.0,
+        "curtain_position": 0.0
+      },
+      "unsatisfied": [
+        {
+          "metric": "brightness",
+          "range": [
+            15.0,
+            40.0
+          ],
+          "observed": 80.0,
+          "error": 40.0,
+          "category": "C_scorer_choice"
+        }
+      ],
+      "compile_mode": "llm"
+    },
+    {
+      "text": "朋友一会来，先让客厅看起来舒服点，别太暗。",
+      "goal_satisfaction": 0.592,
+      "constraints": [
+        {
+          "metric": "brightness",
+          "lower": 15.0,
+          "upper": 40.0,
+          "target": 27.5,
+          "unit": ""
+        }
+      ],
+      "selected_actions": [
+        {
+          "device_id": "living_room_main_light",
+          "capability": "turn_on",
+          "value": 1
+        }
+      ],
+      "predicted": {
+        "temperature": 30.2,
+        "temperature_trend": "stable",
+        "brightness_pct": 50.2,
+        "curtain_position": 0.0,
+        "ac_mode": "off",
+        "horizon_minutes": 5.0,
+        "notes": [
+          "无制冷时室温将回到环境基线 30.2°C"
+        ]
+      },
+      "observed_final": {
+        "temperature": 30.2,
+        "brightness_pct": 50.2,
+        "curtain_position": 0.0
+      },
+      "unsatisfied": [
+        {
+          "metric": "brightness",
+          "range": [
+            15.0,
+            40.0
+          ],
+          "observed": 50.2,
+          "error": 10.2,
+          "category": "C_scorer_choice"
+        }
+      ],
+      "compile_mode": "llm"
+    },
+    {
+      "text": "我一个人想静静，灯光暗一些，别太冷。",
+      "goal_satisfaction": 0.2,
+      "constraints": [
+        {
+          "metric": "brightness",
+          "lower": 20.0,
+          "upper": 40.0,
+          "target": 30.0,
+          "unit": ""
+        }
+      ],
+      "selected_actions": [
+        {
+          "device_id": "living_room_main_light",
+          "capability": "turn_off",
+          "value": 0
+        }
+      ],
+      "predicted": {
+        "temperature": 30.2,
+        "temperature_trend": "stable",
+        "brightness_pct": 0.0,
+        "curtain_position": 100.0,
+        "ac_mode": "off",
+        "horizon_minutes": 5.0,
+        "notes": [
+          "无制冷时室温将回到环境基线 30.2°C"
+        ]
+      },
+      "observed_final": {
+        "temperature": 30.2,
+        "brightness_pct": 0.0,
+        "curtain_position": 100.0
+      },
+      "unsatisfied": [
+        {
+          "metric": "brightness",
+          "range": [
+            20.0,
+            40.0
+          ],
+          "observed": 0.0,
+          "error": 20.0,
+          "category": "C_scorer_choice"
+        }
+      ],
+      "compile_mode": "llm"
+    },
+    {
+      "text": "想在客厅做做拉伸，通风凉快点，灯别晃眼。",
+      "goal_satisfaction": 0.5,
+      "constraints": [
+        {
+          "metric": "temperature",
+          "lower": 24.0,
+          "upper": 28.0,
+          "target": 26.0,
+          "unit": ""
+        },
+        {
+          "metric": "brightness",
+          "lower": 15.0,
+          "upper": 40.0,
+          "target": 27.5,
+          "unit": ""
+        }
+      ],
+      "selected_actions": [
+        {
+          "device_id": "living_room_main_light",
+          "capability": "turn_on",
+          "value": 0.0
+        },
+        {
+          "device_id": "living_room_curtain",
+          "capability": "set_position",
+          "value": 0.0
+        },
+        {
+          "device_id": "living_room_ac",
+          "capability": "set_hvac_mode",
+          "value": "cool"
+        }
+      ],
+      "predicted": {
+        "temperature": 25.0,
+        "temperature_trend": "decreasing",
+        "brightness_pct": 80.0,
+        "curtain_position": 0.0,
+        "ac_mode": "cool",
+        "horizon_minutes": 5.0,
+        "notes": [
+          "制冷中，预计 5 分钟后约 25.0°C"
+        ]
+      },
+      "observed_final": {
+        "temperature": 25.0,
+        "brightness_pct": 80.0,
+        "curtain_position": 0.0
+      },
+      "unsatisfied": [
+        {
+          "metric": "brightness",
+          "range": [
+            15.0,
+            40.0
+          ],
+          "observed": 80.0,
+          "error": 40.0,
+          "category": "C_scorer_choice"
+        }
+      ],
+      "compile_mode": "llm"
+    },
+    {
+      "text": "打游戏呢，屋里有点热，灯别在屏幕上反光。",
+      "goal_satisfaction": 0.7,
+      "constraints": [
+        {
+          "metric": "brightness",
+          "lower": 15.0,
+          "upper": 40.0,
+          "target": 27.5,
+          "unit": ""
+        },
+        {
+          "metric": "temperature",
+          "lower": 24.0,
+          "upper": 28.0,
+          "target": 26.0,
+          "unit": ""
+        }
+      ],
+      "selected_actions": [
+        {
+          "device_id": "living_room_main_light",
+          "capability": "turn_off",
+          "value": 0
+        },
+        {
+          "device_id": "living_room_ac",
+          "capability": "set_temperature",
+          "value": 26
+        }
+      ],
+      "predicted": {
+        "temperature": 25.0,
+        "temperature_trend": "decreasing",
+        "brightness_pct": 14.9,
+        "curtain_position": 100.0,
+        "ac_mode": "cool",
+        "horizon_minutes": 5.0,
+        "notes": [
+          "制冷中，预计 5 分钟后约 25.0°C"
+        ]
+      },
+      "observed_final": {
+        "temperature": 25.0,
+        "brightness_pct": 0.0,
+        "curtain_position": 100.0
+      },
+      "unsatisfied": [
+        {
+          "metric": "brightness",
+          "range": [
+            15.0,
+            40.0
+          ],
+          "observed": 0.0,
+          "error": 15.0,
+          "category": "C_scorer_choice"
+        }
+      ],
+      "compile_mode": "llm"
+    },
+    {
+      "text": "客厅现在又亮又热，帮我调到能舒服待着的状态。",
+      "goal_satisfaction": 0.0,
+      "constraints": [
+        {
+          "metric": "brightness",
+          "lower": 15.0,
+          "upper": 40.0,
+          "target": 27.5,
+          "unit": ""
+        }
+      ],
+      "selected_actions": [
+        {
+          "device_id": "living_room_main_light",
+          "capability": "turn_on",
+          "value": 0.3
+        }
+      ],
+      "predicted": {
+        "temperature": 24.0,
+        "temperature_trend": "decreasing",
+        "brightness_pct": 80.0,
+        "curtain_position": 100.0,
+        "ac_mode": "cool",
+        "horizon_minutes": 5.0,
+        "notes": [
+          "制冷中，预计 5 分钟后约 24.0°C"
+        ]
+      },
+      "observed_final": {
+        "temperature": 24.0,
+        "brightness_pct": 80.0,
+        "curtain_position": 100.0
+      },
+      "unsatisfied": [
+        {
+          "metric": "brightness",
+          "range": [
+            15.0,
+            40.0
+          ],
+          "observed": 80.0,
+          "error": 40.0,
+          "category": "C_scorer_choice"
+        }
+      ],
+      "compile_mode": "llm"
+    }
+  ]
+}

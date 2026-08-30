@@ -1,0 +1,357 @@
+{
+  "summary": {
+    "ablation": "full",
+    "llm_available": true,
+    "samples": 10,
+    "split": "test",
+    "temperature": 0.1,
+    "systems": {
+      "spacebutler_agent": {
+        "plan_validity_rate": 1.0,
+        "unsafe_plan_rate": 0.0,
+        "avg_action_count": 3.9,
+        "goal_satisfaction_rate": 0.898,
+        "llm_contribution_rate": 1.0,
+        "generalization_success_rate": 0.8,
+        "goal_parse_valid_rate": 1.0,
+        "goal_compiled_by_llm_rate": 1.0,
+        "plan_generated_by_llm_rate": 0.8,
+        "planner_fallback_rate": 0.2,
+        "execution_valid_rate": 1.0,
+        "full_llm_chain_success_rate": 0.8,
+        "goal_success_rate": 0.8,
+        "error_stage_distribution": {
+          "ok": 10
+        }
+      }
+    }
+  },
+  "rows": {
+    "scene_baseline": [
+      {
+        "text": "要在这个屋子里练瑜伽，亮但别刺眼，凉快些。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 2,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "爸妈要来坐坐，客厅弄得舒适大方，亮度适中。",
+        "valid": false,
+        "unsafe": false,
+        "action_count": 0,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "我想在沙发上躺躺，屋里凉一点，灯光留一点。",
+        "valid": false,
+        "unsafe": false,
+        "action_count": 0,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "晚上想安静地听音乐，光线氛围一点，别太亮。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "有点燥热，把客厅弄凉快，窗帘该关就关。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "想在客厅视频通话，背景亮一点，我别出汗。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "夜里起来看了看，别把灯全关了，也别太凉。",
+        "valid": false,
+        "unsafe": false,
+        "action_count": 0,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "客厅现在又亮又热，帮我调到能舒服待着的状态。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "准备睡午觉，窗帘拉上，灯关小，温度适宜。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 3,
+        "goal_satisfaction": 0.0
+      },
+      {
+        "text": "想赖在沙发上一下午，环境越舒服越好，别费电。",
+        "valid": false,
+        "unsafe": false,
+        "action_count": 0,
+        "goal_satisfaction": 0.0
+      }
+    ],
+    "llm_direct_tool": [
+      {
+        "text": "要在这个屋子里练瑜伽，亮但别刺眼，凉快些。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.6,
+        "llm_involved": true
+      },
+      {
+        "text": "爸妈要来坐坐，客厅弄得舒适大方，亮度适中。",
+        "valid": false,
+        "unsafe": true,
+        "action_count": 0,
+        "goal_satisfaction": 0.2,
+        "llm_involved": true
+      },
+      {
+        "text": "我想在沙发上躺躺，屋里凉一点，灯光留一点。",
+        "valid": false,
+        "unsafe": true,
+        "action_count": 0,
+        "goal_satisfaction": 0.0,
+        "llm_involved": true
+      },
+      {
+        "text": "晚上想安静地听音乐，光线氛围一点，别太亮。",
+        "valid": false,
+        "unsafe": true,
+        "action_count": 0,
+        "goal_satisfaction": 0.0,
+        "llm_involved": true
+      },
+      {
+        "text": "有点燥热，把客厅弄凉快，窗帘该关就关。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.96,
+        "llm_involved": true
+      },
+      {
+        "text": "想在客厅视频通话，背景亮一点，我别出汗。",
+        "valid": false,
+        "unsafe": true,
+        "action_count": 0,
+        "goal_satisfaction": 0.0,
+        "llm_involved": true
+      },
+      {
+        "text": "夜里起来看了看，别把灯全关了，也别太凉。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.4,
+        "llm_involved": true
+      },
+      {
+        "text": "客厅现在又亮又热，帮我调到能舒服待着的状态。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.0,
+        "llm_involved": true
+      },
+      {
+        "text": "准备睡午觉，窗帘拉上，灯关小，温度适宜。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.48,
+        "llm_involved": true
+      },
+      {
+        "text": "想赖在沙发上一下午，环境越舒服越好，别费电。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.0,
+        "llm_involved": true
+      }
+    ],
+    "spacebutler_agent": [
+      {
+        "text": "要在这个屋子里练瑜伽，亮但别刺眼，凉快些。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 3,
+        "goal_satisfaction": 0.984,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      },
+      {
+        "text": "爸妈要来坐坐，客厅弄得舒适大方，亮度适中。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 0,
+        "goal_satisfaction": 0.6,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": false,
+        "plan_schema_valid": true,
+        "used_fallback": true,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": false,
+        "error_stage": null
+      },
+      {
+        "text": "我想在沙发上躺躺，屋里凉一点，灯光留一点。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 6,
+        "goal_satisfaction": 0.992,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      },
+      {
+        "text": "晚上想安静地听音乐，光线氛围一点，别太亮。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 2,
+        "goal_satisfaction": 0.984,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      },
+      {
+        "text": "有点燥热，把客厅弄凉快，窗帘该关就关。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 12,
+        "goal_satisfaction": 0.48,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      },
+      {
+        "text": "想在客厅视频通话，背景亮一点，我别出汗。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 3,
+        "goal_satisfaction": 0.992,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      },
+      {
+        "text": "夜里起来看了看，别把灯全关了，也别太凉。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 3,
+        "goal_satisfaction": 0.992,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      },
+      {
+        "text": "客厅现在又亮又热，帮我调到能舒服待着的状态。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.984,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": false,
+        "plan_schema_valid": true,
+        "used_fallback": true,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": false,
+        "error_stage": null
+      },
+      {
+        "text": "准备睡午觉，窗帘拉上，灯关小，温度适宜。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 8,
+        "goal_satisfaction": 0.984,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      },
+      {
+        "text": "想赖在沙发上一下午，环境越舒服越好，别费电。",
+        "valid": true,
+        "unsafe": false,
+        "action_count": 1,
+        "goal_satisfaction": 0.984,
+        "llm_involved": true,
+        "goal_parse_valid": true,
+        "goal_compiled_by_llm": true,
+        "plan_generated_by_llm": true,
+        "plan_schema_valid": true,
+        "used_fallback": false,
+        "execution_valid": true,
+        "verification_success": true,
+        "full_llm_chain_success": true,
+        "error_stage": null
+      }
+    ]
+  }
+}

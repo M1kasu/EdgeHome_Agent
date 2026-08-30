@@ -46,30 +46,34 @@ def _coerce_number(value: object) -> object:
     return value
 
 
-def _normalize_action_value(capability: str, value: object) -> tuple[object, str | None]:
-    """把模型常见输出风格归一化为内部动作 schema（纯格式对齐，非业务决策）：
+def _normalize_action_value(capability: str, value: object) -> tuple[str, object, str | None]:
+    """把模型常见输出风格归一化为内部动作 schema（纯格式/词汇对齐，非业务决策）：
     - 参数对象风格 {"brightness": 0.8} / {"hvac_mode": "off"} -> 标量值
-    - 空对象/空占位 -> None（调用方丢弃该动作）
+    - turn_on 携带亮度参数 -> 升级为 set_brightness（模型意图是调亮度）
+    - 空对象/空占位 -> value=None（调用方丢弃该动作）
     - 0~1 比例亮度 -> 百分比
-    - 数字字符串 "32" -> 32.0
-    返回 (value, extra_mode)。"""
+    返回 (capability, value, extra_mode)。"""
     if isinstance(value, dict):
-        for key in ("brightness", "position", "temperature"):
+        brightness = value.get("brightness")
+        if isinstance(brightness, (int, float)) and not isinstance(brightness, bool):
+            number = float(brightness)
+            if 0 < number <= 1.0:
+                number = round(number * 100, 1)
+            return "set_brightness", number, None
+        for key in ("position", "temperature"):
             if key in value and isinstance(value[key], (int, float)) and not isinstance(value[key], bool):
-                number = float(value[key])
-                if key == "brightness" and 0 < number <= 1.0:
-                    number = round(number * 100, 1)
-                return number, None
+                return capability, float(value[key]), None
         for key in ("hvac_mode", "mode"):
             if key in value and isinstance(value[key], str):
-                return value[key], None
+                upgraded = "set_hvac_mode" if capability != "set_temperature" else capability
+                return upgraded, value[key], None
         for inner in value.values():
             if isinstance(inner, (int, float)) and not isinstance(inner, bool):
-                return float(inner), None
+                return capability, float(inner), None
             if isinstance(inner, str):
-                return inner, None
-        return None, None
-    return _coerce_number(value), None
+                return capability, inner, None
+        return capability, None, None
+    return capability, _coerce_number(value), None
 
 
 def _normalize_mode(value: object) -> str | None:
@@ -316,8 +320,10 @@ class CounterfactualPlanner:
             for entry in item.get("actions", [])[:8]:
                 if not isinstance(entry, dict):
                     continue
-                capability = str(entry.get("capability", ""))
-                value, extra_mode = _normalize_action_value(capability, entry.get("value"))
+                capability, value, extra_mode = _normalize_action_value(
+                    str(entry.get("capability", "")),
+                    entry.get("value"),
+                )
                 if value is None:
                     # 模型给了空占位（如 {}）时丢弃该条动作，而不是连坐整个候选。
                     continue
