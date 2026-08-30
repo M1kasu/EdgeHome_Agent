@@ -1525,3 +1525,93 @@ button.home-status-pill { cursor: pointer; }
 .kind-no_action .timeline-msg { color: #1e7d3e; }
 .kind-goal_received .timeline-msg { font-weight: 700; }
 @media (max-width: 960px) { .agent-activity-grid { grid-template-columns: 1fr; } }
+
+
+/* ======== Visual polish v2 (HA demo inspired) ======== */
+body {
+  background:
+    radial-gradient(1200px 500px at 85% -10%, #eef4ee 0%, transparent 60%),
+    radial-gradient(900px 420px at -10% 0%, #edf3f7 0%, transparent 55%),
+    #f4f6f3;
+}
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(220, 226, 218, 0.7);
+}
+.panel,
+.favorites-section,
+.inventory-section,
+.night-safety-panel,
+.agent-activity-panel {
+  border-radius: 18px;
+  border: 1px solid rgba(220, 226, 218, 0.9);
+  box-shadow:
+    0 1px 2px rgba(34, 42, 36, 0.04),
+    0 8px 24px -18px rgba(34, 42, 36, 0.18);
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+.panel:hover {
+  box-shadow:
+    0 2px 4px rgba(34, 42, 36, 0.05),
+    0 14px 34px -18px rgba(34, 42, 36, 0.24);
+}
+.rail {
+  background: linear-gradient(180deg, #14301f 0%, #0f2418 100%);
+}
+.rail-button {
+  border-radius: 12px;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+.rail-button:hover { transform: translateX(2px); }
+.favorite-grid .device-card,
+.device-grid .device-card {
+  border-radius: 16px;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+.favorite-grid .device-card:hover,
+.device-grid .device-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px -16px rgba(34, 42, 36, 0.35);
+}
+.candidate-card.selected {
+  background: linear-gradient(180deg, #f2faf4 0%, #ffffff 100%);
+}
+.source-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.source-tag.llm { background: #e6f4ea; color: #1e7d3e; }
+.source-tag.fallback { background: #fff1d5; color: #a7660b; }
+.candidate-summary { margin: 0; font-size: 12px; color: #4a5568; }
+.model-interpretation-line,
+.llm-contribution-line {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #64748b;
+}
+.agent-activity-panel .panel-heading {
+  border-bottom: 1px solid rgba(220, 226, 218, 0.8);
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+}
+.timeline-row:last-child { border-bottom: none; }
+@keyframes pulseSoft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.plan-status.active {
+  color: #1e7d3e;
+  animation: pulseSoft 2.4s ease-in-out infinite;
+}
