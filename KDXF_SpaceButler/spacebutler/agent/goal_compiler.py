@@ -86,6 +86,9 @@ _CANCEL_WORDS = re.compile(r"不看了|不看电影|取消.{0,4}(任务|目标)|
 class GoalCompiler:
     """Natural language -> CompiledGoal. LLM-first, deterministic template fallback."""
 
+    def __init__(self) -> None:
+        self.last_raw: dict | None = None  # 最后一次模型原始输出（compile 长尾诊断用）
+
     def compile(self, text: str, llm_client: LlmClient | None = None) -> tuple[CompiledGoal | None, str, dict | None]:
         """返回 (goal, planner_mode, semantic_view)。
 
@@ -95,6 +98,7 @@ class GoalCompiler:
         """
         if llm_client is not None and llm_client.available():
             raw = llm_client.chat_json(_GOAL_SYSTEM_PROMPT, text, schema=_GOAL_SCHEMA)
+            self.last_raw = raw if isinstance(raw, dict) else None
             # 语义 retry（max 2 次）：小模型对隐含目标的布尔判定有波动，
             # 用 repair prompt 再确认一次（任务书 max_model_retry=2）。
             if isinstance(raw, dict) and raw.get("is_home_goal") is False and raw.get("constraints") in (None, []):

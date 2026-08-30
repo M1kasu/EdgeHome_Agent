@@ -210,13 +210,24 @@ def main() -> int:
     parser.add_argument("--ablation", choices=["full", "no_model_planner", "no_counterfactual", "no_preference", "no_replanning"], default="full")
     parser.add_argument("--ticks", type=int, default=6, help="每个样本的环境演化 tick 数（每 tick 60s 模拟）")
     parser.add_argument("--out", default="results/agent_benchmark")
+    parser.add_argument("--split", choices=["all", "dev", "test"], default="all", help="dev=前24条（调优用），test=后10条（held-out）")
+    parser.add_argument("--temperature", type=float, default=None, help="覆盖 SPACEBUTLER_LLM_TEMPERATURE")
+    parser.add_argument("--systems", default="scene_baseline,llm_direct_tool,spacebutler_agent", help="逗号分隔要跑的系统")
     args = parser.parse_args()
 
     llm = LlmClient.from_env()
+    if args.temperature is not None and llm is not None:
+        llm = LlmClient(llm.base_url, llm._model, llm._api_key, llm._timeout, args.temperature)
     llm_on = bool(llm and llm.available(force_refresh=True))
-    print(f"LLM available: {llm_on} ({llm.base_url if llm else '-'})")
+    print(f"LLM available: {llm_on} ({llm.base_url if llm else '-'}) temperature={getattr(llm, '_temperature', '-')}")
 
-    utterances = UTTERANCES[: max(1, args.limit)]
+    if args.split == "dev":
+        utterances = UTTERANCES[:24]
+    elif args.split == "test":
+        utterances = UTTERANCES[24:]
+    else:
+        utterances = UTTERANCES[: max(1, args.limit)]
+    selected_systems = [item.strip() for item in args.systems.split(",") if item.strip()]
     systems: dict[str, list[dict[str, object]]] = {
         "scene_baseline": [],
         "llm_direct_tool": [],
@@ -355,8 +366,10 @@ def main() -> int:
         print(f"[{index}/{len(utterances)}] {text[:24]}... done")
 
     # ---- 汇总 ----
-    summary: dict[str, object] = {"ablation": args.ablation, "llm_available": llm_on, "samples": len(utterances), "systems": {}}
+    summary: dict[str, object] = {"ablation": args.ablation, "llm_available": llm_on, "samples": len(utterances), "split": args.split, "temperature": getattr(llm, "_temperature", None), "systems": {}}
     for name, rows in systems.items():
+        if name not in selected_systems:
+            continue
         count = max(1, len(rows))
         summary["systems"][name] = {
             "plan_validity_rate": round(sum(1 for r in rows if r["valid"]) / count, 3),

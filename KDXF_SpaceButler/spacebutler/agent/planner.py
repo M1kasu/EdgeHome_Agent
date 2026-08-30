@@ -292,10 +292,24 @@ class CounterfactualPlanner:
             "请根据以上真实上下文生成 3~5 个思路不同的候选计划。"
         )
         raw = llm_client.chat_json(_PLANNER_SYSTEM_PROMPT, user_prompt, schema=_PLANNER_SCHEMA)
-        if not isinstance(raw, dict) or not isinstance(raw.get("candidates"), list):
+        candidates_raw = raw.get("candidates") if isinstance(raw, dict) else None
+        if not candidates_raw:
+            # 空候选 repair（一次）：把上次失败原因与状态再给模型，要求必须给出候选。
+            repair = llm_client.chat_json(
+                _PLANNER_SYSTEM_PROMPT,
+                (
+                    f"{user_prompt}\n\n你上一次没有生成任何候选"
+                    "（可能误判为目标已满足）。目标约束尚未全部满足，"
+                    "请必须生成 2~3 个候选计划。"
+                ),
+                schema=_PLANNER_SCHEMA,
+            )
+            if isinstance(repair, dict) and isinstance(repair.get("candidates"), list) and repair["candidates"]:
+                candidates_raw = repair["candidates"]
+        if not candidates_raw:
             return []
         results: list[tuple[str, list[dict[str, object]]]] = []
-        for item in raw["candidates"][:_MAX_CANDIDATES]:
+        for item in candidates_raw[:_MAX_CANDIDATES]:
             if not isinstance(item, dict):
                 continue
             actions = []
