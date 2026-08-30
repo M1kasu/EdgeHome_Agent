@@ -1,9 +1,7 @@
 # Known Issues
 
-- 一设备一容器已通过目标设备 SIGKILL、旁路设备在线、独立 SQLite 恢复和动态容器生命周期外部门禁；仍需在更大设备规模下做持续资源与并发压力测试。
-- Fleet Gateway 在本地原型中挂载 Docker Socket；生产环境必须改用 rootless 编排器或受限代理，不能将管理端口暴露到公网。
-- Mosquitto 当前允许匿名访问，尚未真正执行一机一密和设备级 Topic ACL。
-- 自然语言反馈只覆盖节能场景的有限表达。
-- 当前外部边界使用 MQTT 虚拟设备，尚未接入真实品牌设备或毫米波/PIR 人体存在传感器。
-- 当前主机未找到 `Home-Llama-3.2-3B.q4_k_m.gguf`，因此工作台暂用确定性语言降级；主动规则、设备链路和状态回读不依赖该模型。
+- 当前 Windows 主机没有 Docker CLI，无法在本机完成“从 HA 容器访问 Ubuntu 6053–6056”的最终网络验证；须在实际 HA Docker 主机运行 `scripts/check_ha_esphome_network.py`。
+- 当前主机的 `127.0.0.1:12881` 与 `127.0.0.1:8080` 均无模型服务监听，常用目录也未找到 GGUF；自然语言 Agent 因此会安全拒绝执行，不会进入场景脚本 fallback。
+- Ubuntu ESPHome 节点已从 Windows 宿主侧验证 6053–6056 可达，但该结果不能替代 HA 容器网络验证。
+- 热扰动演示依赖 Ubuntu `ac.yaml` 的 `demo_heat_injection` action；实际 Home Assistant service 名可能需要通过 `ESPHOME_HEAT_INJECTION_SERVICE` 覆盖。
 - 团队情况、真实商业数据和现场答辩信息必须由用户提供，不能臆造。

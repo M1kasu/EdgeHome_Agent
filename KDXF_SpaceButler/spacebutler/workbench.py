@@ -1,4 +1,4 @@
-"""Local HTTP workbench backed by the real HA/MQTT SpaceButler stack."""
+"""Local HTTP workbench backed by Home Assistant and real ESPHome entities."""
 
 from __future__ import annotations
 
@@ -9,19 +9,18 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
+import os
 from pathlib import Path
 import threading
 import time
 from typing import Any
-from urllib.error import HTTPError
 from urllib.parse import unquote, urlparse
-from urllib.request import Request, urlopen
 
 from .agent import SpaceButlerAgent
 from .agent.runtime import AgentRuntime
 from .control_context import ControlContextRegistry, ManualControlContext
-from .conversation import ConversationAgent
-from .edge_language import EdgeLanguageRouter, EdgeLlmClient
+from .edge_language import EdgeLanguageRouter
+from .esphome_registry import ESPHOME_ALIAS_REGISTRY, device_record
 from .home_assistant import EnergyEntityMap, HomeAssistantClient, HomeAssistantRuntime, HomeAssistantSpaceAdapter
 from .interaction import InteractionResponse, SpaceButlerSession
 from .memory import HouseholdMemory
@@ -34,14 +33,11 @@ class WorkbenchController:
     def __init__(
         self,
         ha_client: HomeAssistantClient,
-        simulator_url: str,
         memory: HouseholdMemory,
         language_router: EdgeLanguageRouter | None = None,
-        edge_llm_client: EdgeLlmClient | None = None,
         agent_llm_client: object | None = None,
     ) -> None:
         self._ha = ha_client
-        self._simulator_url = simulator_url.rstrip("/")
         self._memory = memory
         self._agent = SpaceButlerAgent(memory)
         self._language_router = language_router
@@ -56,13 +52,6 @@ class WorkbenchController:
         self._unoccupied_minutes = 23
         self._rule_store = ProactiveRuleStore(memory.database_path)
         self._lock = threading.RLock()
-        self._conversation = ConversationAgent(
-            self.devices,
-            self.control_device,
-            self.observe,
-            edge_llm_client,
-            memory.database_path,
-        )
         # 自治智能体运行时：反事实规划 + 偏好学习 + 物理反馈重规划。
         self._agent_runtime = AgentRuntime(
             self.devices,
@@ -82,7 +71,7 @@ class WorkbenchController:
             climate = _source_ha_state(climate_source)
             presence = _source_ha_state(presence_source)
             window = _source_ha_state(contact_source)
-            simulator = _source_record(climate_source)
+            climate_device = _source_record(climate_source)
             feedback = (
                 climate_source.get("feedback")
                 if isinstance(climate_source, dict)
@@ -94,7 +83,7 @@ class WorkbenchController:
                 "climate": climate,
                 "presence": presence,
                 "window": window,
-                "simulator": simulator,
+                "climate_device": climate_device,
                 "feedback": feedback,
                 "proactive": proactive,
                 "night_safety": self.night_safety(),
@@ -426,61 +415,9 @@ class WorkbenchController:
 
     def prepare_night_safety(self, payload: dict[str, object]) -> dict[str, object]:
         with self._lock:
-            night_safety = self.night_safety()
-            path_lights = night_safety["path_lights"]
-            if not isinstance(path_lights, list) or not path_lights:
-                raise ValueError("night safety has no path lights")
-            manual_device_id = str(payload.get("manual_device_id", "")).strip()
-            selected_ids = {str(item.get("device_id")) for item in path_lights}
-            if manual_device_id and manual_device_id not in selected_ids:
-                raise ValueError("manual_device_id must be one of the path lights")
-            illuminance = _bounded_int(payload.get("illuminance", 8), 0, 500, "illuminance")
-            presence = _require_source(night_safety["sources"], "presence")
-            illuminance_sensor = _require_source(night_safety["sources"], "illuminance")
-            self._simulator(
-                "POST",
-                f"/admin/devices/{presence['device_id']}/state",
-                {"occupied": False},
+            raise ValueError(
+                "硬编码传感器模拟已禁用；请通过真实 presence/illuminance ESPHome 实体触发夜间守护"
             )
-            self._simulator(
-                "POST",
-                f"/admin/devices/{illuminance_sensor['device_id']}/state",
-                {"illuminance": illuminance},
-            )
-            self._wait_for(lambda: self._ha.state(str(presence["entity_id"])).get("state") == "off")
-            self._wait_for(
-                lambda: _ha_numeric_state(self._ha.state(str(illuminance_sensor["entity_id"]))) == illuminance
-            )
-            self._night_presence_state = False
-            for device_id in selected_ids:
-                self._control_context.clear_manual(device_id)
-            for light in path_lights:
-                device_id = str(light["device_id"])
-                entity_id = str(light["entity_id"])
-                is_manual = device_id == manual_device_id
-                expected = self._call_device_service(
-                    entity_id,
-                    "light",
-                    {"power": "on", "brightness": 55} if is_manual else {"power": "off"},
-                )
-                self._wait_for(
-                    lambda entity_id=entity_id, expected=expected: _control_matches(
-                        self._ha.state(entity_id),
-                        expected,
-                    )
-                )
-            if manual_device_id:
-                self._control_context.set_manual(
-                    manual_device_id,
-                    source="night_safety_test_takeover",
-                    ttl_seconds=1800,
-                )
-            self._last_night_response = None
-            return {
-                "night_safety": self.night_safety(),
-                "status": self.status(),
-                **self.devices(),
-            }
 
     def run_night_safety(self, payload: dict[str, object] | None = None) -> dict[str, object]:
         with self._lock:
@@ -609,29 +546,12 @@ class WorkbenchController:
 
     def devices(self) -> dict[str, object]:
         with self._lock:
-            simulator_devices = self._simulator("GET", "/devices").get("devices", [])
-            if not isinstance(simulator_devices, list):
-                raise RuntimeError("simulator devices response is invalid")
             ha_states = {
                 str(item.get("entity_id")): item
                 for item in self._ha.states()
                 if isinstance(item.get("entity_id"), str)
             }
-            devices = []
-            for item in simulator_devices:
-                if not isinstance(item, dict):
-                    continue
-                entity_id = str(item.get("entity_id", ""))
-                feedback_entity_id = str(item.get("feedback_entity_id", ""))
-                device = {
-                    **item,
-                    "ha_state": ha_states.get(entity_id),
-                    "feedback": ha_states.get(feedback_entity_id),
-                    "discovered": entity_id in ha_states,
-                }
-                device["ui"] = _device_ui(device)
-                devices.append(device)
-            devices.extend(self._esphome_devices(ha_states, {str(item.get("device_id", "")) for item in devices}))
+            devices = self._esphome_devices(ha_states, set())
             rooms = _room_summaries(devices)
             dashboard = _dashboard_projection(devices, rooms)
             favorite_ids = set(dashboard["favorite_device_ids"])
@@ -682,80 +602,17 @@ class WorkbenchController:
         return devices
 
     def add_device(self, payload: dict[str, object]) -> dict[str, object]:
-        with self._lock:
-            created = self._simulator("POST", "/admin/devices", payload)
-            entity_id = str(created.get("entity_id", ""))
-            self._wait_for(
-                lambda: self._ha_state_available(entity_id),
-                timeout_seconds=25,
-            )
-            return {"created": created, **self.devices()}
+        raise ValueError("模拟设备已禁用；请在 Ubuntu ESPHome 节点中注册真实设备")
 
     def remove_device(self, device_id: str) -> dict[str, object]:
-        with self._lock:
-            if _esphome_record(device_id) is not None:
-                raise ValueError("ESPHome 设备由 deployment/esphome 固件定义，不能从工作台删除")
-            removed = self._simulator("DELETE", f"/admin/devices/{device_id}")
-            return {"removed": removed.get("removed"), **self.devices()}
+        raise ValueError("ESPHome 设备由 Ubuntu 节点固件定义，不能从工作台删除")
 
     def control_device(self, device_id: str, payload: dict[str, object]) -> dict[str, object]:
         with self._lock:
             esphome_entity_id = self._esphome_entity_id(device_id)
             if esphome_entity_id is not None:
                 return self._control_esphome_device(device_id, esphome_entity_id, payload)
-            device = self._simulator("GET", f"/devices/{device_id}")
-            entity_id = str(device.get("entity_id", ""))
-            device_type = str(device.get("type", ""))
-            state_before = device.get("state")
-            was_occupied = (
-                bool(state_before.get("occupied"))
-                if device_type == "presence" and isinstance(state_before, dict)
-                else False
-            )
-            if not entity_id or not bool(device.get("online", False)):
-                raise ValueError("device is not available for control")
-            if device_type in {"presence", "contact", "illuminance"}:
-                reported = self._simulator("POST", f"/admin/devices/{device_id}/state", payload)
-                reported_state = reported.get("state", {})
-                if not isinstance(reported_state, dict):
-                    raise RuntimeError("sensor returned an invalid state")
-                if device_type == "illuminance":
-                    active = False
-                    expected = {"numeric_state": int(reported_state["illuminance"])}
-                else:
-                    active = (
-                        bool(reported_state.get("occupied"))
-                        if device_type == "presence"
-                        else bool(reported_state.get("open"))
-                    )
-                    expected = {"state": "on" if active else "off"}
-            else:
-                active = False
-                expected = self._call_device_service(entity_id, device_type, payload)
-            self._wait_for(
-                lambda: _control_matches(self._ha.state(entity_id), expected),
-                timeout_seconds=12,
-            )
-            if device_type == "light":
-                path_ids = self.night_safety()["config"].get("path_light_device_ids", [])
-                if isinstance(path_ids, list) and device_id in path_ids:
-                    if str(payload.get("power", "")).lower() == "off":
-                        self._control_context.clear_manual(device_id)
-                    elif str(payload.get("power", "")).lower() == "on":
-                        self._control_context.set_manual(device_id, source="direct_device_control")
-            night_response = None
-            if device_type == "presence":
-                night_config = self.night_safety()["config"]
-                if device_id == night_config.get("presence_device_id"):
-                    self._night_presence_state = active
-                    if active and not was_occupied:
-                        night_response = self.run_night_safety()["response"]
-            return {
-                "controlled": device_id,
-                "expected": expected,
-                "night_response": night_response,
-                **self.devices(),
-            }
+            raise ValueError(f"未在 Home Assistant 中发现真实 ESPHome 设备：{device_id}")
 
     def set_device_fault(self, device_id: str, mode: str, delay_ms: int = 0) -> dict[str, object]:
         if mode not in {
@@ -769,15 +626,7 @@ class WorkbenchController:
             "stuck",
         }:
             raise ValueError("unsupported fault mode")
-        if _esphome_record(device_id) is not None:
-            raise ValueError("ESPHome 设备故障由节点容器生命周期决定，不支持故障注入")
-        with self._lock:
-            result = self._simulator(
-                "POST",
-                f"/admin/devices/{device_id}/fault",
-                {"mode": mode, "delay_ms": delay_ms},
-            )
-            return {"fault": result, **self.devices()}
+        raise ValueError("真实 ESPHome 设备不支持模拟故障注入")
 
     def reset_scene(
         self,
@@ -787,51 +636,20 @@ class WorkbenchController:
         window_open: bool = True,
         climate_mode: str = "cool",
     ) -> dict[str, object]:
-        if not 0 <= unoccupied_minutes <= 240:
-            raise ValueError("unoccupied_minutes must be between 0 and 240")
         if climate_mode not in {"off", "cool", "heat"}:
             raise ValueError("climate_mode must be off, cool, or heat")
         with self._lock:
-            proactive = self.proactive()
-            sources = proactive["sources"]
-            presence = _require_source(sources, "presence")
-            contact = _require_source(sources, "contact")
-            climate = _require_source(sources, "climate")
-            self._simulator(
-                "POST",
-                f"/admin/devices/{climate['device_id']}/fault",
-                {"mode": "none", "delay_ms": 0},
-            )
-            self._simulator(
-                "POST",
-                f"/admin/devices/{presence['device_id']}/state",
-                {
-                    "occupied": occupied,
-                    **({"unoccupied_minutes": unoccupied_minutes} if not occupied else {}),
-                },
-            )
-            self._simulator(
-                "POST",
-                f"/admin/devices/{contact['device_id']}/state",
-                {"open": window_open},
-            )
-            self._call_device_service(
-                str(climate["entity_id"]),
-                "climate",
-                {"mode": climate_mode, "temperature": 24},
-            )
-            self._wait_for(
-                lambda: self._ha.state(str(presence["entity_id"])).get("state")
-                == ("on" if occupied else "off")
-            )
-            self._wait_for(
-                lambda: self._ha.state(str(contact["entity_id"])).get("state")
-                == ("on" if window_open else "off")
-            )
-            self._wait_for(
-                lambda: self._ha.state(str(climate["entity_id"])).get("state") == climate_mode
-            )
-            self._unoccupied_minutes = 0 if occupied else unoccupied_minutes
+            # 外部 ESPHome 节点的存在传感器是只读实体；这里只重置可控设备，
+            # 不再通过模拟器伪造 presence/window 状态。
+            for device_id, payload in (
+                ("living_room_main_light", {"power": "on", "brightness": 80}),
+                ("living_room_curtain", {"position": 100}),
+                ("living_room_ac", {"mode": climate_mode, "temperature": 26}),
+            ):
+                entity_id = self._esphome_entity_id(device_id)
+                if entity_id is None:
+                    raise ValueError(f"真实 ESPHome 设备未注册：{device_id}")
+                self._control_esphome_device(device_id, entity_id, payload)
             self._session = self._new_session()
             self._last_response = None
             self._last_night_response = None
@@ -877,13 +695,7 @@ class WorkbenchController:
             return {"response": to_jsonable(self._last_response), "status": self.status()}
 
     def chat(self, text: str) -> dict[str, object]:
-        # 全部文本先经自治智能体的模型目标理解：是家居目标走 Agent 链路
-        # （Goal Reasoner -> Counterfactual Planner -> 执行回读），
-        # 不是目标（或模型不可用且非目标）转回普通对话。
-        agent_result = self._agent_runtime.submit_text(text)
-        if agent_result is not None:
-            return agent_result
-        return self._conversation.submit(text)
+        return self._agent_runtime.submit_text(text)
 
     def agent_status(self) -> dict[str, object]:
         return self._agent_runtime.status()
@@ -913,13 +725,13 @@ class WorkbenchController:
         dependencies_ready = home_assistant == "ok" and all(value == "ok" for value in devices.values())
         runtime_ready = runtime_health.get("status") == "ready"
         if dependencies_ready and runtime_ready:
-            agent_status = "ready" if llm_available else "fallback"
+            agent_status = "ready" if llm_available else "unavailable"
         else:
             agent_status = "degraded"
         agent = {
             **runtime_health,
             "status": agent_status,
-            "mode": "llm" if llm_available else "fallback",
+            "mode": "llm" if llm_available else "unavailable",
         }
         return {
             "workbench": workbench,
@@ -942,22 +754,22 @@ class WorkbenchController:
             raise ValueError("temperature must be between 16 and 40")
         self._ha.call_service(
             "esphome",
-            "spacebutler_living_ac_demo_heat_injection",
+            os.environ.get("ESPHOME_HEAT_INJECTION_SERVICE", "living_room_ac_demo_heat_injection"),
             {"target_temperature": float(temperature)},
         )
         return {"disturbance_sent": {"temperature": float(temperature)}, "status": self.status()}
 
     def chat_history(self) -> dict[str, object]:
-        return self._conversation.history()
+        return self._agent_runtime.history()
 
     def confirm_chat(self) -> dict[str, object]:
-        return self._conversation.confirm()
+        return self._agent_runtime.history()
 
     def cancel_chat(self) -> dict[str, object]:
-        return self._conversation.cancel()
+        return self._agent_runtime.submit_text("取消当前目标")
 
     def clear_chat(self) -> dict[str, object]:
-        return self._conversation.clear()
+        return self._agent_runtime.clear()
 
     def set_fault(self, mode: str, delay_ms: int = 0) -> dict[str, object]:
         if mode not in {
@@ -985,8 +797,7 @@ class WorkbenchController:
             return self.status()
 
     def events(self, limit: int = 30) -> dict[str, object]:
-        capped = min(max(limit, 1), 100)
-        return self._simulator("GET", f"/events?limit={capped}")
+        return {"events": []}
 
     def _device_summary(self) -> dict[str, int]:
         payload = self.devices()
@@ -1107,25 +918,6 @@ class WorkbenchController:
         except RuntimeError:
             return None
 
-    def _simulator(self, method: str, path: str, payload: dict[str, object] | None = None) -> dict[str, Any]:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
-        headers = {"Content-Type": "application/json"} if body is not None else {}
-        request = Request(f"{self._simulator_url}{path}", data=body, headers=headers, method=method)
-        try:
-            with urlopen(request, timeout=15) as response:
-                decoded = json.loads(response.read().decode("utf-8"))
-        except HTTPError as error:
-            detail = error.read().decode("utf-8", errors="replace")
-            try:
-                decoded_error = json.loads(detail)
-            except json.JSONDecodeError:
-                decoded_error = {}
-            message = decoded_error.get("error") if isinstance(decoded_error, dict) else None
-            raise RuntimeError(str(message or f"simulator returned HTTP {error.code}")) from error
-        if not isinstance(decoded, dict):
-            raise RuntimeError("simulator returned a non-object response")
-        return decoded
-
     def _wait_for(self, predicate: Any, timeout_seconds: float = 15) -> None:
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
@@ -1138,52 +930,9 @@ class WorkbenchController:
         raise TimeoutError("workbench scene did not stabilize")
 
 
-# ESPHome Host 设备注册表：按 friendly_name + domain 匹配 HA 实体。
-# entity_id 运行时动态解析（HA 注册表残留旧 MQTT 条目时实体可能带 _2 后缀）。
-# device_id 与被停用的 MQTT 客厅容器保持一致，主动规则、收藏位、夜间看护的
-# 既有绑定无需迁移即落到 ESPHome 设备；传感器实体只读。
-_ESPHOME_DEVICE_REGISTRY: dict[str, dict[str, object]] = {
-    "SpaceButler Living Room Main": {
-        "domain": "light",
-        "device_id": "living_room_main_light",
-        "type": "light",
-        "name": "客厅主灯",
-        "room": "living_room",
-        "capabilities": ["power", "brightness"],
-    },
-    "SpaceButler Living Room Curtain": {
-        "domain": "cover",
-        "device_id": "living_room_curtain",
-        "type": "curtain",
-        "name": "客厅窗帘",
-        "room": "living_room",
-        "capabilities": ["position"],
-    },
-    "SpaceButler Living Room AC": {
-        "domain": "climate",
-        "device_id": "living_room_ac",
-        "type": "climate",
-        "name": "客厅空调",
-        "room": "living_room",
-        "capabilities": ["mode", "temperature"],
-    },
-    "SpaceButler Living Room Presence": {
-        "domain": "binary_sensor",
-        "device_id": "living_room_presence_sensor",
-        "type": "presence",
-        "name": "客厅人体存在传感器",
-        "room": "living_room",
-        "capabilities": [],
-    },
-    "SpaceButler Living Room Temperature": {
-        "domain": "sensor",
-        "device_id": "living_room_temperature_sensor",
-        "type": "temperature",
-        "name": "客厅温度传感器",
-        "room": "living_room",
-        "capabilities": [],
-    },
-}
+# ESPHome 实体按 friendly_name 别名 + domain 匹配；entity_id 始终运行时解析。
+# 注册表来自真实 Ubuntu 四节点，不再与 MQTT 模拟设备合并。
+_ESPHOME_DEVICE_REGISTRY = ESPHOME_ALIAS_REGISTRY
 
 _ESPHOME_ROOM_NAMES = {"living_room": "客厅", "bedroom": "卧室", "home": "全屋"}
 _ESPHOME_READONLY_TYPES = {"presence", "contact", "illuminance", "temperature"}
@@ -1191,10 +940,7 @@ _ESPHOME_READONLY_TYPES = {"presence", "contact", "illuminance", "temperature"}
 
 def _esphome_record(device_id: str) -> dict[str, object] | None:
     """Return the registry record for a merged ESPHome device id, else None."""
-    for record in _ESPHOME_DEVICE_REGISTRY.values():
-        if str(record.get("device_id")) == device_id:
-            return dict(record)
-    return None
+    return device_record(device_id)
 
 
 def _esphome_match(entity_id: str, ha_state: dict[str, object]) -> dict[str, object] | None:

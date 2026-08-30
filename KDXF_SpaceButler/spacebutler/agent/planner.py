@@ -192,7 +192,7 @@ class CounterfactualPlanner:
             return PlanningOutcome(
                 planner_mode="deterministic",
                 no_action=True,
-                reason="Goal already satisfied：当前状态已满足全部目标约束，无需动作。",
+                reason=_satisfied_reason(goal, state),
                 llm_metrics=metrics,
                 llm_rejections=llm_rejections,
             )
@@ -657,7 +657,6 @@ class CounterfactualPlanner:
             "temperature": temperature,
             "curtain_position": state.curtain_position,
         }
-
     def _selection_reason(self, best: CandidatePlan, all_candidates: list[CandidatePlan]) -> str:
         scores = best.scores
         source_text = "模型生成的候选" if best.source == "llm" else "确定性回退候选"
@@ -672,3 +671,23 @@ class CounterfactualPlanner:
             gap = best.scores.total - runner.scores.total
             reason += f" 次优 {runner.label} 综合分低 {gap:.2f}。"
         return reason
+
+
+def _satisfied_reason(goal: CompiledGoal, state: RoomState) -> str:
+    """Describe the observed satisfied state without relying on a scene template."""
+    room_name = {"living_room": "客厅", "bedroom": "卧室", "home": "家中"}.get(goal.room, goal.room)
+    observations: list[str] = []
+    metrics = {constraint.metric for constraint in goal.constraints}
+    if "curtain_position" in metrics and state.curtain_position is not None:
+        observations.append(
+            "窗帘已关闭" if state.curtain_position <= 5 else f"窗帘位置为 {state.curtain_position:g}%"
+        )
+    if "brightness" in metrics and state.brightness_pct is not None:
+        observations.append(f"灯光已为 {state.brightness_pct:g}%")
+    if "temperature" in metrics:
+        if state.ac_mode == "cool" and state.ac_target is not None:
+            observations.append(f"空调正在向 {state.ac_target:g}℃ 制冷")
+        elif state.temperature is not None:
+            observations.append(f"当前温度为 {state.temperature:g}℃")
+    detail = "；".join(observations) or "全部环境约束均已满足"
+    return f"当前{room_name}已经满足“{goal.title}”：{detail}，无需重复调整。"

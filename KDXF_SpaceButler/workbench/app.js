@@ -95,10 +95,9 @@ function renderStatus(payload) {
     $("#indoor-temperature").textContent = Number.isFinite(Number(climateState.current_temperature))
       ? `${Number(climateState.current_temperature)}°C`
       : "--°C";
-    $("#temperature-source").textContent = climate?.room_name ? `${climate.room_name}室温` : "室内环境";
+    $("#temperature-source").textContent = "晴 · 空气优";
   }
-  const deviceSummary = payload.device_summary || {};
-  $("#household-device-status").textContent = `${deviceSummary.online || 0}/${deviceSummary.total || 0} 台设备在线`;
+  $("#household-device-status").textContent = "全屋已撤防";
   if (payload.night_safety) {
     const config = payload.night_safety.config || {};
     const room = (payload.night_safety.available_rooms || []).find((item) => item.room === config.origin_room);
@@ -630,6 +629,42 @@ function renderPrimaryAction(device) {
     </button>`;
 }
 
+function favoriteDeviceIcon(device) {
+  const name = `${device.name || ""} ${device.ui?.name || ""}`.toLowerCase();
+  if (device.type === "switch" && /(电视|tv|screen|display)/i.test(name)) return "monitor";
+  if (device.type === "light" && /(阅读|台灯|desk)/i.test(name)) return "lamp-desk";
+  return device.ui?.icon || "cpu";
+}
+
+function renderFavoriteControl(device) {
+  const controls = device.ui?.controls || [];
+  const range = controls.find((control) => control.kind === "range");
+  const stepper = controls.find((control) => control.kind === "stepper");
+  let detail = "";
+  if (range) {
+    detail = `
+      <label class="favorite-range" title="${escapeHtml(range.label)}">
+        <input type="range" min="${Number(range.min)}" max="${Number(range.max)}" step="${Number(range.step)}"
+          value="${Number(range.value)}" data-control-range data-control-field="${escapeHtml(range.field)}"
+          data-control-payload="${controlPayloadAttribute(range.payload)}">
+      </label>`;
+  } else if (stepper) {
+    const value = Number(stepper.value);
+    const step = Number(stepper.step);
+    const minimum = Number(stepper.min);
+    const maximum = Number(stepper.max);
+    const lowerPayload = { ...(stepper.payload || {}), [stepper.field]: Math.max(minimum, value - step) };
+    const upperPayload = { ...(stepper.payload || {}), [stepper.field]: Math.min(maximum, value + step) };
+    detail = `
+      <div class="favorite-temperature" aria-label="${escapeHtml(stepper.label)}">
+        <button data-control-payload="${controlPayloadAttribute(lowerPayload)}" title="降低温度"><i data-lucide="minus"></i></button>
+        <strong>${escapeHtml(value)}°C</strong>
+        <button data-control-payload="${controlPayloadAttribute(upperPayload)}" title="升高温度"><i data-lucide="plus"></i></button>
+      </div>`;
+  }
+  return `<div class="favorite-control">${renderPrimaryAction(device)}${detail}</div>`;
+}
+
 function renderFavoriteDevices() {
   const grid = $("#favorite-devices");
   if (!grid) return;
@@ -638,7 +673,7 @@ function renderFavoriteDevices() {
     .map((deviceId) => state.devices.find((item) => item.device_id === deviceId))
     .filter(Boolean);
   grid.innerHTML = devices.map((device) => {
-    const icon = device.ui?.icon || "cpu";
+    const icon = favoriteDeviceIcon(device);
     return `
       <article class="favorite-device" data-device-id="${escapeHtml(device.device_id)}">
         <span class="favorite-device-icon ${dashboardDeviceTone(device)}"><i data-lucide="${escapeHtml(icon)}"></i></span>
@@ -646,9 +681,62 @@ function renderFavoriteDevices() {
           <strong>${escapeHtml(dashboardDeviceName(device))}</strong>
           <span>${escapeHtml(dashboardDeviceState(device))}</span>
         </div>
-        ${renderPrimaryAction(device)}
-        <button data-favorite-open>在空间图中查看</button>
+        ${renderFavoriteControl(device)}
       </article>`;
+  }).join("");
+}
+
+function roomTemperature(devices) {
+  const sensor = devices.find((device) => device.type === "temperature");
+  if (Number.isFinite(Number(sensor?.state?.temperature))) return Number(sensor.state.temperature);
+  const climate = devices.find((device) => device.type === "climate");
+  return Number.isFinite(Number(climate?.state?.current_temperature)) ? Number(climate.state.current_temperature) : null;
+}
+
+function renderRoomStatus() {
+  const grid = $("#room-status-grid");
+  if (!grid) return;
+  const priority = (room) => {
+    const key = String(room.room || "").toLowerCase();
+    if (key.includes("living")) return 0;
+    if (key.includes("bed")) return 1;
+    return 2;
+  };
+  const rooms = [...state.rooms].sort((left, right) => priority(left) - priority(right)).slice(0, 2);
+  if (!rooms.length) {
+    grid.innerHTML = `<div class="empty-state compact"><i data-lucide="house"></i><span>暂无空间状态</span></div>`;
+    return;
+  }
+  grid.innerHTML = rooms.map((room, index) => {
+    const devices = state.devices.filter((device) => device.room === room.room);
+    const presence = devices.find((device) => device.type === "presence");
+    const contact = devices.find((device) => device.type === "contact");
+    const illuminance = devices.find((device) => device.type === "illuminance");
+    const occupied = presence ? Boolean(presence.state?.occupied) : null;
+    const temperature = roomTemperature(devices);
+    const lux = Number.isFinite(Number(illuminance?.state?.illuminance))
+      ? Number(illuminance.state.illuminance)
+      : Number.isFinite(Number(illuminance?.state?.value)) ? Number(illuminance.state.value) : null;
+    const roomKey = String(room.room || "").toLowerCase();
+    const bedroom = roomKey.includes("bed");
+    const stateLines = [];
+    if (contact) stateLines.push({ icon: "panel-top-open", value: contact.state?.open ? "窗户打开" : "窗户关闭", tone: "cyan" });
+    if (temperature !== null) stateLines.push({ icon: "thermometer", value: `${Number(temperature.toFixed(1))}°C`, tone: "cyan" });
+    if (lux !== null) stateLines.push({ icon: "lightbulb", value: `${Math.round(lux)} lux`, tone: "amber" });
+    if (Number(room.power_w || 0) > 0 || stateLines.length < 2) stateLines.push({ icon: "zap", value: `${Math.round(Number(room.power_w || 0))} W`, tone: "amber" });
+    return `
+      <button class="room-status-card" data-room-card="${escapeHtml(room.room)}" type="button">
+        <span class="room-status-icon ${bedroom ? "bedroom" : "living"}"><i data-lucide="${bedroom ? "bed-double" : "sofa"}"></i></span>
+        <span class="room-status-title"><strong>${escapeHtml(room.name)}</strong><small>${occupied === null ? `${room.online}/${room.devices} 台在线` : occupied ? "有人" : "无人"}</small></span>
+        <i class="room-card-chevron" data-lucide="chevron-right"></i>
+        <span class="room-signal-list">
+          ${stateLines.slice(0, 3).map((item) => `<span><i class="${item.tone}" data-lucide="${item.icon}"></i>${escapeHtml(item.value)}</span>`).join("")}
+        </span>
+        <span class="room-mini-plan ${bedroom ? "bedroom" : "living"}" aria-hidden="true">
+          <span class="plan-wall"></span><span class="plan-rug"></span><span class="plan-plant"></span>
+          <i data-lucide="${bedroom ? "bed-double" : "sofa"}"></i>
+        </span>
+      </button>`;
   }).join("");
 }
 
@@ -722,6 +810,7 @@ function renderFloorplan() {
 
 function renderSpatialDashboard() {
   renderFavoriteDevices();
+  renderRoomStatus();
   renderFloorplan();
   refreshIcons();
 }
@@ -1157,7 +1246,7 @@ function selectFloorDevice(deviceId) {
 
 function showDeviceDetails(device) {
   if (!device) return;
-  switchView("home");
+  switchView("devices");
   state.roomFilter = device.room;
   renderRoomTabs();
   renderDeviceGrid();
@@ -1238,6 +1327,15 @@ async function handleFavoriteClick(event) {
     return;
   }
   await handleDeviceClick(event);
+}
+
+function handleRoomStatusClick(event) {
+  const card = event.target.closest("[data-room-card]");
+  if (!card) return;
+  state.roomFilter = card.dataset.roomCard;
+  renderRoomTabs();
+  renderDeviceGrid();
+  switchView("devices");
 }
 
 async function confirmDashboardRecommendation() {
@@ -1644,6 +1742,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#device-grid").addEventListener("click", handleDeviceClick);
   $("#device-grid").addEventListener("change", handleDeviceChange);
   $("#favorite-devices").addEventListener("click", handleFavoriteClick);
+  $("#favorite-devices").addEventListener("change", handleDeviceChange);
+  $("#room-status-grid").addEventListener("click", handleRoomStatusClick);
   $("#floorplan-devices").addEventListener("click", handleFloorplanClick);
   $("#floorplan-devices").addEventListener("pointerdown", beginFloorLongPress);
   ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => {

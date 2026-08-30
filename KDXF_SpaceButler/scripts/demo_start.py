@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ha_bootstrap import obtain_token  # noqa: E402
+from spacebutler.esphome_registry import resolve_entity_id  # noqa: E402
 
 RESULTS: list[tuple[str, str, str]] = []
 
@@ -85,25 +86,22 @@ def main() -> int:
             request = Request(f"{args.ha_url.rstrip('/')}/api/states", headers={"Authorization": f"Bearer {token}"})
             with urlopen(request, timeout=15) as response:
                 states = json.loads(response.read().decode())
-            by_friendly = {
-                str(item.get("attributes", {}).get("friendly_name", "")): str(item.get("state"))
-                for item in states
-                if isinstance(item, dict)
-            }
             expected = {
-                "light": "SpaceButler Living Room Main",
-                "curtain": "SpaceButler Living Room Curtain",
-                "climate": "SpaceButler Living Room AC",
-                "temperature": "SpaceButler Living Room Temperature",
-                "presence": "SpaceButler Living Room Presence",
+                "light": "living_room_main_light",
+                "curtain": "living_room_curtain",
+                "climate": "living_room_ac",
+                "temperature": "living_room_temperature_sensor",
+                "presence": "living_room_presence_sensor",
             }
             all_ok = True
-            for name, friendly in expected.items():
-                value = by_friendly.get(friendly, "missing")
+            by_entity = {str(item.get("entity_id", "")): item for item in states if isinstance(item, dict)}
+            for name, device_id in expected.items():
+                entity_id = resolve_entity_id(states, device_id)
+                value = str(by_entity.get(entity_id, {}).get("state", "missing"))
                 ok = value not in {"missing", "unknown", "unavailable"}
                 devices_ok[name] = "ok" if ok else value
                 all_ok = all_ok and ok
-                check(f"ESPHome {name}", ok, f"{friendly} = {value}；检查容器: docker ps --filter name=spacebutler-esphome")
+                check(f"ESPHome {name}", ok, f"{entity_id} = {value}；检查 Ubuntu 上对应的 *-node 容器")
             esphome_ok = all_ok
         except (OSError, RuntimeError) as error:
             print(f"  [FAIL] ESPHome states — {error}")
@@ -114,7 +112,7 @@ def main() -> int:
     check(
         "LLM model chain",
         llm_ok,
-        "当前 Workbench 未连接可用模型——Agent 只能以 fallback 模式演示，不是 Full AI Ready",
+        "当前 Workbench 未连接可用模型——自然语言 Agent 会安全拒绝执行，请先启动本地模型",
     )
 
     # 5. Agent

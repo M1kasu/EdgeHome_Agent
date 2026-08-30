@@ -109,16 +109,10 @@ class GoalCompilerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.compiler = GoalCompiler()
 
-    def test_movie_text_compiles_multi_constraints_via_fallback(self) -> None:
+    def test_movie_text_is_not_executed_without_a_model(self) -> None:
         goal, mode, _semantic = self.compiler.compile("我准备在客厅看会电影，有点热，灯别太亮。")
-        self.assertEqual(mode, "fallback")
-        self.assertIsNotNone(goal)
-        assert goal is not None
-        self.assertEqual(goal.activity, "watch_content")
-        metrics = {item.metric for item in goal.constraints}
-        self.assertIn("brightness", metrics)
-        self.assertIn("temperature", metrics)
-        self.assertIn("curtain_position", metrics)
+        self.assertEqual(mode, "unavailable")
+        self.assertIsNone(goal)
 
     def test_llm_semantic_goal_drives_compilation(self) -> None:
         llm = FakeLlm(
@@ -148,7 +142,18 @@ class GoalCompilerTests(unittest.TestCase):
         self.assertEqual(mode, "llm")
 
     def test_not_too_bright_is_interval_not_fixed_value(self) -> None:
-        goal, _mode, _semantic = self.compiler.compile("我要看电影，灯别太亮")
+        llm = FakeLlm(
+            {
+                "is_home_goal": True,
+                "location": "living_room",
+                "intent_summary": "柔和观影光线",
+                "activity": "watch_content",
+                "constraints": [
+                    {"dimension": "lighting", "target_range": [20, 45], "reason": "灯别太亮"}
+                ],
+            }
+        )
+        goal, _mode, _semantic = self.compiler.compile("我要看电影，灯别太亮", llm)
         assert goal is not None
         brightness = next(item for item in goal.constraints if item.metric == "brightness")
         self.assertIsNotNone(brightness.lower)
@@ -156,18 +161,28 @@ class GoalCompilerTests(unittest.TestCase):
         self.assertGreater(brightness.upper, brightness.lower)
 
     def test_avoid_complete_darkness_sets_lower_bound(self) -> None:
-        goal, _mode, _semantic = self.compiler.compile("看电影，但是别弄得完全黑")
+        llm = FakeLlm(
+            {
+                "is_home_goal": True,
+                "location": "living_room",
+                "intent_summary": "观影但保留环境光",
+                "activity": "watch_content",
+                "constraints": [
+                    {"dimension": "lighting", "target_range": [10, 40], "reason": "不要完全黑"}
+                ],
+            }
+        )
+        goal, _mode, _semantic = self.compiler.compile("看电影，但是别弄得完全黑", llm)
         assert goal is not None
         brightness = next(item for item in goal.constraints if item.metric == "brightness")
         self.assertIsNotNone(brightness.lower)
         self.assertGreaterEqual(brightness.lower, 10)
 
-    def test_llm_malformed_output_falls_back(self) -> None:
+    def test_llm_malformed_output_is_not_replaced_by_a_scene_template(self) -> None:
         llm = FakeLlm({"unexpected": "shape"})
         goal, mode, _semantic = self.compiler.compile("我想看电影", llm)
-        self.assertEqual(mode, "fallback")
-        assert goal is not None
-        self.assertTrue(goal.constraints)
+        self.assertEqual(mode, "invalid")
+        self.assertIsNone(goal)
 
     def test_llm_out_of_range_values_clamped(self) -> None:
         llm = FakeLlm(
@@ -220,7 +235,7 @@ class PlannerTests(unittest.TestCase):
         state = demo_state(brightness_pct=30.0, curtain_position=0.0, ac_mode="cool", ac_target=26.0, temperature=26.0)
         outcome = self.planner.plan(self.movie_goal(), state, self.registry)
         self.assertTrue(outcome.no_action)
-        self.assertIn("satisfied", outcome.reason)
+        self.assertIn("无需重复调整", outcome.reason)
 
     def test_different_states_yield_different_selected_plans(self) -> None:
         outcome_hot = self.planner.plan(self.movie_goal(), demo_state(), self.registry)
@@ -549,20 +564,31 @@ class RuntimeFallbackTests(unittest.TestCase):
         runtime._world.update_state(provider()["devices"])
         return runtime
 
-    def test_llm_unavailable_does_not_crash_and_reports_fallback(self) -> None:
+    def test_llm_unavailable_does_not_send_device_commands(self) -> None:
         runtime = self._runtime(FakeLlm(fail=True))
         history = runtime.submit_text("我准备在客厅看会电影，有点热，灯别太亮。")
         self.assertEqual(runtime._world.planner_mode(), "fallback")
-        self.assertTrue(history["messages"][-1]["content"])
+        self.assertIn("未向任何设备发送命令", history["messages"][-1]["content"])
 
-    def test_malformed_llm_json_falls_back(self) -> None:
+    def test_malformed_llm_json_does_not_activate_a_goal(self) -> None:
         runtime = self._runtime(FakeLlm({"bogus": 1}))
         history = runtime.submit_text("我准备在客厅看会电影，有点热，灯别太亮。")
-        self.assertEqual(runtime._world.planner_mode(), "fallback")
-        self.assertTrue(history["messages"])
+        self.assertIn("未向任何设备发送命令", history["messages"][-1]["content"])
+        goal, _status = runtime._world.active_goal()
+        self.assertIsNone(goal)
 
     def test_cancel_ends_active_goal(self) -> None:
-        runtime = self._runtime(None)
+        runtime = self._runtime(
+            FakeLlm(
+                {
+                    "is_home_goal": True,
+                    "location": "living_room",
+                    "intent_summary": "准备观影",
+                    "activity": "watch_content",
+                    "constraints": [{"dimension": "lighting", "target_range": [20, 45]}],
+                }
+            )
+        )
         runtime.submit_text("我准备在客厅看会电影")
         history = runtime.submit_text("不看了")
         self.assertIn("已结束", history["messages"][-1]["content"])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+from spacebutler.esphome_registry import esphome_nodes
 
 
 def wait_until_ready(base_url: str, timeout_seconds: float = 120) -> None:
@@ -140,39 +143,38 @@ def configure_mqtt(base_url: str, token: str, broker: str = "spacebutler-mqtt", 
     raise RuntimeError(f"MQTT config entry was not created: {completed}")
 
 
-# ESPHome Host 节点：容器服务名 + Native API 端口。Home Assistant 与节点同网络，
-# Host 平台无 mDNS，必须手动（配置流）接入。
-ESPHOME_NODES: tuple[tuple[str, str, int], ...] = (
-    ("spacebutler-esphome-light", "spacebutler-esphome-light", 6053),
-    ("spacebutler-esphome-curtain", "spacebutler-esphome-curtain", 6053),
-    ("spacebutler-esphome-ac", "spacebutler-esphome-ac", 6053),
-    ("spacebutler-esphome-presence", "spacebutler-esphome-presence", 6053),
-)
+# Host 平台无 mDNS，必须手工配置 Ubuntu VM 地址及各自映射端口。
+ESPHOME_NODES: tuple[tuple[str, str, int], ...] = esphome_nodes()
 
 
-def ensure_esphome_secrets(secrets_path: Path) -> str:
-    """Return the Native API encryption key, generating secrets.yaml on first run."""
-    if secrets_path.exists():
-        for line in secrets_path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("api_key:"):
-                key = stripped.split(":", 1)[1].strip().strip('"').strip("'")
-                if key:
-                    return key
-        raise RuntimeError(f"secrets file has no api_key: {secrets_path}")
-    key = base64.b64encode(secrets.token_bytes(32)).decode("ascii")
-    secrets_path.write_text(
-        '# Local-only ESPHome Native API encryption key. This file is gitignored.\n'
-        f'api_key: "{key}"\n',
-        encoding="utf-8",
-    )
+def require_esphome_noise_psk() -> str:
+    """Read and validate the existing Ubuntu ESPHome Noise PSK.
+
+    A missing key is a hard startup error. Generating a replacement here would
+    make Home Assistant use a key that does not match the already-running nodes.
+    """
+    key = (
+        os.environ.get("ESPHOME_NOISE_PSK")
+        or os.environ.get("SPACEBUTLER_ESPHOME_NOISE_PSK")
+        or ""
+    ).strip()
+    if not key:
+        raise RuntimeError(
+            "ESPHOME_NOISE_PSK is required; copy the existing value from the Ubuntu ESPHome secrets.yaml"
+        )
+    try:
+        decoded = base64.b64decode(key, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise RuntimeError("ESPHOME_NOISE_PSK must be valid Base64") from error
+    if len(decoded) != 32:
+        raise RuntimeError("ESPHOME_NOISE_PSK must decode to exactly 32 bytes")
     return key
 
 
 def configure_esphome(base_url: str, token: str, noise_psk: str) -> list[dict[str, Any]]:
     """Create the four ESPHome config entries through the official config flow."""
     results: list[dict[str, Any]] = []
-    for _, host, port in ESPHOME_NODES:
+    for role, host, port in esphome_nodes():
         flow = request_json(
             "POST",
             f"{base_url.rstrip('/')}/api/config/config_entries/flow",
@@ -180,7 +182,9 @@ def configure_esphome(base_url: str, token: str, noise_psk: str) -> list[dict[st
             token,
         )
         if isinstance(flow, dict) and flow.get("type") == "abort":
-            results.append({"host": host, "action": "already_configured", "reason": flow.get("reason")})
+            results.append(
+                {"role": role, "host": host, "port": port, "action": "already_configured", "reason": flow.get("reason")}
+            )
             continue
         if not isinstance(flow, dict) or flow.get("type") != "form" or not isinstance(flow.get("flow_id"), str):
             raise RuntimeError(f"unexpected ESPHome flow response for {host}: {flow}")
@@ -202,9 +206,11 @@ def configure_esphome(base_url: str, token: str, noise_psk: str) -> list[dict[st
                 token,
             )
         if isinstance(connection, dict) and connection.get("type") == "create_entry":
-            results.append({"host": host, "action": "created", "title": connection.get("title")})
+            results.append({"role": role, "host": host, "port": port, "action": "created", "title": connection.get("title")})
         elif isinstance(connection, dict) and connection.get("type") == "abort":
-            results.append({"host": host, "action": "already_configured", "reason": connection.get("reason")})
+            results.append(
+                {"role": role, "host": host, "port": port, "action": "already_configured", "reason": connection.get("reason")}
+            )
         else:
             raise RuntimeError(f"ESPHome config entry was not created for {host}: {connection}")
     return results

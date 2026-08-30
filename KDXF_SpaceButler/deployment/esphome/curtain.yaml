@@ -1,6 +1,6 @@
 esphome:
-  name: spacebutler-living-curtain
-  friendly_name: SpaceButler Living Room
+  name: living-room-curtain
+  friendly_name: Living Room
   on_boot:
     priority: -100
     then:

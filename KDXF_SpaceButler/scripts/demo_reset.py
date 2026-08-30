@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -22,14 +21,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ha_bootstrap import obtain_token, wait_until_ready  # noqa: E402
+from spacebutler.esphome_registry import resolve_entity_id  # noqa: E402
 from urllib.request import Request, urlopen  # noqa: E402
-
-ESPHOME_SERVICES = (
-    "spacebutler-esphome-light",
-    "spacebutler-esphome-curtain",
-    "spacebutler-esphome-ac",
-    "spacebutler-esphome-presence",
-)
 
 
 def call_service(base_url: str, token: str, domain: str, service: str, data: dict[str, object]) -> None:
@@ -63,46 +56,31 @@ def wait_entity(base_url: str, token: str, entity_id: str, predicate, timeout_se
     raise TimeoutError(f"{entity_id} did not reach the expected state")
 
 
-def resolve_entity(base_url: str, token: str, friendly_name: str, domain: str) -> str:
-    """按 friendly_name + domain 解析实体 ID（注册表残留旧条目时可能带 _2 后缀）。"""
+def load_states(base_url: str, token: str) -> list[dict[str, object]]:
     request = Request(
         f"{base_url.rstrip('/')}/api/states",
         headers={"Authorization": f"Bearer {token}"},
     )
     with urlopen(request, timeout=15) as response:
         states = json.loads(response.read().decode("utf-8"))
-    for item in states:
-        entity_id = str(item.get("entity_id", ""))
-        attributes = item.get("attributes") or {}
-        if (
-            entity_id.startswith(f"{domain}.")
-            and str(attributes.get("friendly_name", "")) == friendly_name
-        ):
-            return entity_id
-    raise RuntimeError(f"entity not found for {domain} '{friendly_name}'")
+    if not isinstance(states, list):
+        raise RuntimeError("Home Assistant returned an invalid state list")
+    return [item for item in states if isinstance(item, dict)]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ha-url", default="http://127.0.0.1:12900")
-    parser.add_argument("--skip-container-restart", action="store_true")
     args = parser.parse_args()
     auth_store = ROOT / "deployment" / "homeassistant" / ".storage" / "auth"
 
     wait_until_ready(args.ha_url, timeout_seconds=120)
     token = obtain_token(args.ha_url, auth_store)
 
-    if not args.skip_container_restart:
-        subprocess.run(
-            ["docker", "compose", "-f", str(ROOT / "deployment" / "docker-compose.yml"), "restart", *ESPHOME_SERVICES],
-            check=False,
-            capture_output=True,
-        )
-        time.sleep(20)
-
-    light = resolve_entity(args.ha_url, token, "SpaceButler Living Room Main", "light")
-    curtain = resolve_entity(args.ha_url, token, "SpaceButler Living Room Curtain", "cover")
-    climate = resolve_entity(args.ha_url, token, "SpaceButler Living Room AC", "climate")
+    states = load_states(args.ha_url, token)
+    light = resolve_entity_id(states, "living_room_main_light")
+    curtain = resolve_entity_id(states, "living_room_curtain")
+    climate = resolve_entity_id(states, "living_room_ac")
 
     call_service(args.ha_url, token, "light", "turn_on", {"entity_id": light, "brightness_pct": 80})
     call_service(args.ha_url, token, "cover", "set_cover_position", {"entity_id": curtain, "position": 100})

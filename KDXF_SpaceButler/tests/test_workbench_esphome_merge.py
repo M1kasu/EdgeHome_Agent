@@ -110,7 +110,7 @@ class EsphomeInventoryMergeTests(unittest.TestCase):
             "binary_sensor.spacebutler_living_room_presence",
         )
 
-    def test_fleet_record_wins_when_legacy_container_is_online(self) -> None:
+    def test_legacy_simulator_records_are_ignored(self) -> None:
         states = _esphome_ha_states()
         states["light.spacebutler_bedroom_reading_light"] = _ha_state("off")
         controller = _controller(states)
@@ -128,7 +128,8 @@ class EsphomeInventoryMergeTests(unittest.TestCase):
             }
         )
         by_id = {str(item["device_id"]): item for item in controller.devices()["devices"]}
-        self.assertEqual(str(by_id["living_room_main_light"]["name"]), "客厅主灯(MQTT)")
+        self.assertEqual(str(by_id["living_room_main_light"]["name"]), "客厅主灯")
+        self.assertEqual(str(by_id["living_room_main_light"]["source"]), "esphome")
 
     def test_readonly_sensor_control_is_rejected(self) -> None:
         controller = _controller(_esphome_ha_states())

@@ -1,162 +1,72 @@
 # SpaceButler 使用指南
 
-## 1. 环境要求
+详细安装与排障见 [SETUP.md](SETUP.md)。本页只保留日常操作。
 
-- Windows 10/11 与 PowerShell 7；核心 Python 代码也可在 Linux/macOS 运行。
-- Python 3.11 或更高版本。
-- Docker Desktop，使用 Linux containers。
-- 可选：Node.js，用于运行前端 JavaScript 语法检查。
-- 可选：兼容 llama.cpp 的 GGUF 模型。没有模型时系统自动使用确定性语言降级。
-
-## 2. 安装依赖
-
-在项目根目录执行：
+## 启动
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
-Copy-Item .env.example deployment\.env
+cd KDXF_SpaceButler
+$python = 'E:\Anaconda\envs\Agent-Hub\python.exe'
+$env:ESPHOME_HOST = '192.168.111.134'
+$env:ESPHOME_NOISE_PSK = '<Ubuntu 正在使用的现有密钥>'
+$env:SPACEBUTLER_LLM_BASE_URL = 'http://127.0.0.1:12881'
+
+docker compose -f deployment\docker-compose.yml up -d spacebutler-home-assistant
+& $python scripts\check_ha_esphome_network.py
+& $python scripts\run_workbench.py --port 8765
 ```
 
-`deployment/.env` 用于覆盖 Docker 宿主端口和模型目录，不应提交到 Git。
+访问：
 
-## 3. 启动服务
-
-先启动 MQTT、九个独立设备运行时、Fleet Gateway 和 Home Assistant：
-
-```powershell
-docker compose -f deployment\docker-compose.yml up -d --build
-docker compose -f deployment\docker-compose.yml ps
-```
-
-再启动工作台：
-
-```powershell
-python scripts\run_workbench.py --port 8765
-```
-
-首次运行时，脚本会等待 Home Assistant 就绪、完成本地 onboarding、获取 Token，并幂等配置 MQTT。浏览器访问：
-
-- SpaceButler：`http://127.0.0.1:8765`
+- Workbench：`http://127.0.0.1:8765`
 - Home Assistant：`http://127.0.0.1:12900`
 
-默认宿主端口：
+不要为正式运行添加 `--profile local-esphome` 或 `--profile legacy-simulator`，否则可能制造重复设备。
 
-| 环节 | 端口 | 环境变量 |
-| --- | ---: | --- |
-| MQTT | `18884` | `SPACEBUTLER_MQTT_PORT` |
-| 设备 Fleet Gateway | `12891` | `SPACEBUTLER_SIMULATOR_PORT` |
-| Home Assistant | `12900` | `SPACEBUTLER_HA_PORT` |
-| llama.cpp | `12881` | `SPACEBUTLER_MODEL_PORT` |
-| 工作台 | `8765` | 命令行参数 `--port` |
+## 对话 Agent
 
-## 4. 启用边缘模型
+正式对话入口由 LangGraph 编排：
 
-将 `Home-Llama-3.2-3B.q4_k_m.gguf` 放到 `deployment/models/`，然后执行：
-
-```powershell
-docker compose -f deployment\docker-compose.yml --profile edge-llm up -d spacebutler-edge-llm
+```text
+observe → understand → activate → plan → execute → verify → respond
 ```
 
-也可在 `deployment/.env` 中指定外部目录：
+它不是“场景名映射固定脚本”。每次输入都会重新读取 HA 状态：
 
-```dotenv
-SPACEBUTLER_MODELS_DIR=E:/models
-SPACEBUTLER_MODEL_PATH=/models/Home-Llama-3.2-3B.q4_k_m.gguf
-```
+1. 第一次说“我准备在客厅看会电影，有点热，灯别太亮。”时，当前状态若不满足目标，会规划窗帘、灯和空调动作。
+2. 立即再问“现在适合看电影了吗？”或重复原请求时，若状态已满足，Agent 返回 `NO ACTION`，不会重复下发命令。
+3. 模型不可用或结构化语义输出失败时，Agent 返回不可用说明并保持零设备命令。
 
-模型不可用时，AI 管家顶部会显示“确定性降级”。此状态不会关闭主动规则、设备控制或 HA/MQTT 回读。
-
-## 5. 体验夜间安全路径
-
-1. 打开“主动服务”，找到“老人夜间起身安全路径”。
-2. 选择起身空间、人体存在传感器和照度传感器。
-3. 勾选 1 至 6 盏路径灯；勾选顺序就是执行顺序。
-4. 设置路径亮度和触发照度，点击“保存路径”。
-5. 在“保持手动点亮”中选择一盏灯，点击“准备状态”。系统会写入测试照度，并为该灯建立 30 分钟人工接管上下文。
-6. 点击“模拟起身”。页面应显示动作数、执行状态以及 HA 回读 `PASS`。
-
-规则运行时只接受人体存在实体的 `off -> on` 上升沿。环境照度高于阈值时不补光；人工接管、受保护、离线或不可用灯具保持不变。真实传感器通过同一 HA 实体上报后，无需点击模拟按钮也会自动触发。
-
-## 6. 设备与故障测试
-
-- “空间与设备”可新增灯光、开关、空调、窗帘、人体存在、门窗和照度传感器。
-- 每个设备卡右上角的容器图标可查看专属运行时容器名；新增设备会创建新的受限容器，而不是加入已有进程。
-- 新设备通过 MQTT Discovery 自动注册到 Home Assistant。
-- 设备卡片可注入离线、拒绝、延迟、ACK 不变和无效状态等故障。
-- “执行事件”显示设备事件和协议反馈，用于核对是否真实到达目标状态。
-
-查看设备容器与聚合状态：
+## Demo 脚本
 
 ```powershell
-docker compose -f deployment\docker-compose.yml ps
-Invoke-RestMethod http://127.0.0.1:12891/health
-Invoke-RestMethod http://127.0.0.1:12891/devices
+& $python scripts\demo_start.py
+& $python scripts\demo_reset.py
+& $python scripts\demo_disturbance.py --temperature 31
+& $python scripts\demo_status.py
 ```
 
-验证单设备故障隔离：
+`demo_reset.py` 和 `demo_start.py` 使用稳定实体 ID 加名称别名解析，不再依赖旧 `SpaceButler Living Room ...` 固定名称。热扰动 action 可通过 `ESPHOME_HEAT_INJECTION_SERVICE` 覆盖。
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `ESPHOME_HOST` | `192.168.111.134` | Ubuntu ESPHome 主机 |
+| `ESPHOME_NOISE_PSK` | 无，必填 | 已有 32-byte Base64 Noise PSK |
+| `SPACEBUTLER_HA_URL` | `http://127.0.0.1:12900` | HA REST 地址 |
+| `SPACEBUTLER_LLM_BASE_URL` | 自动探测本机服务 | OpenAI-compatible 模型地址 |
+| `SPACEBUTLER_LLM_MODEL` | 空 | 可选模型名 |
+| `SPACEBUTLER_LLM_API_KEY` | 空 | 可选 API key |
+| `SPACEBUTLER_LLM_TIMEOUT` | `40` | 单次模型调用超时；7B CPU 可设 `240` |
+| `ESPHOME_HEAT_INJECTION_SERVICE` | `living_room_ac_demo_heat_injection` | ESPHome 热扰动 action 名 |
+
+## 验证
 
 ```powershell
-docker compose -f deployment\docker-compose.yml stop spacebutler-device-bedroom-illuminance
-Invoke-RestMethod http://127.0.0.1:12891/devices
-docker compose -f deployment\docker-compose.yml start spacebutler-device-bedroom-illuminance
-```
-
-停止照度容器后，照度实体会不可用，灯光和人体存在设备仍保持在线。规则会因为输入不完整而停止执行，不会使用陈旧照度补光。
-
-本地原型的 Fleet Gateway 挂载 Docker Socket 来创建动态设备容器。不要把 `12891` 暴露到公网；生产环境应改用 rootless 编排器或受限的远程编排 API，并为 MQTT 开启 TLS 和设备 ACL。完整设计见 [一设备一容器架构](DEVICE_CONTAINER_ARCHITECTURE.md)。
-
-## 7. 验证
-
-本地回归：
-
-```powershell
-python -m pytest tests -q
-python -m ruff check .
+& $python -m pytest -q
+& $python -m ruff check .
 node --check workbench\app.js
-python scripts\run_iteration.py
 ```
 
-完整 Docker 外部门禁需要 GGUF 模型：
-
-```powershell
-python scripts\run_external_acceptance.py
-```
-
-报告分别写入 `reports/iterations/` 和 `reports/external/`。
-
-## 8. 常见问题
-
-### Docker 提示端口不可用
-
-编辑 `deployment/.env`，把冲突端口改为未占用的高位端口。若同时手工运行验收脚本，需要设置对应 URL，例如：
-
-```powershell
-$env:SPACEBUTLER_HA_URL = "http://127.0.0.1:13900"
-$env:SPACEBUTLER_SIMULATOR_URL = "http://127.0.0.1:13891"
-```
-
-### 页面显示“来源不完整”
-
-先检查容器状态，再等待 MQTT Discovery 完成：
-
-```powershell
-docker compose -f deployment\docker-compose.yml ps
-Invoke-RestMethod http://127.0.0.1:12891/health
-```
-
-确认人体存在和照度传感器与“起身空间”在同一房间，然后重新保存路径。
-
-### 页面显示“监听异常”
-
-确认 Home Assistant、Fleet Gateway 和目标设备容器均可访问。工作台后台监听会在短暂故障后继续重试，不需要重建规则。
-
-### 停止服务
-
-先结束工作台进程，再停止容器：
-
-```powershell
-docker compose -f deployment\docker-compose.yml down
-```
+网络验证必须从 HA 容器执行 `scripts/check_ha_esphome_network.py`；宿主机端口可达不能替代这一步。

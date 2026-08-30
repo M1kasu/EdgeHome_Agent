@@ -15,9 +15,8 @@ if str(ROOT) not in sys.path:
 
 from ha_bootstrap import (  # noqa: E402
     configure_esphome,
-    configure_mqtt,
-    ensure_esphome_secrets,
     obtain_token,
+    require_esphome_noise_psk,
     wait_until_ready,
 )
 from spacebutler import EdgeLanguageRouter, EdgeLlmClient, HomeAssistantClient, HouseholdMemory  # noqa: E402
@@ -46,14 +45,11 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     ha_url = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:12900")
-    simulator_url = os.getenv("SPACEBUTLER_SIMULATOR_URL", "http://127.0.0.1:12891")
     edge_llm_url = os.getenv("EDGE_LLM_URL", "http://127.0.0.1:12881")
     auth_store = ROOT / "deployment" / "homeassistant" / ".storage" / "auth"
-    # secrets 必须在 ESPHome 容器首次编译前存在；容器崩溃循环中生成后会自动恢复。
-    noise_psk = ensure_esphome_secrets(ROOT / "deployment" / "esphome" / "secrets.yaml")
+    noise_psk = require_esphome_noise_psk()
     wait_until_ready(ha_url, timeout_seconds=120)
     token = obtain_token(ha_url, auth_store)
-    configure_mqtt(ha_url, token)
     configure_esphome_with_retry(ha_url, token, noise_psk)
     language_router = None
     edge_llm_client = None
@@ -70,10 +66,8 @@ def main() -> int:
             token,
             token_refresher=lambda: obtain_token(ha_url, auth_store),
         ),
-        simulator_url,
         HouseholdMemory(ROOT / "deployment" / "runtime" / "agent" / "household_memory.db"),
         language_router,
-        edge_llm_client,
         LlmClient.from_env(),
     )
     server = serve_workbench(controller, ROOT / "workbench", args.host, args.port)

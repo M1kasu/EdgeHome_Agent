@@ -10,6 +10,7 @@ x-device-environment: &device-environment
 
 x-device-runtime: &device-runtime
   image: spacebutler-device-runtime:local
+  profiles: ["legacy-simulator"]
   pull_policy: never
   depends_on:
     - spacebutler-mqtt
@@ -31,6 +32,7 @@ x-device-runtime: &device-runtime
 services:
   spacebutler-mqtt:
     image: eclipse-mosquitto:2
+    profiles: ["legacy-simulator"]
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./runtime/mosquitto/data:/mosquitto/data
@@ -62,7 +64,7 @@ services:
 
   spacebutler-device-living-room-main-light:
     <<: *device-runtime
-    profiles: ["legacy-mqtt-living"]
+    profiles: ["legacy-simulator"]
     environment:
       <<: *device-environment
       DEVICE_ID: living_room_main_light
@@ -80,7 +82,7 @@ services:
 
   spacebutler-device-living-room-curtain:
     <<: *device-runtime
-    profiles: ["legacy-mqtt-living"]
+    profiles: ["legacy-simulator"]
     environment:
       <<: *device-environment
       DEVICE_ID: living_room_curtain
@@ -98,7 +100,7 @@ services:
 
   spacebutler-device-living-room-ac:
     <<: *device-runtime
-    profiles: ["legacy-mqtt-living"]
+    profiles: ["legacy-simulator"]
     environment:
       <<: *device-environment
       DEVICE_ID: living_room_ac
@@ -116,7 +118,7 @@ services:
 
   spacebutler-device-living-room-presence:
     <<: *device-runtime
-    profiles: ["legacy-mqtt-living"]
+    profiles: ["legacy-simulator"]
     environment:
       <<: *device-environment
       DEVICE_ID: living_room_presence_sensor
@@ -202,6 +204,7 @@ services:
 
   spacebutler-device-simulator:
     image: spacebutler-device-runtime:local
+    profiles: ["legacy-simulator"]
     pull_policy: never
     command: ["python", "-m", "spacebutler_simulator.fleet_gateway"]
     depends_on:
@@ -237,13 +240,7 @@ services:
 
   spacebutler-home-assistant:
     image: ghcr.io/home-assistant/home-assistant:stable
-    depends_on:
-      - spacebutler-mqtt
-      - spacebutler-device-simulator
-      - spacebutler-esphome-light
-      - spacebutler-esphome-curtain
-      - spacebutler-esphome-ac
-      - spacebutler-esphome-presence
+    container_name: spacebutler-home-assistant
     environment:
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
@@ -258,6 +255,7 @@ services:
   # 健康检查探测 Native API 端口 6053（Dashboard 是 6052）；/cache 缓存编译工具链。
   spacebutler-esphome-light:
     image: ghcr.io/esphome/esphome:2026.8.1
+    profiles: ["local-esphome"]
     init: true
     command: ["run", "/config/light.yaml"]
     volumes:
@@ -275,6 +273,7 @@ services:
 
   spacebutler-esphome-curtain:
     image: ghcr.io/esphome/esphome:2026.8.1
+    profiles: ["local-esphome"]
     init: true
     command: ["run", "/config/curtain.yaml"]
     volumes:
@@ -292,6 +291,7 @@ services:
 
   spacebutler-esphome-ac:
     image: ghcr.io/esphome/esphome:2026.8.1
+    profiles: ["local-esphome"]
     init: true
     command: ["run", "/config/ac.yaml"]
     volumes:
@@ -309,6 +309,7 @@ services:
 
   spacebutler-esphome-presence:
     image: ghcr.io/esphome/esphome:2026.8.1
+    profiles: ["local-esphome"]
     init: true
     command: ["run", "/config/presence.yaml"]
     volumes:

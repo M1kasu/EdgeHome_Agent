@@ -8,7 +8,7 @@ Chat 是入口，不是主循环：
       -> Goal Evaluator -> 偏离确认（debounce/cooldown）-> Replanning
 
 LLM 参与 Goal 编译与候选生成；评分、边界与安全全部是确定性代码。
-LLM 不可用时如实进入 fallback（planner_mode 会真实反映，不冒充）。
+自然语言目标必须由可用模型编译；模型不可用时安全拒绝执行，不退回场景脚本。
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from spacebutler.agent.capabilities import build_capability_registry
 from spacebutler.agent.executor import AgentExecutor
 from spacebutler.agent.goal_compiler import GoalCompiler, is_cancel_text
 from spacebutler.agent.goal_evaluator import GoalEvaluator
+from spacebutler.agent.graph import AgentGraphHandlers, AgentGraphState, LangGraphAgentWorkflow
 from spacebutler.agent.goal_manager import GoalManager
 from spacebutler.agent.models import (
     ActionAttribution,
@@ -80,72 +81,34 @@ class AgentRuntime:
         self._last_tick_at: float | None = None
         self._fatal_error: str | None = None
         self._last_runtime_error: str | None = None
+        self._last_graph_trace: list[str] = []
         self._lock = threading.RLock()
         self._messages: list[dict[str, object]] = [
             {"role": "assistant", "content": "自治智能体已就绪：说出目标即可，我会规划、执行并持续盯住环境。", "ts": now()}
         ]
+        self._workflow = LangGraphAgentWorkflow(
+            AgentGraphHandlers(
+                observe=self._graph_observe,
+                understand=self._graph_understand,
+                activate=self._graph_activate,
+                plan=self._graph_plan,
+                execute=self._graph_execute,
+                verify=self._graph_verify,
+                respond=self._graph_respond,
+            )
+        )
 
     # ---- chat entry --------------------------------------------------
-    def submit_text(self, text: str) -> dict[str, object] | None:
-        """所有用户文本的入口。由 LLM Goal Reasoner 判断是否为家居目标：
-        是 -> 走自治链路并返回 chat 载荷；否/模型不可用且非取消 -> None（调用方转普通对话）。"""
+    def submit_text(self, text: str) -> dict[str, object]:
+        """Run one user turn through the compiled LangGraph workflow."""
+        normalized = text.strip()
+        if not normalized or len(normalized) > 500:
+            raise ValueError("message must contain 1 to 500 characters")
         if is_cancel_text(text):
             return self._cancel_goal()
         with self._lock:
-            devices = self._devices_provider()["devices"]
-            state = self._world.update_state(devices)
-            if not self._last_signature:
-                self._last_signature = _device_signatures(devices)
-            goal, compile_mode, semantic = self._compiler.compile_with_state(
-                text,
-                self._llm,
-                state.temperature,
-                state.brightness_pct,
-            )
-            if goal is None:
-                if compile_mode == "llm":
-                    self._world.record_event(
-                        "goal_rejected",
-                        "模型判断这不是家居目标，转交普通对话",
-                        semantic=semantic,
-                    )
-                return None
-            registry = build_capability_registry(devices)
-            old_goal, old_status = self._world.active_goal()
-            self._world.clear_suppressions()
-            if (
-                old_goal is not None
-                and old_goal.goal_id != goal.goal_id
-                and old_status
-                in {GoalStatus.ACTIVE, GoalStatus.DEGRADED, GoalStatus.REPLANNING, GoalStatus.SATISFIED}
-            ):
-                # 新目标替换旧目标：旧目标明确收尾，避免生命周期泄漏。
-                self._world.set_active_goal(old_goal, GoalStatus.CANCELLED)
-                self._world.record_event(
-                    "goal_cancelled",
-                    f"目标「{old_goal.title}」被新目标替换",
-                    replaced_by=goal.goal_id,
-                )
-            self._world.set_active_goal(goal, GoalStatus.ACTIVE)
-            self._persist_goal_event(goal, GoalStatus.ACTIVE, "goal_received")
-            self._goal_manager.reset_tracking()
-            if compile_mode == "llm":
-                self._world.record_event("goal_compiled_by_llm", "模型完成了目标语义理解")
-            self._world.record_event(
-                "goal_received",
-                f"收到目标：{goal.title}",
-                goal_id=goal.goal_id,
-                planner_mode=compile_mode,
-                interpretation=(goal.semantic_view or {}).get("intent_summary", ""),
-            )
-            self._world.record_event(
-                "goal_compiled",
-                f"目标编译为 {len(goal.constraints)} 条约束（{compile_mode}）",
-                planner_mode=compile_mode,
-            )
-            outcome = self._plan_and_execute(goal, self._world.current_state(), registry)
-            reply = self._goal_reply(goal, outcome)
-            self._append("assistant", reply)
+            result = self._workflow.invoke({"text": normalized, "background": False, "trace": []})
+            self._last_graph_trace = list(result.get("trace", []))
             return self.history()
 
     def history(self) -> dict[str, object]:
@@ -157,7 +120,19 @@ class AgentRuntime:
                 "active_plan": self._plan_view(),
                 "busy": False,
                 "llm_available": bool(self._llm and self._llm.available()),
+                "orchestrator": "langgraph",
+                "graph_trace": list(self._last_graph_trace),
             }
+
+    def clear(self) -> dict[str, object]:
+        """Clear visible conversation state without changing physical devices."""
+        with self._lock:
+            self._messages = [
+                {"role": "assistant", "content": "LangGraph Agent 会话已清空，设备状态保持不变。", "ts": now()}
+            ]
+            self._last_outcome = None
+            self._last_graph_trace = []
+            return self.history()
 
     # ---- planning core (shared by submit & replan) -------------------
     def _plan_and_execute(
@@ -166,13 +141,114 @@ class AgentRuntime:
         state: object,
         registry: dict[str, object],
     ) -> PlanningOutcome:
-        self._world.record_event("world_snapshot", "已捕获真实环境快照", **state.to_dict())
+        result = self._workflow.invoke({"goal": goal, "background": True, "trace": []})
+        self._last_graph_trace = list(result.get("trace", []))
+        outcome = result.get("outcome")
+        if not isinstance(outcome, PlanningOutcome):
+            raise RuntimeError("LangGraph workflow completed without a planning outcome")
+        return outcome
+
+    def _graph_observe(self, graph_state: AgentGraphState) -> dict[str, object]:
+        payload = self._devices_provider()
+        devices = payload.get("devices")
+        if not isinstance(devices, list):
+            raise RuntimeError("device inventory is invalid")
+        room_state = self._world.update_state(devices)
+        if not self._last_signature:
+            self._last_signature = _device_signatures(devices)
+        return {
+            "devices": devices,
+            "room_state": room_state,
+            "registry": build_capability_registry(devices),
+        }
+
+    def _graph_understand(self, graph_state: AgentGraphState) -> dict[str, object]:
+        text = str(graph_state.get("text", ""))
+        room_state = graph_state["room_state"]
+        active_goal, active_status = self._world.active_goal()
+        semantic_context: dict[str, object] = {
+            "current_state": room_state.to_dict(),
+            "active_goal": active_goal.to_dict() if active_goal is not None else None,
+            "active_goal_status": active_status.value,
+            "recent_dialogue": [
+                {"role": item.get("role"), "content": item.get("content")}
+                for item in self._messages[-4:]
+            ],
+        }
+        goal, compile_mode, semantic = self._compiler.compile_with_state(
+            text,
+            self._llm,
+            room_state.temperature,
+            room_state.brightness_pct,
+            semantic_context,
+        )
+        if goal is None:
+            rejection_reason = {
+                "unavailable": "本地模型不可用，未执行",
+                "invalid": "模型输出未通过目标校验，未执行",
+            }.get(compile_mode, "模型判断这不是家居目标")
+            self._world.record_event(
+                "goal_rejected",
+                rejection_reason,
+                semantic=semantic,
+                planner_mode=compile_mode,
+            )
+        return {
+            "goal": goal,
+            "compile_mode": compile_mode,
+            "semantic": semantic,
+            "accepted": goal is not None,
+        }
+
+    def _graph_activate(self, graph_state: AgentGraphState) -> dict[str, object]:
+        goal = graph_state["goal"]
+        if goal is None:
+            return {"accepted": False}
+        compile_mode = str(graph_state.get("compile_mode", "llm"))
+        old_goal, old_status = self._world.active_goal()
+        self._world.clear_suppressions()
+        if (
+            old_goal is not None
+            and old_goal.goal_id != goal.goal_id
+            and old_status in {GoalStatus.ACTIVE, GoalStatus.DEGRADED, GoalStatus.REPLANNING, GoalStatus.SATISFIED}
+        ):
+            self._world.set_active_goal(old_goal, GoalStatus.CANCELLED)
+            self._world.record_event(
+                "goal_cancelled",
+                f"目标「{old_goal.title}」被新目标替换",
+                replaced_by=goal.goal_id,
+            )
+        self._world.set_active_goal(goal, GoalStatus.ACTIVE)
+        self._persist_goal_event(goal, GoalStatus.ACTIVE, "goal_received")
+        self._goal_manager.reset_tracking()
+        self._world.record_event("goal_compiled_by_llm", "模型完成了目标语义理解")
+        self._world.record_event(
+            "goal_received",
+            f"收到目标：{goal.title}",
+            goal_id=goal.goal_id,
+            planner_mode=compile_mode,
+            interpretation=(goal.semantic_view or {}).get("intent_summary", ""),
+        )
+        self._world.record_event(
+            "goal_compiled",
+            f"目标编译为 {len(goal.constraints)} 条约束（{compile_mode}）",
+            planner_mode=compile_mode,
+        )
+        return {"accepted": True}
+
+    def _graph_plan(self, graph_state: AgentGraphState) -> dict[str, object]:
+        goal = graph_state["goal"]
+        if goal is None:
+            raise RuntimeError("LangGraph plan node requires a compiled goal")
+        room_state = graph_state["room_state"]
+        registry = graph_state["registry"]
+        self._world.record_event("world_snapshot", "已捕获真实环境快照", **room_state.to_dict())
         preference = self._preferences.estimate(goal.activity, goal.room, "brightness")
         recent_events = self._world.snapshot()["timeline"][-5:]
         suppressions = self._world.active_suppressions(goal.goal_id)
         outcome = self._planner.plan(
             goal,
-            state,
+            room_state,
             registry,
             preference,
             self._llm,
@@ -192,8 +268,13 @@ class AgentRuntime:
         if outcome.no_action or outcome.selected is None:
             self._world.record_event("no_action", outcome.reason)
             self._world.set_active_goal(goal, GoalStatus.SATISFIED if outcome.no_action else GoalStatus.ACTIVE)
+            self._persist_goal_event(
+                goal,
+                GoalStatus.SATISFIED if outcome.no_action else GoalStatus.ACTIVE,
+                "goal_already_satisfied" if outcome.no_action else "no_safe_plan",
+            )
             self._last_outcome = outcome
-            return outcome
+            return {"outcome": outcome}
         selected: CandidatePlan = outcome.selected
         self._world.record_event(
             "plan_selected",
@@ -202,8 +283,24 @@ class AgentRuntime:
             total_score=selected.scores.total,
         )
         self._world.record_event("policy_check", "Policy Guard 校验通过", actions=len(selected.actions))
+        return {"outcome": outcome}
+
+    def _graph_execute(self, graph_state: AgentGraphState) -> dict[str, object]:
+        outcome = graph_state["outcome"]
+        selected = outcome.selected
+        if selected is None:
+            raise RuntimeError("LangGraph execute node requires a selected plan")
         records = self._executor.execute(selected, self._world)
         self._world.record_event("execution", f"已发送 {len(records)} 条设备命令")
+        return {"records": records}
+
+    def _graph_verify(self, graph_state: AgentGraphState) -> dict[str, object]:
+        goal = graph_state["goal"]
+        outcome = graph_state["outcome"]
+        selected = outcome.selected
+        if goal is None or selected is None:
+            raise RuntimeError("LangGraph verify node requires a goal and selected plan")
+        records = graph_state.get("records", [])
         observation = self._fresh_observation()
         self._world.record_event(
             "fresh_observation",
@@ -279,7 +376,33 @@ class AgentRuntime:
         self._persist_goal_event(goal, resulting_status, "execution_verified" if failures == 0 else "verification_failed")
         self._last_outcome = outcome
         self._last_observed = observation.to_dict()
-        return outcome
+        return {"observation": observation, "failures": failures, "outcome": outcome}
+
+    def _graph_respond(self, graph_state: AgentGraphState) -> dict[str, object]:
+        text = str(graph_state.get("text", ""))
+        goal = graph_state.get("goal")
+        background = bool(graph_state.get("background"))
+        if goal is None:
+            mode = str(graph_state.get("compile_mode", "unavailable"))
+            reply = (
+                "当前没有可用的本地模型，语义目标未解析，未向任何设备发送命令。"
+                if mode == "unavailable"
+                else "模型输出未通过目标校验，未向任何设备发送命令。"
+                if mode == "invalid"
+                else "这条输入没有被模型识别为可执行的家居目标，未向设备发送命令。"
+            )
+            if not background:
+                self._append("user", text)
+                self._append("assistant", reply)
+            return {"accepted": False, "reply": reply}
+        outcome = graph_state.get("outcome")
+        if not isinstance(outcome, PlanningOutcome):
+            raise RuntimeError("LangGraph respond node requires a planning outcome")
+        reply = self._goal_reply(goal, outcome)
+        if not background:
+            self._append("user", text)
+            self._append("assistant", reply)
+        return {"accepted": True, "reply": reply}
 
     def _fresh_observation(self) -> FreshObservation:
         try:
@@ -433,6 +556,7 @@ class AgentRuntime:
 
     def _cancel_goal(self) -> dict[str, object]:
         goal, _ = self._world.active_goal()
+        self._append("user", "取消当前目标")
         if goal is None:
             self._append("assistant", "当前没有进行中的自治目标。")
         else:
@@ -497,6 +621,9 @@ class AgentRuntime:
         recent_tick = tick_age is not None and tick_age <= recent_limit
         return {
             "initialized": self._thread is not None,
+            "orchestrator": "langgraph",
+            "graph_nodes": list(self._workflow.node_names),
+            "last_graph_trace": list(self._last_graph_trace),
             "thread_alive": thread_alive,
             "last_tick": self._last_tick_at,
             "last_tick_age_seconds": round(tick_age, 3) if tick_age is not None else None,

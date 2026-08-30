@@ -346,7 +346,7 @@ class RuntimeHealthIntegrationTests(unittest.TestCase):
         controller.devices = lambda: {"devices": deepcopy(devices)}
         return controller
 
-    def test_llm_offline_is_fallback_not_full_ready(self) -> None:
+    def test_llm_offline_is_unavailable_not_full_ready(self) -> None:
         home = FakeHome()
         runtime = AgentRuntime(home.inventory, home.control, None, poll_interval_seconds=0.01)
         runtime.start()
@@ -354,7 +354,7 @@ class RuntimeHealthIntegrationTests(unittest.TestCase):
             time.sleep(0.04)
             health = self._controller(runtime, home.devices).health()
             self.assertEqual(health["llm"], "unavailable")
-            self.assertEqual(health["agent"]["status"], "fallback")
+            self.assertEqual(health["agent"]["status"], "unavailable")
             self.assertTrue(health["agent"]["thread_alive"])
             self.assertTrue(health["agent"]["recent_tick"])
         finally:

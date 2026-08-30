@@ -2,8 +2,7 @@
 
 模型负责理解用户想要什么（语义维度与区间），不是输出设备指令：
 "别太亮" 由模型解释为亮度目标区间并给出理由，而不是查答案表。
-关键词模板只作为 LLM 不可用时的 fallback（UI 如实显示 planner_mode），
-禁止进入正式模型规划链路。
+本地模型不可用时拒绝执行语义目标，不使用场景关键词模板冒充理解。
 
 dimension 是系统的语义维度词汇表（系统能力定义，非场景答案）：
     thermal  -> temperature        lighting -> brightness
@@ -13,6 +12,7 @@ dimension 是系统的语义维度词汇表（系统能力定义，非场景答�
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 
@@ -38,7 +38,10 @@ _GOAL_SYSTEM_PROMPT = (
     "'不想睡''别太黑'这类否定约束也是目标的一部分。"
     "必须逐项覆盖用户同一句话里的每个独立环境感受或限制；如果同时涉及温度、灯光、眩光等多个维度，"
     "必须分别输出对应 constraint，不能遗漏，也不能把一个维度的理由写到另一个维度。"
-    "不要假设特定活动必须操作特定设备。energy 维度不设数值区间。"
+    "活动本身可能隐含环境目标（例如观影通常需要减少自然光干扰），可以推断相应语义维度；"
+    "但不要假设必须操作某个具体设备，也不要输出设备指令。energy 维度不设数值区间。"
+    "输入有时是包含 user_text、当前环境、active_goal 和最近对话的 JSON；遇到追问或指代时，"
+    "只在上下文确实相关时继承 active_goal 的语义约束，并仍以本轮 user_text 为最高优先级。"
     "不是家居目标时 constraints 返回空数组。"
     "\n示例：\n"
     '用户：客厅有点刺眼，我想安静坐会 → {"is_home_goal": true, "location": "living_room", '
@@ -90,27 +93,36 @@ _DIMENSION_AUDIT_SCHEMA: dict = {
     "required": ["dimensions"],
 }
 
-# fallback 专用：LLM 不可用时才使用（planner_mode 如实标注 fallback）。
-_ACTIVITY_WORDS = re.compile(r"看(?:会|场|个)?(?:电影|电视|剧|片)|观影|追剧|休息|放松|睡觉|工作|阅读")
-_THERMAL_WORDS = re.compile(r"有点热|太热|热|有点冷|太冷|凉快|闷")
 _CANCEL_WORDS = re.compile(r"不看了|不看电影|取消.{0,4}(任务|目标)|我要去睡觉|睡觉了|停止目标")
 
 
 class GoalCompiler:
-    """Natural language -> CompiledGoal. LLM-first, deterministic template fallback."""
+    """Natural language -> CompiledGoal through the configured local model."""
 
     def __init__(self) -> None:
         self.last_raw: dict | None = None  # 最后一次模型原始输出（compile 长尾诊断用）
+        self._state_anchors: dict[str, float | None] = {}
 
-    def compile(self, text: str, llm_client: LlmClient | None = None) -> tuple[CompiledGoal | None, str, dict | None]:
+    def compile(
+        self,
+        text: str,
+        llm_client: LlmClient | None = None,
+        context: dict[str, object] | None = None,
+    ) -> tuple[CompiledGoal | None, str, dict | None]:
         """返回 (goal, planner_mode, semantic_view)。
 
         goal 为 None 表示模型判断这不是家居目标（或不可用且非关键词），
-        调用方应把文本交回普通对话。planner_mode ∈ {llm, fallback}。
+        模型不可用或输出不合法时不生成设备目标，调用方必须安全拒绝执行。
+        planner_mode ∈ {llm, invalid, unavailable}。
         semantic_view 是模型原始语义判断（供 UI 展示 MODEL INTERPRETATION）。
         """
+        model_input = (
+            json.dumps({"user_text": text, "context": context}, ensure_ascii=False, default=str)
+            if context
+            else text
+        )
         if llm_client is not None and llm_client.available():
-            raw = llm_client.chat_json(_GOAL_SYSTEM_PROMPT, text, schema=_GOAL_SCHEMA)
+            raw = llm_client.chat_json(_GOAL_SYSTEM_PROMPT, model_input, schema=_GOAL_SCHEMA)
             self.last_raw = raw if isinstance(raw, dict) else None
             # 语义 retry（max 2 次）：小模型对隐含目标的布尔判定有波动，
             # 用 repair prompt 再确认一次（任务书 max_model_retry=2）。
@@ -119,17 +131,18 @@ class GoalCompiler:
                     _GOAL_SYSTEM_PROMPT
                     + "\n注意：用户描述身体感受（闷/热/冷/困/刺眼）或活动准备（看剧/休息/工作）时，"
                     "几乎总是表达家居环境目标。请再判断一次。",
-                    text,
+                    model_input,
                     schema=_GOAL_SCHEMA,
                 )
                 if isinstance(repair, dict) and repair.get("is_home_goal") is True:
                     raw = repair
             if isinstance(raw, dict) and raw.get("is_home_goal") is True:
                 audit = llm_client.chat_json(
-                    "你是环境语义维度审计器。只提取用户文本明确表达的环境维度，不推测活动惯例。"
+                    "你是环境语义维度审计器。提取用户明确表达或其活动合理隐含的环境维度，"
+                    "只判断环境目标，不指定设备。"
                     "thermal=冷热闷等温度感受，lighting=灯光明暗，glare=自然光或窗帘眩光，"
                     "energy=明确节能诉求。返回 JSON。",
-                    text,
+                    model_input,
                     schema=_DIMENSION_AUDIT_SCHEMA,
                 )
                 audited_dimensions = {
@@ -144,7 +157,7 @@ class GoalCompiler:
                         _GOAL_SYSTEM_PROMPT
                         + "\n你现在进行完整性修复。保留正确初稿，并补齐审计确认遗漏的维度。"
                         "返回修复后的完整 JSON，不要解释。",
-                        f"原始用户文本：{text}\n待修复初稿：{raw}\n必须补齐：{sorted(missing_dimensions)}",
+                        f"输入与上下文：{model_input}\n待修复初稿：{raw}\n必须补齐：{sorted(missing_dimensions)}",
                         schema=_GOAL_SCHEMA,
                     )
                     if audited_dimensions <= _semantic_dimensions(reviewed):
@@ -156,9 +169,8 @@ class GoalCompiler:
                 return goal, "llm", semantic
             if isinstance(raw, dict) and raw.get("is_home_goal") is False:
                 return None, "llm", {"is_home_goal": False, "intent_summary": str(raw.get("intent_summary", ""))}
-        if self._looks_like_goal_fallback(text):
-            return self._goal_from_template(text), "fallback", {"is_home_goal": True, "intent_summary": "（LLM 不可用，确定性模板解析）"}
-        return None, "fallback", None
+            return None, "invalid", {"is_home_goal": None, "intent_summary": "模型输出未通过目标 schema 校验"}
+        return None, "unavailable", {"is_home_goal": None, "intent_summary": "本地模型不可用"}
 
     # ---- LLM semantic path ------------------------------------------
     def _goal_from_semantics(self, raw: object, text: str) -> CompiledGoal | None:
@@ -192,7 +204,7 @@ class GoalCompiler:
                     lower, upper = None, None
             direction = str(item.get("direction", "") or "").strip().lower()
             if lower is None and direction:
-                lower, upper = self._range_from_direction(direction, state_hint=text)
+                lower, upper = self._range_from_direction(direction, metric)
             if lower is None:
                 continue
             constraints.append(
@@ -225,72 +237,48 @@ class GoalCompiler:
         }
         return goal
 
-    def _range_from_direction(self, direction: str, state_hint: str) -> tuple[float | None, float | None]:
+    def _range_from_direction(self, direction: str, metric: str) -> tuple[float | None, float | None]:
         """模型只给了方向没给数值区间时，从方向关键词与当前环境推导宽区间。
 
         这是数学推导（方向 + 当前值锚点 + 模型给的 strength 语义），不是场景答案表。
         """
-        anchor = self._state_anchor
+        anchor = self._state_anchors.get(metric)
         normalized = direction.lower()
         cooling_words = ("cool", "lower", "reduce", "闷", "热", "凉")
         dimming_words = ("dark", "black", "dim", "lower", "reduce")
         brightening_words = ("bright", "warmer", "亮")
-        if any(word in normalized for word in dimming_words):
+        if metric == "curtain_position" and any(
+            word in normalized for word in ("close", "reduce", "lower", "关闭", "减少")
+        ):
+            return 0.0, 20.0
+        if metric == "brightness" and any(word in normalized for word in dimming_words):
             # 调暗：从当前亮度向下推一个宽区间。
             if anchor is None:
                 return 15.0, 50.0
             return (max(5.0, anchor - 50.0), max(15.0, anchor - 5.0))
-        if any(word in normalized for word in cooling_words):
+        if metric == "temperature" and any(word in normalized for word in cooling_words):
             if anchor is None:
                 return 22.0, 27.0
             return (max(16.0, anchor - 6.0), max(23.0, anchor - 0.5))
-        if any(word in normalized for word in brightening_words):
+        if metric == "brightness" and any(word in normalized for word in brightening_words):
             if anchor is None:
                 return 40.0, 85.0
             return (min(anchor + 5.0, 100.0), min(anchor + 40.0, 100.0))
         return None, None
 
-    _state_anchor: float | None = None
-
-    def compile_with_state(self, text: str, llm_client: LlmClient | None, temperature: float | None, brightness: float | None) -> tuple[CompiledGoal | None, str, dict | None]:
-        self._state_anchor = temperature
+    def compile_with_state(
+        self,
+        text: str,
+        llm_client: LlmClient | None,
+        temperature: float | None,
+        brightness: float | None,
+        context: dict[str, object] | None = None,
+    ) -> tuple[CompiledGoal | None, str, dict | None]:
+        self._state_anchors = {"temperature": temperature, "brightness": brightness}
         try:
-            return self.compile(text, llm_client)
+            return self.compile(text, llm_client, context)
         finally:
-            self._state_anchor = None
-
-    # ---- fallback path（LLM 不可用时专用） ---------------------------
-    def _looks_like_goal_fallback(self, text: str) -> bool:
-        return bool(_ACTIVITY_WORDS.search(text) or _THERMAL_WORDS.search(text))
-
-    def _goal_from_template(self, text: str) -> CompiledGoal:
-        """fallback 模板：仅在 LLM 不可用时使用，planner_mode 如实标注。"""
-        constraints: list[GoalConstraint] = []
-        if _ACTIVITY_WORDS.search(text):
-            if re.search(r"完全黑|全黑|太暗|别太暗|不要暗|留点光|留着", text):
-                constraints.append(GoalConstraint(metric="brightness", lower=10, upper=60))
-            elif re.search(r"别太亮|不要太亮|暗一点|调暗|不亮", text) or "灯" in text:
-                constraints.append(GoalConstraint(metric="brightness", lower=20, upper=45))
-            else:
-                constraints.append(GoalConstraint(metric="brightness", lower=15, upper=50))
-            if not re.search(r"别全关|留一?[点条缝]|不要全关", text):
-                constraints.append(GoalConstraint(metric="curtain_position", upper=30))
-        if _THERMAL_WORDS.search(text) or _ACTIVITY_WORDS.search(text):
-            if re.search(r"有点冷|太冷|冷", text):
-                constraints.append(GoalConstraint(metric="temperature", lower=25, upper=29, target=27))
-            else:
-                constraints.append(GoalConstraint(metric="temperature", lower=24, upper=27.5, target=26))
-        if not constraints:
-            constraints.append(GoalConstraint(metric="temperature", lower=22, upper=28, target=26))
-        activity = "watch_content" if _ACTIVITY_WORDS.search(text) else "thermal_comfort"
-        return CompiledGoal(
-            goal_id=f"goal_{uuid.uuid4().hex[:10]}",
-            activity=activity,
-            room="living_room",
-            title=f"{activity}（确定性回退解析）",
-            constraints=constraints,
-            expires_at=now() + 30 * 60,
-        )
+            self._state_anchors = {}
 
     def _room(self, location: str) -> str:
         normalized = location.strip().lower()

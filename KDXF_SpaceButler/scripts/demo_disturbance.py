@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -26,7 +27,8 @@ def main() -> int:
     args = parser.parse_args()
     token = obtain_token(args.ha_url, ROOT / "deployment" / "homeassistant" / ".storage" / "auth")
     request = Request(
-        f"{args.ha_url.rstrip('/')}/api/services/esphome/spacebutler_living_ac_demo_heat_injection",
+        f"{args.ha_url.rstrip('/')}/api/services/esphome/"
+        f"{os.environ.get('ESPHOME_HEAT_INJECTION_SERVICE', 'living_room_ac_demo_heat_injection')}",
         data=json.dumps({"target_temperature": args.temperature}).encode(),
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         method="POST",
