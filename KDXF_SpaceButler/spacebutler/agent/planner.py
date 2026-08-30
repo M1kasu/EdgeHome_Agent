@@ -20,10 +20,12 @@ from spacebutler.agent.models import (
     CandidatePlan,
     CompiledGoal,
     LlmContribution,
+    OverrideSuppression,
     PreferenceEstimate,
     RoomState,
 )
 from spacebutler.agent.policy_guard import PolicyGuard, classify_issue
+from spacebutler.agent.preference_memory import preference_is_eligible
 from spacebutler.agent.scorer import PlanScorer
 from spacebutler.llm.client import LlmClient
 
@@ -34,6 +36,8 @@ _PLANNER_SYSTEM_PROMPT = (
     "根据当前目标、家庭真实状态、设备能力、近期事件与用户偏好，推理出多个思路不同的候选计划。"
     "只能用给定设备（device_id 必须原样照抄）；capability 必须从该设备的 actions 列表里选；"
     "数值用数字；目标约束已满足的设备不要输出动作；"
+    "每个候选必须直接改善至少一个尚未满足的 metric。只能使用输入中给出的 metric→设备能力路由；"
+    "与未满足 metric 无关的动作不能代替目标动作。"
     "用户历史偏好应反映在至少一个候选中；目标已全部满足时输出空数组。"
 )
 
@@ -73,7 +77,13 @@ def _normalize_action_value(capability: str, value: object) -> tuple[str, object
             if isinstance(inner, str):
                 return capability, inner, None
         return capability, None, None
-    return capability, _coerce_number(value), None
+    coerced = _coerce_number(value)
+    if capability == "turn_on" and isinstance(coerced, (int, float)) and not isinstance(coerced, bool):
+        brightness = float(coerced)
+        if 0 < brightness <= 1.0:
+            brightness = round(brightness * 100, 1)
+        return "set_brightness", brightness, None
+    return capability, coerced, None
 
 
 def _normalize_mode(value: object) -> str | None:
@@ -167,8 +177,9 @@ class CounterfactualPlanner:
         preferences: PreferenceEstimate | None = None,
         llm_client: LlmClient | None = None,
         recent_events: list[dict[str, object]] | None = None,
+        override_suppressions: list[OverrideSuppression] | None = None,
     ) -> PlanningOutcome:
-        guard = PolicyGuard(registry)
+        guard = PolicyGuard(registry, override_suppressions)
         metrics = LlmContribution(
             goal_compiled_by_llm=self.contribution.goal_compiled_by_llm,
             goal_evaluation_by_llm=self.contribution.goal_evaluation_by_llm,
@@ -190,7 +201,15 @@ class CounterfactualPlanner:
         planner_mode = "fallback"
         empty_llm_candidates = False
         if llm_client is not None and llm_client.available():
-            llm_raw = self._llm_candidates(goal, state, registry, preferences, recent_events, llm_client)
+            llm_raw = self._llm_candidates(
+                goal,
+                state,
+                registry,
+                preferences,
+                recent_events,
+                override_suppressions,
+                llm_client,
+            )
             if not llm_raw:
                 empty_llm_candidates = True
                 llm_rejections.append({"code": "empty_candidates", "reason": "模型返回空候选或输出未通过 schema/解析"})
@@ -242,15 +261,120 @@ class CounterfactualPlanner:
                 self._score_plan(f"c{index}", label, enriched, predicted, goal, state, preferences, summary, source)
             )
 
-        actionable = [item for item in scored if item.actions]
+        baseline_goal_score = self._scorer.score(
+            "baseline",
+            "当前状态",
+            [],
+            self._predictor.predict([], state),
+            goal,
+            state,
+            preferences,
+        ).scores.goal_satisfaction
+        def improves_goal(item: CandidatePlan) -> bool:
+            predicted_values = {
+                "brightness": item.predicted.brightness_pct,
+                "temperature": item.predicted.temperature,
+                "curtain_position": item.predicted.curtain_position,
+            }
+            reaches_hard_bounds = all(
+                constraint.satisfied_by(predicted_values.get(constraint.metric))
+                for constraint in goal.constraints
+            )
+            return reaches_hard_bounds or item.scores.goal_satisfaction > baseline_goal_score + 1e-6
+
+        actionable = [
+            item
+            for item in scored
+            if item.actions and improves_goal(item)
+        ]
+        if planner_mode == "llm" and not actionable:
+            repaired_raw = self._llm_candidates(
+                goal,
+                state,
+                registry,
+                preferences,
+                recent_events,
+                override_suppressions,
+                llm_client,
+                repair_instruction=(
+                    "上一轮候选通过了格式校验，但反事实预测表明没有任何候选改善目标满足度。"
+                    "这次每个候选必须至少包含一个直接改善尚未满足约束的动作；"
+                    "不要操作与目标约束无关的设备。"
+                ),
+            ) if llm_client is not None else []
+            metrics.llm_candidates_generated += len(repaired_raw)
+            for index, (summary, actions) in enumerate(repaired_raw, start=1):
+                problems = guard.issues(actions)
+                if problems:
+                    metrics.llm_candidates_rejected += 1
+                    llm_rejections.append(
+                        {
+                            "code": classify_issue(problems[0]),
+                            "reason": problems[0],
+                            "normalized_actions": actions,
+                        }
+                    )
+                    continue
+                metrics.llm_candidates_valid += 1
+                enriched = [self._enrich(action, registry) for action in actions]
+                scored.append(
+                    self._score_plan(
+                        f"c{len(scored) + 1}",
+                        f"候选 R{index} · 模型修复",
+                        enriched,
+                        self._predictor.predict(enriched, state),
+                        goal,
+                        state,
+                        preferences,
+                        summary,
+                        "llm",
+                    )
+                )
+            actionable = [
+                item
+                for item in scored
+                if item.actions and improves_goal(item)
+            ]
+        if planner_mode == "llm" and not actionable:
+            llm_rejections.append(
+                {
+                    "code": "no_goal_improvement",
+                    "reason": "模型候选均未改善目标满足度，确定性 fallback 接管",
+                }
+            )
+            planner_mode = "fallback"
+            for actions, label, summary in self._baseline_candidates(goal, state, registry, preferences):
+                problems = guard.issues(actions)
+                if problems:
+                    continue
+                enriched = [self._enrich(action, registry) for action in actions]
+                predicted = self._predictor.predict(enriched, state)
+                scored.append(
+                    self._score_plan(
+                        f"c{len(scored) + 1}",
+                        label,
+                        enriched,
+                        predicted,
+                        goal,
+                        state,
+                        preferences,
+                        summary,
+                        "fallback",
+                    )
+                )
+            actionable = [
+                item
+                for item in scored
+                if item.actions and improves_goal(item)
+            ]
         if not actionable:
             return PlanningOutcome(
                 planner_mode=planner_mode,
                 no_action=True,
-                reason="所有候选均被 Policy Guard 拒绝，未执行任何动作。",
+                reason="所有候选均被 Policy Guard 拒绝或不能改善目标，未执行任何动作。",
                 candidates=scored,
                 llm_metrics=metrics,
-            llm_rejections=llm_rejections,
+                llm_rejections=llm_rejections,
             )
         best = max(actionable, key=lambda item: (item.scores.total, -len(item.actions)))
         best.selected = True
@@ -275,17 +399,41 @@ class CounterfactualPlanner:
         registry: dict[str, DeviceCapability],
         preferences: PreferenceEstimate | None,
         recent_events: list[dict[str, object]] | None,
+        override_suppressions: list[OverrideSuppression] | None,
         llm_client: LlmClient,
+        repair_instruction: str = "",
     ) -> list[tuple[str, list[dict[str, object]]]]:
         capabilities = {key: value.to_dict() for key, value in registry.items() if not value.readonly}
         preference_view = (
             {"metric": preferences.metric, "preferred_mean": preferences.mean, "samples": preferences.count}
-            if preferences and preferences.count >= 2
+            if preference_is_eligible(preferences)
             else None
         )
+        repair_note = f"本轮修复要求：{repair_instruction}\n" if repair_instruction else ""
+        current_values = self._constraint_values(state)
+        unmet_constraints = [
+            item.to_dict()
+            for item in goal.constraints
+            if not item.satisfied_by(current_values.get(item.metric))
+        ]
+        route_capabilities = {
+            "brightness": "set_brightness",
+            "temperature": "set_temperature",
+            "curtain_position": "set_position",
+        }
+        control_routes = {
+            metric: [
+                {"device_id": device.device_id, "capability": capability}
+                for device in registry.values()
+                if capability in device.actions and not device.readonly
+            ]
+            for metric, capability in route_capabilities.items()
+        }
         user_prompt = (
             f"用户目标：{goal.title}\n"
             f"目标约束（区间）：{[item.to_dict() for item in goal.constraints]}\n"
+            f"尚未满足的约束：{unmet_constraints}\n"
+            f"metric 到实时设备能力路由：{control_routes}\n"
             f"模型对目标的理解：{goal.semantic_view}\n"
             f"当前家庭状态：温度 {state.temperature}°C，灯亮度 {state.brightness_pct}%，"
             f"窗帘 {state.curtain_position}%，空调 {state.ac_mode}"
@@ -293,6 +441,10 @@ class CounterfactualPlanner:
             f"可用设备与能力：{capabilities}\n"
             f"用户历史偏好：{preference_view}\n"
             f"近期事件：{(recent_events or [])[-5:]}\n"
+            f"当前人工接管抑制：{[item.to_dict() for item in (override_suppressions or [])]}\n"
+            "人工接管抑制表示用户刚刚主动设置了该设备；除非新的明确目标或安全约束解除抑制，"
+            "候选计划不得覆盖这些设备维度。\n"
+            f"{repair_note}"
             "请根据以上真实上下文生成 3~5 个思路不同的候选计划。"
         )
         raw = llm_client.chat_json(_PLANNER_SYSTEM_PROMPT, user_prompt, schema=_PLANNER_SCHEMA)
@@ -353,7 +505,7 @@ class CounterfactualPlanner:
         candidates: list[tuple[list[dict[str, object]], str, str]] = [
             (actions_center, "候选 A · 目标居中（确定性回退）", "按目标区间中点设定"),
         ]
-        preference_brightness = preferences.mean if (preferences and preferences.count >= 2) else None
+        preference_brightness = preferences.mean if preference_is_eligible(preferences) else None
         if preference_brightness is not None:
             actions_pref = self._actions_for(goal, state, registry, preference_offset=preference_brightness)
             if actions_pref != actions_center:
@@ -469,6 +621,13 @@ class CounterfactualPlanner:
         if device is not None:
             action.setdefault("device_name", device.name)
             action.setdefault("entity_id", device.entity_id)
+            if (
+                action.get("capability") == "set_temperature"
+                and device.temperature_step is not None
+                and isinstance(action.get("value"), (int, float))
+            ):
+                value = float(action["value"])
+                action["value"] = round(round(value / device.temperature_step) * device.temperature_step, 3)
         return action
 
     def _score_plan(

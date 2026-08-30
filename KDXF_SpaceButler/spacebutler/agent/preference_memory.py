@@ -11,11 +11,13 @@ from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 import sqlite3
+from statistics import pstdev
 import threading
 
 from spacebutler.agent.models import PreferenceEstimate, now
 
-_MIN_SAMPLES = 2
+MIN_OBSERVATIONS = 2
+MIN_CONFIDENCE = 0.6
 _DECAY_WINDOW = 20
 
 
@@ -87,7 +89,12 @@ class PreferenceMemory:
         weights = [1.0 - 0.6 * index / max(_DECAY_WINDOW - 1, 1) for index in range(count)]
         mean = sum(value * weight for value, weight in zip(values, weights)) / sum(weights)
         spread = max(4.0, (max(values) - min(values)) / 2.0)
-        confidence = round(min(1.0, (count - _MIN_SAMPLES + 1) / 4.0), 2) if count >= _MIN_SAMPLES else 0.15
+        if count < MIN_OBSERVATIONS:
+            confidence = 0.15
+        else:
+            sample_confidence = min(1.0, 0.4 + 0.3 * (count - MIN_OBSERVATIONS))
+            consistency = max(0.0, 1.0 - pstdev(values) / 20.0)
+            confidence = round(sample_confidence * consistency, 2)
         return PreferenceEstimate(
             metric=metric,
             mean=round(mean, 1),
@@ -118,3 +125,11 @@ class PreferenceMemory:
             if estimate is not None:
                 estimates.append({"activity": activity, "room": room, **estimate.to_dict()})
         return estimates
+
+
+def preference_is_eligible(estimate: PreferenceEstimate | None) -> bool:
+    return bool(
+        estimate is not None
+        and estimate.count >= MIN_OBSERVATIONS
+        and estimate.confidence >= MIN_CONFIDENCE
+    )

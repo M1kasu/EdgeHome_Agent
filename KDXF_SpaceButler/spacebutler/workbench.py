@@ -888,6 +888,47 @@ class WorkbenchController:
     def agent_status(self) -> dict[str, object]:
         return self._agent_runtime.status()
 
+    def health(self) -> dict[str, object]:
+        """System health for demo readiness（/api/health）。"""
+        workbench = "ok"
+        home_assistant = "ok"
+        agent_snapshot = self._agent_runtime.status()
+        llm_available = bool(agent_snapshot.get("llm_available"))
+        llm = "ok" if llm_available else "unavailable"
+        runtime_health = self._agent_runtime.runtime_health()
+        try:
+            self._ha.states()
+        except (RuntimeError, OSError):
+            home_assistant = "unavailable"
+        devices = {"light": "unknown", "curtain": "unknown", "climate": "unknown", "temperature": "unknown", "presence": "unknown"}
+        type_to_key = {"light": "light", "curtain": "curtain", "climate": "climate", "temperature": "temperature", "presence": "presence"}
+        try:
+            for device in self.devices()["devices"]:
+                device_type = str(device.get("type", ""))
+                key = type_to_key.get(device_type)
+                if key and str(device.get("room", "")) == "living_room" and devices[key] == "unknown":
+                    devices[key] = "ok" if bool(device.get("online")) else "unavailable"
+        except (RuntimeError, OSError):
+            pass
+        dependencies_ready = home_assistant == "ok" and all(value == "ok" for value in devices.values())
+        runtime_ready = runtime_health.get("status") == "ready"
+        if dependencies_ready and runtime_ready:
+            agent_status = "ready" if llm_available else "fallback"
+        else:
+            agent_status = "degraded"
+        agent = {
+            **runtime_health,
+            "status": agent_status,
+            "mode": "llm" if llm_available else "fallback",
+        }
+        return {
+            "workbench": workbench,
+            "home_assistant": home_assistant,
+            "llm": llm,
+            "esphome_devices": devices,
+            "agent": agent,
+        }
+
     def demo_override(self, brightness: int) -> dict[str, object]:
         """Simulate a human override by REALLY changing the light through HA."""
         if not 1 <= int(brightness) <= 100:
@@ -1963,6 +2004,9 @@ def serve_workbench(
                 return
             if path == "/api/agent":
                 self._api(controller.agent_status)
+                return
+            if path == "/api/health":
+                self._api(controller.health)
                 return
             if path == "/api/events":
                 self._api(controller.events)

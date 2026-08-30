@@ -41,6 +41,22 @@ def build_capability_registry(devices: list[dict[str, object]]) -> dict[str, Dev
         if template is None:
             continue
         device_id = str(item.get("device_id"))
+        ha_state = item.get("ha_state") if isinstance(item.get("ha_state"), dict) else {}
+        attributes = ha_state.get("attributes") if isinstance(ha_state.get("attributes"), dict) else {}
+        modes = list(template.get("modes", []))
+        if device_type == "climate":
+            live_modes = attributes.get("hvac_modes")
+            if isinstance(live_modes, list):
+                modes = [str(mode).lower() for mode in live_modes if str(mode).strip()]
+        temperature_range = template.get("temperature_range")
+        temperature_step = None
+        minimum = attributes.get("min_temp")
+        maximum = attributes.get("max_temp")
+        if device_type == "climate" and isinstance(minimum, (int, float)) and isinstance(maximum, (int, float)):
+            temperature_range = (float(minimum), float(maximum))
+        live_step = attributes.get("target_temp_step")
+        if device_type == "climate" and isinstance(live_step, (int, float)) and float(live_step) > 0:
+            temperature_step = float(live_step)
         registry[device_id] = DeviceCapability(
             device_id=device_id,
             entity_id=str(item.get("entity_id")),
@@ -49,9 +65,10 @@ def build_capability_registry(devices: list[dict[str, object]]) -> dict[str, Dev
             room=str(item.get("room", "")),
             actions=list(template.get("actions", [])),
             brightness_range=template.get("brightness_range"),
-            temperature_range=template.get("temperature_range"),
+            temperature_range=temperature_range,
+            temperature_step=temperature_step,
             position_range=template.get("position_range"),
-            modes=list(template.get("modes", [])),
+            modes=modes,
             readonly=bool(template.get("readonly", False)),
         )
     return registry

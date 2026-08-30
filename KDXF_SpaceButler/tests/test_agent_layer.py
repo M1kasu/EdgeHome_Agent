@@ -434,9 +434,12 @@ class OverrideDetectorTests(unittest.TestCase):
         )
         attribution = detector.classify("living_room_main_light", "light", "set_brightness", 30, 45, _now())
         self.assertEqual(attribution.value, "HUMAN_OVERRIDE")
-        estimate = preferences.estimate("watch_content", "living_room", "brightness")
+        estimate = preferences.estimate("watch_movie", "living_room", "brightness")
         self.assertIsNotNone(estimate)
         self.assertEqual(estimate.mean, 45.0)
+        goal, _ = world.active_goal()
+        self.assertEqual(goal.constraints[0].target, 45.0)
+        self.assertEqual(world.active_suppressions("g")[0].device_id, "living_room_main_light")
 
     def test_override_without_active_goal_is_detected_but_not_learned(self) -> None:
         detector, _, preferences = self._detector()

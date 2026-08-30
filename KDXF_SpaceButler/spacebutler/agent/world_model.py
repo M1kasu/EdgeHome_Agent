@@ -17,8 +17,11 @@ from spacebutler.agent.models import (
     ActionRecord,
     AgentEvent,
     CompiledGoal,
+    FreshObservation,
+    GoalConstraint,
     GoalStatus,
     LlmContribution,
+    OverrideSuppression,
     RoomState,
     now,
 )
@@ -35,6 +38,7 @@ class HomeWorldModel:
         self._events: deque[AgentEvent] = deque(maxlen=timeline_max)
         self._actions: deque[ActionRecord] = deque(maxlen=action_log_max)
         self._predictions: deque[dict[str, Any]] = deque(maxlen=20)
+        self._suppressions: dict[tuple[str, str, str], OverrideSuppression] = {}
         self._planner_mode: str = "fallback"
         self._contribution = LlmContribution()
 
@@ -44,6 +48,30 @@ class HomeWorldModel:
         with self._lock:
             self._state = state
         return state
+
+    def refresh_from_home_assistant(
+        self,
+        devices: list[dict[str, object]],
+        observed_at: float | None = None,
+    ) -> FreshObservation:
+        """Atomically install a post-action HA snapshot and mark its provenance."""
+        captured_at = observed_at or now()
+        state = _perceive(devices, captured_at=captured_at)
+        entity_states = {
+            str(item.get("entity_id")): item["ha_state"]
+            for item in devices
+            if isinstance(item, dict)
+            and item.get("entity_id")
+            and isinstance(item.get("ha_state"), dict)
+        }
+        with self._lock:
+            self._state = state
+        return FreshObservation(
+            observed_at=captured_at,
+            source="HOME_ASSISTANT",
+            state=state,
+            entity_states=entity_states,
+        )
 
     def current_state(self) -> RoomState:
         with self._lock:
@@ -58,6 +86,50 @@ class HomeWorldModel:
     def active_goal(self) -> tuple[CompiledGoal | None, GoalStatus]:
         with self._lock:
             return self._active_goal, self._goal_status
+
+    # ---- human override suppression ---------------------------------
+    def apply_human_override(
+        self,
+        goal: CompiledGoal,
+        device_id: str,
+        dimension: str,
+        observed_value: object,
+        ttl_seconds: float,
+        at: float | None = None,
+    ) -> OverrideSuppression:
+        created_at = at or now()
+        suppression = OverrideSuppression(
+            goal_id=goal.goal_id,
+            device_id=device_id,
+            dimension=dimension,
+            observed_value=observed_value,
+            created_at=created_at,
+            expires_at=created_at + ttl_seconds,
+        )
+        with self._lock:
+            self._suppressions[(goal.goal_id, device_id, dimension)] = suppression
+            _absorb_override_constraint(goal, dimension, observed_value)
+        return suppression
+
+    def active_suppressions(self, goal_id: str | None = None) -> list[OverrideSuppression]:
+        at = now()
+        with self._lock:
+            expired = [key for key, item in self._suppressions.items() if not item.active(at)]
+            for key in expired:
+                self._suppressions.pop(key, None)
+            return [
+                item
+                for item in self._suppressions.values()
+                if goal_id is None or item.goal_id == goal_id
+            ]
+
+    def clear_suppressions(self, goal_id: str | None = None) -> None:
+        with self._lock:
+            if goal_id is None:
+                self._suppressions.clear()
+                return
+            for key in [key for key in self._suppressions if key[0] == goal_id]:
+                self._suppressions.pop(key, None)
 
     # ---- agent action log (attribution source) ----------------------
     def record_action(self, record: ActionRecord) -> None:
@@ -124,13 +196,16 @@ class HomeWorldModel:
                 "llm_contribution": self._contribution.to_dict(),
                 "recent_actions": [item.to_dict() for item in list(self._actions)[-12:]],
                 "last_prediction": self._predictions[-1] if self._predictions else None,
+                "override_suppressions": [
+                    item.to_dict() for item in self.active_suppressions(goal.goal_id if goal else None)
+                ],
                 "timeline": [item.to_dict() for item in list(self._events)[-40:]],
             }
 
 
-def _perceive(devices: list[dict[str, object]]) -> RoomState:
+def _perceive(devices: list[dict[str, object]], captured_at: float | None = None) -> RoomState:
     """Project the merged inventory into one room state (living room first)."""
-    state = RoomState(captured_at=now())
+    state = RoomState(captured_at=captured_at or now())
     living = [
         item
         for item in devices
@@ -180,3 +255,41 @@ def _perceive(devices: list[dict[str, object]]) -> RoomState:
         if isinstance(position, (int, float)):
             state.curtain_position = float(position)
     return state
+
+
+def _absorb_override_constraint(goal: CompiledGoal, dimension: str, value: object) -> None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        semantic = dict(goal.semantic_view or {})
+        overrides = list(semantic.get("human_overrides", []))
+        overrides.append({"dimension": dimension, "value": value})
+        semantic["human_overrides"] = overrides[-5:]
+        goal.semantic_view = semantic
+        return
+    tolerances = {"brightness": 2.0, "curtain_position": 2.0, "temperature": 0.5}
+    limits = {
+        "brightness": (1.0, 100.0),
+        "curtain_position": (0.0, 100.0),
+        "temperature": (16.0, 30.0),
+    }
+    if dimension not in tolerances:
+        return
+    numeric = float(value)
+    low_limit, high_limit = limits[dimension]
+    tolerance = tolerances[dimension]
+    replacement = GoalConstraint(
+        metric=dimension,
+        lower=max(low_limit, numeric - tolerance),
+        upper=min(high_limit, numeric + tolerance),
+        target=numeric,
+    )
+    for index, constraint in enumerate(goal.constraints):
+        if constraint.metric == dimension:
+            goal.constraints[index] = replacement
+            break
+    else:
+        goal.constraints.append(replacement)
+    semantic = dict(goal.semantic_view or {})
+    overrides = list(semantic.get("human_overrides", []))
+    overrides.append({"dimension": dimension, "value": numeric})
+    semantic["human_overrides"] = overrides[-5:]
+    goal.semantic_view = semantic

@@ -14,6 +14,8 @@ LLM 不可用时如实进入 fallback（planner_mode 会真实反映，不冒充
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
+from pathlib import Path
 import threading
 import uuid
 
@@ -22,7 +24,15 @@ from spacebutler.agent.executor import AgentExecutor
 from spacebutler.agent.goal_compiler import GoalCompiler, is_cancel_text
 from spacebutler.agent.goal_evaluator import GoalEvaluator
 from spacebutler.agent.goal_manager import GoalManager
-from spacebutler.agent.models import ActionAttribution, CandidatePlan, CompiledGoal, GoalStatus, now
+from spacebutler.agent.models import (
+    ActionAttribution,
+    CandidatePlan,
+    CompiledGoal,
+    FreshObservation,
+    GoalStatus,
+    RoomState,
+    now,
+)
 from spacebutler.agent.override_detector import OverrideDetector
 from spacebutler.agent.planner import CounterfactualPlanner, PlanningOutcome
 from spacebutler.agent.preference_memory import PreferenceMemory
@@ -41,10 +51,12 @@ class AgentRuntime:
         llm_client: LlmClient | None = None,
         database_path: str | None = None,
         poll_interval_seconds: float = 2.0,
+        override_suppression_seconds: float = 5 * 60.0,
     ) -> None:
         self._devices_provider = devices_provider
         self._control_device = control_device
         self._llm = llm_client
+        self._database_path = database_path
         self._poll_interval = poll_interval_seconds
         self._world = HomeWorldModel()
         self._preferences = PreferenceMemory(database_path)
@@ -52,14 +64,22 @@ class AgentRuntime:
         self._planner = CounterfactualPlanner()
         self._executor = AgentExecutor(control_device)
         self._verifier = Verifier()
-        self._detector = OverrideDetector(self._world, self._preferences, llm_client=llm_client)
+        self._detector = OverrideDetector(
+            self._world,
+            self._preferences,
+            llm_client=llm_client,
+            suppression_seconds=override_suppression_seconds,
+        )
         self._goal_manager = GoalManager(self._world)
         self._evaluator = GoalEvaluator()
         self._last_outcome: PlanningOutcome | None = None
         self._last_observed: dict[str, object] | None = None
-        self._last_signature: dict[str, object] = {}
+        self._last_signature: dict[tuple[str, str], dict[str, object]] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._last_tick_at: float | None = None
+        self._fatal_error: str | None = None
+        self._last_runtime_error: str | None = None
         self._lock = threading.RLock()
         self._messages: list[dict[str, object]] = [
             {"role": "assistant", "content": "自治智能体已就绪：说出目标即可，我会规划、执行并持续盯住环境。", "ts": now()}
@@ -74,6 +94,8 @@ class AgentRuntime:
         with self._lock:
             devices = self._devices_provider()["devices"]
             state = self._world.update_state(devices)
+            if not self._last_signature:
+                self._last_signature = _device_signatures(devices)
             goal, compile_mode, semantic = self._compiler.compile_with_state(
                 text,
                 self._llm,
@@ -89,7 +111,23 @@ class AgentRuntime:
                     )
                 return None
             registry = build_capability_registry(devices)
+            old_goal, old_status = self._world.active_goal()
+            self._world.clear_suppressions()
+            if (
+                old_goal is not None
+                and old_goal.goal_id != goal.goal_id
+                and old_status
+                in {GoalStatus.ACTIVE, GoalStatus.DEGRADED, GoalStatus.REPLANNING, GoalStatus.SATISFIED}
+            ):
+                # 新目标替换旧目标：旧目标明确收尾，避免生命周期泄漏。
+                self._world.set_active_goal(old_goal, GoalStatus.CANCELLED)
+                self._world.record_event(
+                    "goal_cancelled",
+                    f"目标「{old_goal.title}」被新目标替换",
+                    replaced_by=goal.goal_id,
+                )
             self._world.set_active_goal(goal, GoalStatus.ACTIVE)
+            self._persist_goal_event(goal, GoalStatus.ACTIVE, "goal_received")
             self._goal_manager.reset_tracking()
             if compile_mode == "llm":
                 self._world.record_event("goal_compiled_by_llm", "模型完成了目标语义理解")
@@ -131,7 +169,16 @@ class AgentRuntime:
         self._world.record_event("world_snapshot", "已捕获真实环境快照", **state.to_dict())
         preference = self._preferences.estimate(goal.activity, goal.room, "brightness")
         recent_events = self._world.snapshot()["timeline"][-5:]
-        outcome = self._planner.plan(goal, state, registry, preference, self._llm, recent_events)
+        suppressions = self._world.active_suppressions(goal.goal_id)
+        outcome = self._planner.plan(
+            goal,
+            state,
+            registry,
+            preference,
+            self._llm,
+            recent_events,
+            suppressions,
+        )
         self._world.set_planner_mode(outcome.planner_mode)
         self._world.set_contribution(outcome.llm_metrics)
         if outcome.planner_mode == "llm":
@@ -157,7 +204,13 @@ class AgentRuntime:
         self._world.record_event("policy_check", "Policy Guard 校验通过", actions=len(selected.actions))
         records = self._executor.execute(selected, self._world)
         self._world.record_event("execution", f"已发送 {len(records)} 条设备命令")
-        failures = self._verifier.verify_actions(records, self._read_ha_state)
+        observation = self._fresh_observation()
+        self._world.record_event(
+            "fresh_observation",
+            "动作后已从 Home Assistant 获取新状态" if observation.fresh else "动作后 Home Assistant 新状态不可用",
+            **observation.to_dict(),
+        )
+        failures = self._verifier.verify_actions(records, observation.state_for)
         for record in records:
             self._world.update_action(
                 record.action_id,
@@ -168,26 +221,47 @@ class AgentRuntime:
         for action, record in zip(selected.actions, records):
             action.verified = record.verified
             action.observed = record.observed
-        error = self._verifier.prediction_error(selected.predicted, self._world.current_state())
+        error = (
+            self._verifier.prediction_error(selected.predicted, observation.state)
+            if observation.fresh
+            else None
+        )
         self._world.record_prediction(
             {
                 "predicted": selected.predicted.to_dict(),
-                "observed_temperature": self._world.current_state().temperature,
+                "observed": observation.to_dict(),
+                "observed_temperature": observation.state.temperature,
                 "prediction_error": error,
-                "at": now(),
+                "at": observation.observed_at,
             }
         )
-        # Online Calibration：用真实反馈校准物理预测速率（EMA）。
-        if error is not None:
+        # Online Calibration：只允许所有动作验证成功后的 fresh HA snapshot。
+        calibration_allowed = bool(
+            error is not None
+            and failures == 0
+            and observation.is_fresh_after(records)
+            and all(record.verified is True for record in records)
+            and any(record.capability in {"set_temperature", "set_hvac_mode"} for record in records)
+        )
+        if calibration_allowed:
             rate = self._planner._predictor.calibrate(
                 selected.predicted.temperature,
-                self._world.current_state().temperature or selected.predicted.temperature,
+                observation.state.temperature
+                if observation.state.temperature is not None
+                else selected.predicted.temperature,
                 selected.predicted.temperature_trend == "decreasing",
             )
             self._world.record_event(
                 "predictor_calibrated",
                 f"预测器在线校准完成（采样 #{self._planner._predictor.calibration_samples}，"
                 f"制冷速率 {rate:.1f}°C/min，预测误差 {error}°C）",
+            )
+        else:
+            self._world.record_event(
+                "calibration_skipped",
+                "未获得通过验证的动作后新状态，跳过预测器校准",
+                fresh=observation.fresh,
+                failures=failures,
             )
         for record in records:
             if record.prediction_error is None:
@@ -198,43 +272,67 @@ class AgentRuntime:
             failures=failures,
             prediction_error=error,
         )
-        self._goal_manager.note_replanned()
-        self._world.set_active_goal(goal, GoalStatus.ACTIVE)
+        if failures == 0:
+            self._goal_manager.note_replanned()
+        resulting_status = GoalStatus.ACTIVE if failures == 0 else GoalStatus.DEGRADED
+        self._world.set_active_goal(goal, resulting_status)
+        self._persist_goal_event(goal, resulting_status, "execution_verified" if failures == 0 else "verification_failed")
         self._last_outcome = outcome
-        self._last_observed = None
+        self._last_observed = observation.to_dict()
         return outcome
 
-    def _read_ha_state(self, entity_id: str) -> dict[str, object] | None:
-        for item in self._devices_provider()["devices"]:
-            if isinstance(item, dict) and str(item.get("entity_id")) == entity_id:
-                ha_state = item.get("ha_state")
-                return ha_state if isinstance(ha_state, dict) else None
-        return None
+    def _fresh_observation(self) -> FreshObservation:
+        try:
+            payload = self._devices_provider()
+            devices = payload.get("devices")
+            if not isinstance(devices, list):
+                raise RuntimeError("device inventory is invalid")
+            return self._world.refresh_from_home_assistant(devices, now())
+        except (RuntimeError, TimeoutError, ValueError, OSError) as error:
+            self._world.record_event("observation_error", f"动作后状态读取失败：{error}")
+            return FreshObservation(
+                observed_at=now(),
+                source="UNAVAILABLE",
+                state=self._world.current_state(),
+                fresh=False,
+            )
 
     # ---- autonomous loop ---------------------------------------------
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
+        self._fatal_error = None
         self._thread = threading.Thread(target=self._loop, name="spacebutler-agent-runtime", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, join_timeout: float = 2.0) -> None:
         self._stop.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=join_timeout)
 
     def _loop(self) -> None:
-        while not self._stop.wait(self._poll_interval):
+        while not self._stop.is_set():
             try:
                 self._tick()
             except (RuntimeError, TimeoutError, ValueError, OSError) as error:
+                self._last_runtime_error = str(error)
                 self._world.record_event("runtime_error", f"运行时错误：{error}")
+            except Exception as error:  # noqa: BLE001 - unexpected errors are fatal and health-visible
+                self._fatal_error = f"{type(error).__name__}: {error}"
+                self._world.record_event("runtime_fatal", f"运行时线程已停止：{self._fatal_error}")
+                break
+            finally:
+                self._last_tick_at = now()
+            if self._stop.wait(self._poll_interval):
+                break
 
     def _tick(self) -> None:
         payload = self._devices_provider()
         devices = payload["devices"]
-        previous = self._world.current_state()
         state = self._world.update_state(devices)
-        self._detect_changes(previous, state)
+        self._detect_changes(devices)
         goal, status = self._world.active_goal()
         if goal is None or status in {GoalStatus.CANCELLED, GoalStatus.EXPIRED, GoalStatus.PAUSED}:
             return
@@ -271,38 +369,35 @@ class AgentRuntime:
         else:
             self._world.set_active_goal(goal, new_status)
 
-    def _detect_changes(self, previous: object, state: object) -> None:
-        signature_new = {
-            "brightness": state.brightness_pct,
-            "curtain": state.curtain_position,
-            "temperature": round(state.temperature, 1) if state.temperature is not None else None,
-            "ac": state.ac_mode,
-        }
+    def _detect_changes(self, devices: list[dict[str, object]]) -> None:
+        signature_new = _device_signatures(devices)
         old = dict(self._last_signature)
         self._last_signature = signature_new
         if not old:
             return
-        changes = [
-            ("light", "set_brightness", old.get("brightness"), signature_new["brightness"]),
-            ("living_room_curtain", "set_position", old.get("curtain"), signature_new["curtain"]),
-            ("living_room_ac", "set_temperature", old.get("temperature"), signature_new["temperature"]),
-            ("living_room_ac", "set_hvac_mode", old.get("ac"), signature_new["ac"]),
-        ]
-        for device_id, capability, before, after in changes:
+        for key, current in signature_new.items():
+            prior = old.get(key)
+            if prior is None:
+                continue
+            device_id = str(current["device_id"])
+            device_type = str(current["device_type"])
+            capability = str(current["capability"])
+            before = prior.get("value")
+            after = current.get("value")
             if before is None or after is None:
                 continue
             try:
                 drift = abs(float(before) - float(after))
             except (TypeError, ValueError):
                 drift = 0.0 if before == after else _CHANGE_TOLERANCE + 1
-            if capability == "set_hvac_mode":
+            categorical_change = capability == "set_hvac_mode" or device_type in {"presence", "contact"}
+            if categorical_change:
                 if before == after:
                     continue
-            elif drift <= _CHANGE_TOLERANCE:
+            elif drift <= _change_tolerance(capability, device_type):
                 continue
-            device_type = "temperature" if capability == "set_temperature" else "climate" if capability == "set_hvac_mode" else "light" if capability == "set_brightness" else "curtain"
             attribution = self._detector.classify(device_id, device_type, capability, before, after, now())
-            if attribution in {ActionAttribution.HUMAN_OVERRIDE, ActionAttribution.ENVIRONMENT_CHANGE}:
+            if attribution != ActionAttribution.UNKNOWN:
                 self._world.record_event(
                     "attribution",
                     f"{device_id} 变化归因为 {attribution.value}",
@@ -313,12 +408,37 @@ class AgentRuntime:
                 )
 
     # ---- cancel & views ----------------------------------------------
+    def _persist_goal_event(self, goal: CompiledGoal, status: GoalStatus, note: str = "") -> None:
+        """Goal History 持久化：重启后仍可回溯目标生命周期（P1-3）。"""
+        if self._database_path is None:
+            return
+        try:
+            history_path = Path(self._database_path).parent / "goal_history.jsonl"
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            entry = json.dumps(
+                {
+                    "goal_id": goal.goal_id,
+                    "title": goal.title,
+                    "activity": goal.activity,
+                    "status": status.value,
+                    "note": note,
+                    "ts": now(),
+                },
+                ensure_ascii=False,
+            )
+            with open(history_path, "a", encoding="utf-8") as handle:
+                handle.write(entry + "\n")
+        except OSError:
+            pass
+
     def _cancel_goal(self) -> dict[str, object]:
         goal, _ = self._world.active_goal()
         if goal is None:
             self._append("assistant", "当前没有进行中的自治目标。")
         else:
             self._world.set_active_goal(goal, GoalStatus.CANCELLED)
+            self._world.clear_suppressions(goal.goal_id)
+            self._persist_goal_event(goal, GoalStatus.CANCELLED, "user_cancelled")
             self._world.record_event("goal_cancelled", f"目标 {goal.title} 已取消，停止自动调整")
             self._append("assistant", f"已结束「{goal.title}」目标，设备保持当前状态，不再自动调整。")
         return self.history()
@@ -327,6 +447,13 @@ class AgentRuntime:
         if outcome.no_action:
             return f"目标「{goal.title}」当前已经满足，无需调整。" if outcome.candidates else outcome.reason
         selected = outcome.selected
+        failed = [action for action in selected.actions if action.verified is False]
+        if failed:
+            names = "、".join(action.device_name for action in failed)
+            return (
+                f"注意：{len(failed)} 项动作（{names}）执行后未通过 Home Assistant 回读验证，"
+                f"目标「{goal.title}」未完全达成。系统已记录，将不会假报成功。"
+            )
         actions = "、".join(f"{action.device_name}{_action_text(action)}" for action in selected.actions)
         mode_text = "本地模型参与规划" if outcome.planner_mode == "llm" else "确定性规划（LLM 未参与）"
         return (
@@ -345,10 +472,10 @@ class AgentRuntime:
     def status(self) -> dict[str, object]:
         snapshot = self._world.snapshot()
         goal, status = self._world.active_goal()
-        preference = self._preferences.estimate(
-            goal.activity if goal else "watch_content",
-            goal.room if goal else "living_room",
-            "brightness",
+        preference = (
+            self._preferences.estimate(goal.activity, goal.room, "brightness")
+            if goal is not None
+            else None
         )
         snapshot.update(
             {
@@ -358,9 +485,26 @@ class AgentRuntime:
                 "llm_available": bool(self._llm and self._llm.available()),
                 "goal_status_detail": status.value,
                 "llm_contribution": self._world.contribution().to_dict(),
+                "runtime": self.runtime_health(),
             }
         )
         return snapshot
+
+    def runtime_health(self) -> dict[str, object]:
+        thread_alive = bool(self._thread and self._thread.is_alive())
+        tick_age = max(0.0, now() - self._last_tick_at) if self._last_tick_at is not None else None
+        recent_limit = max(5.0, self._poll_interval * 3.0)
+        recent_tick = tick_age is not None and tick_age <= recent_limit
+        return {
+            "initialized": self._thread is not None,
+            "thread_alive": thread_alive,
+            "last_tick": self._last_tick_at,
+            "last_tick_age_seconds": round(tick_age, 3) if tick_age is not None else None,
+            "recent_tick": recent_tick,
+            "fatal_error": self._fatal_error,
+            "last_error": self._last_runtime_error,
+            "status": "ready" if thread_alive and recent_tick and self._fatal_error is None else "degraded",
+        }
 
 
 def _action_text(action: object) -> str:
@@ -376,3 +520,51 @@ def _action_text(action: object) -> str:
         return template.format(value=action.value)
     except (KeyError, IndexError, ValueError):
         return template
+
+
+def _device_signatures(
+    devices: list[dict[str, object]],
+) -> dict[tuple[str, str], dict[str, object]]:
+    """Build attribution inputs from live inventory identities, never aliases."""
+    signatures: dict[tuple[str, str], dict[str, object]] = {}
+    for item in devices:
+        if not isinstance(item, dict) or not item.get("online"):
+            continue
+        device_id = str(item.get("device_id", ""))
+        device_type = str(item.get("type", ""))
+        entity_id = str(item.get("entity_id", ""))
+        state = item.get("state") if isinstance(item.get("state"), dict) else {}
+        dimensions: list[tuple[str, str, object]] = []
+        if device_type == "light":
+            brightness = state.get("brightness")
+            if isinstance(brightness, (int, float)):
+                dimensions.append(("brightness", "set_brightness", round(float(brightness) * 100 / 255, 1)))
+        elif device_type == "curtain":
+            dimensions.append(("curtain_position", "set_position", state.get("position")))
+        elif device_type == "climate":
+            dimensions.extend(
+                [
+                    ("temperature", "set_temperature", state.get("temperature")),
+                    ("hvac_mode", "set_hvac_mode", state.get("mode")),
+                ]
+            )
+        elif device_type == "temperature":
+            dimensions.append(("temperature", "state_change", state.get("temperature")))
+        elif device_type in {"presence", "contact", "illuminance"}:
+            sensor_value = next(iter(state.values()), None)
+            dimensions.append((device_type, "state_change", sensor_value))
+        for dimension, capability, value in dimensions:
+            signatures[(device_id, dimension)] = {
+                "device_id": device_id,
+                "entity_id": entity_id,
+                "device_type": device_type,
+                "capability": capability,
+                "value": value,
+            }
+    return signatures
+
+
+def _change_tolerance(capability: str, device_type: str) -> float:
+    if capability == "set_temperature" or device_type == "temperature":
+        return 0.1
+    return _CHANGE_TOLERANCE

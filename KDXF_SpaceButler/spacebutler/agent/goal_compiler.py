@@ -36,6 +36,8 @@ _GOAL_SYSTEM_PROMPT = (
     "并编译为语义目标。约束表达语义偏好而非设备指令；数值区间由你根据语义推理给出并填写 reason。"
     "注意：身体感受（刺眼、闷、热、冷、暗）和活动准备（看电影、休息、工作）都是家居目标；"
     "'不想睡''别太黑'这类否定约束也是目标的一部分。"
+    "必须逐项覆盖用户同一句话里的每个独立环境感受或限制；如果同时涉及温度、灯光、眩光等多个维度，"
+    "必须分别输出对应 constraint，不能遗漏，也不能把一个维度的理由写到另一个维度。"
     "不要假设特定活动必须操作特定设备。energy 维度不设数值区间。"
     "不是家居目标时 constraints 返回空数组。"
     "\n示例：\n"
@@ -77,6 +79,17 @@ _GOAL_SCHEMA: dict = {
     "required": ["is_home_goal", "intent_summary", "constraints"],
 }
 
+_DIMENSION_AUDIT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "dimensions": {
+            "type": "array",
+            "items": {"type": "string", "enum": ["thermal", "lighting", "glare", "energy"]},
+        }
+    },
+    "required": ["dimensions"],
+}
+
 # fallback 专用：LLM 不可用时才使用（planner_mode 如实标注 fallback）。
 _ACTIVITY_WORDS = re.compile(r"看(?:会|场|个)?(?:电影|电视|剧|片)|观影|追剧|休息|放松|睡觉|工作|阅读")
 _THERMAL_WORDS = re.compile(r"有点热|太热|热|有点冷|太冷|凉快|闷")
@@ -111,6 +124,31 @@ class GoalCompiler:
                 )
                 if isinstance(repair, dict) and repair.get("is_home_goal") is True:
                     raw = repair
+            if isinstance(raw, dict) and raw.get("is_home_goal") is True:
+                audit = llm_client.chat_json(
+                    "你是环境语义维度审计器。只提取用户文本明确表达的环境维度，不推测活动惯例。"
+                    "thermal=冷热闷等温度感受，lighting=灯光明暗，glare=自然光或窗帘眩光，"
+                    "energy=明确节能诉求。返回 JSON。",
+                    text,
+                    schema=_DIMENSION_AUDIT_SCHEMA,
+                )
+                audited_dimensions = {
+                    str(item)
+                    for item in (audit.get("dimensions", []) if isinstance(audit, dict) else [])
+                    if str(item) in DIMENSION_RULES
+                }
+                draft_dimensions = _semantic_dimensions(raw)
+                missing_dimensions = audited_dimensions - draft_dimensions
+                if missing_dimensions:
+                    reviewed = llm_client.chat_json(
+                        _GOAL_SYSTEM_PROMPT
+                        + "\n你现在进行完整性修复。保留正确初稿，并补齐审计确认遗漏的维度。"
+                        "返回修复后的完整 JSON，不要解释。",
+                        f"原始用户文本：{text}\n待修复初稿：{raw}\n必须补齐：{sorted(missing_dimensions)}",
+                        schema=_GOAL_SCHEMA,
+                    )
+                    if audited_dimensions <= _semantic_dimensions(reviewed):
+                        raw = reviewed
             goal = self._goal_from_semantics(raw, text)
             if goal is not None:
                 semantic = raw if isinstance(raw, dict) else {}
@@ -262,3 +300,22 @@ class GoalCompiler:
 def is_cancel_text(text: str) -> bool:
     """取消表述是封闭集合（确认/取消词表属于交互协议，不是场景决策）。"""
     return bool(_CANCEL_WORDS.search(text))
+
+
+def _semantic_dimension_count(raw: object) -> int:
+    if not isinstance(raw, dict) or raw.get("is_home_goal") is not True:
+        return -1
+    return len(_semantic_dimensions(raw))
+
+
+def _semantic_dimensions(raw: object) -> set[str]:
+    if not isinstance(raw, dict):
+        return set()
+    constraints = raw.get("constraints")
+    if not isinstance(constraints, list):
+        return set()
+    return {
+        str(item.get("dimension", ""))
+        for item in constraints
+        if isinstance(item, dict) and str(item.get("dimension", "")) in DIMENSION_RULES
+    }

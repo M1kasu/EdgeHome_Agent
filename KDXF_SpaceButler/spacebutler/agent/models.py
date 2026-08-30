@@ -109,6 +109,7 @@ class DeviceCapability:
     actions: list[str]
     brightness_range: tuple[float, float] | None = None
     temperature_range: tuple[float, float] | None = None
+    temperature_step: float | None = None
     position_range: tuple[float, float] | None = None
     modes: list[str] = field(default_factory=list)
     readonly: bool = False
@@ -123,6 +124,7 @@ class DeviceCapability:
             "actions": list(self.actions),
             "brightness_range": list(self.brightness_range) if self.brightness_range else None,
             "temperature_range": list(self.temperature_range) if self.temperature_range else None,
+            "temperature_step": self.temperature_step,
             "position_range": list(self.position_range) if self.position_range else None,
             "modes": list(self.modes),
             "readonly": self.readonly,
@@ -156,6 +158,7 @@ class PredictedState:
     ac_mode: str = "off"
     horizon_minutes: float = 5.0
     notes: list[str] = field(default_factory=list)
+    predicted_at: float = field(default_factory=now)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -246,6 +249,60 @@ class ActionRecord:
             "observed": self.observed,
             "prediction_error": self.prediction_error,
         }
+
+
+@dataclass
+class FreshObservation:
+    """One post-action snapshot read from Home Assistant.
+
+    ``fresh`` is deliberately explicit: prediction calibration must never use a
+    cached pre-action ``RoomState`` merely because it is the world's current
+    object.
+    """
+
+    observed_at: float
+    source: str
+    state: "RoomState"
+    entity_states: dict[str, dict[str, Any]] = field(default_factory=dict)
+    fresh: bool = True
+
+    def state_for(self, entity_id: str) -> dict[str, Any] | None:
+        value = self.entity_states.get(entity_id)
+        return value if isinstance(value, dict) else None
+
+    def is_fresh_after(self, records: list[ActionRecord]) -> bool:
+        return bool(
+            self.fresh
+            and self.source == "HOME_ASSISTANT"
+            and records
+            and self.observed_at >= max(record.sent_at for record in records)
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "observed_at": self.observed_at,
+            "source": self.source,
+            "fresh": self.fresh,
+            "state": self.state.to_dict(),
+        }
+
+
+@dataclass
+class OverrideSuppression:
+    """Temporary user-owned control over one device dimension for one goal."""
+
+    goal_id: str
+    device_id: str
+    dimension: str
+    observed_value: object
+    created_at: float
+    expires_at: float
+
+    def active(self, at: float | None = None) -> bool:
+        return (at or now()) < self.expires_at
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass

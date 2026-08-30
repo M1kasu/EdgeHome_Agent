@@ -64,10 +64,12 @@ class LlmClient:
         if not base_url:
             return None
         temperature = os.environ.get("SPACEBUTLER_LLM_TEMPERATURE")
+        timeout = os.environ.get("SPACEBUTLER_LLM_TIMEOUT")
         return cls(
             base_url=base_url,
             model=os.environ.get("SPACEBUTLER_LLM_MODEL") or None,
             api_key=os.environ.get("SPACEBUTLER_LLM_API_KEY") or None,
+            timeout_seconds=float(timeout) if timeout else 40.0,
             temperature=float(temperature) if temperature else None,
         )
 

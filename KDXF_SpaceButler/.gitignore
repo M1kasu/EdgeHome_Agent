@@ -15,3 +15,9 @@ deployment/homeassistant/.HA_VERSION
 deployment/runtime/
 deployment/esphome/secrets.yaml
 deployment/esphome/.esphome/
+
+# Local model artifacts must never enter ordinary Git history.
+deployment/models/*.gguf
+*.gguf
+*.safetensors
+*.bin

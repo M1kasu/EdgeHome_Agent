@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from spacebutler.agent.models import CandidatePlan, CompiledGoal, PreferenceEstimate, PredictedState, RoomState
+from spacebutler.agent.preference_memory import preference_is_eligible
 
 WEIGHTS = {
     "goal_satisfaction": 0.35,
@@ -109,13 +110,16 @@ class PlanScorer:
         predicted: PredictedState,
         preference: PreferenceEstimate | None,
     ) -> float:
-        if preference is None or preference.count <= 0:
+        if not preference_is_eligible(preference):
             return 0.5  # 无偏好证据时中性，不奖不罚。
+        assert preference is not None
         brightness = predicted.brightness_pct
         if brightness is None:
             return 0.5
         distance = abs(brightness - preference.mean)
-        return round(max(0.0, 1.0 - distance / 30.0), 4)
+        raw_match = max(0.0, 1.0 - distance / 30.0)
+        # 低置信偏好向中性分数收缩，避免刚过门槛的证据与稳定偏好同权。
+        return round(0.5 + (raw_match - 0.5) * preference.confidence, 4)
 
     def _safety(self, predicted: PredictedState, state: RoomState) -> float:
         # 无人在还开制冷是能量浪费（安全扣分）；其他组合安全。

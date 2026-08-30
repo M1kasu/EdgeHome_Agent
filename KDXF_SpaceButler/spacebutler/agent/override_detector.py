@@ -16,6 +16,7 @@ from spacebutler.llm.client import LlmClient
 
 _AGENT_ACTION_WINDOW_SECONDS = 90.0
 _INTERPRET_MIN_CONFIDENCE = 0.6
+_DEFAULT_SUPPRESSION_SECONDS = 5 * 60.0
 _METRIC_BY_DIMENSION = {"lighting.brightness": "brightness", "thermal.temperature": "temperature", "glare.position": "curtain_position"}
 _INTERPRET_PROMPT = (
     "你是家庭智能体的纠正解释器。Agent 设置了设备状态，随后用户手动改成了另一个值。"
@@ -31,7 +32,7 @@ _METRIC_BY_CAPABILITY = {
     "set_brightness": "brightness",
     "set_position": "curtain_position",
     "set_temperature": "temperature",
-    "set_hvac_mode": "ac_mode",
+    "set_hvac_mode": "hvac_mode",
 }
 _SENSORS = {"presence", "contact", "illuminance", "temperature"}
 
@@ -41,15 +42,13 @@ class OverrideDetector:
         self,
         world: HomeWorldModel,
         preferences: PreferenceMemory,
-        activity: str = "watch_content",
-        room: str = "living_room",
         llm_client: LlmClient | None = None,
+        suppression_seconds: float = _DEFAULT_SUPPRESSION_SECONDS,
     ) -> None:
         self._world = world
         self._preferences = preferences
-        self._activity = activity
-        self._room = room
         self._llm = llm_client
+        self._suppression_seconds = suppression_seconds
 
     def classify(
         self,
@@ -69,10 +68,10 @@ class OverrideDetector:
             if _matches_expectation(record.capability, record.value, capability, new_value):
                 return ActionAttribution.AGENT_ACTION
         metric = _METRIC_BY_CAPABILITY.get(capability)
-        if metric is not None and isinstance(new_value, (int, float)):
+        if metric is not None:
             # 人工纠正：先由模型语义解释（偏好纠正 vs 偶发操作），
             # 置信度达标且目标活跃才写入偏好观测（上下文绑定 + 防误触）。
-            _, status = self._world.active_goal()
+            goal, status = self._world.active_goal()
             goal_active = status in {
                 GoalStatus.ACTIVE,
                 GoalStatus.DEGRADED,
@@ -90,8 +89,26 @@ class OverrideDetector:
                 else True
             )
             dimension_metric = _METRIC_BY_DIMENSION.get(str(interpretation.get("dimension", "")), metric) if interpretation else metric
-            if goal_active and trusted and dimension_metric == "brightness":
-                self._preferences.observe(self._activity, self._room, dimension_metric, float(new_value), at)
+            preference_recorded = bool(
+                goal_active
+                and goal is not None
+                and trusted
+                and dimension_metric == "brightness"
+                and isinstance(new_value, (int, float))
+                and not isinstance(new_value, bool)
+            )
+            if preference_recorded and goal is not None:
+                self._preferences.observe(goal.activity, goal.room, dimension_metric, float(new_value), at)
+            suppression = None
+            if goal_active and goal is not None:
+                suppression = self._world.apply_human_override(
+                    goal,
+                    device_id,
+                    dimension_metric,
+                    new_value,
+                    self._suppression_seconds,
+                    at,
+                )
             self._world.record_event(
                 "human_override",
                 f"检测到人工调整 {device_id}：{previous_value} → {new_value}"
@@ -102,7 +119,8 @@ class OverrideDetector:
                 new=new_value,
                 attribution=ActionAttribution.HUMAN_OVERRIDE.value,
                 interpretation=interpretation,
-                preference_recorded=bool(goal_active and trusted and dimension_metric == "brightness"),
+                preference_recorded=preference_recorded,
+                suppression=suppression.to_dict() if suppression is not None else None,
             )
             return ActionAttribution.HUMAN_OVERRIDE
         self._world.record_event(
