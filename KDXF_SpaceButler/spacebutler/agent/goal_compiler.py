@@ -116,11 +116,25 @@ class GoalCompiler:
         planner_mode ∈ {llm, invalid, unavailable}。
         semantic_view 是模型原始语义判断（供 UI 展示 MODEL INTERPRETATION）。
         """
-        model_input = (
-            json.dumps({"user_text": text, "context": context}, ensure_ascii=False, default=str)
-            if context
-            else text
-        )
+        # Goal 理解的输入就是用户的原话。3B 模型对 JSON 包装输入的语义
+        # 理解会明显退化（实测判非目标率飙升），全量状态上下文属于 Planner。
+        model_input = text
+        if context and isinstance(context.get("active_goal"), dict):
+            # 已有进行中的目标：附加紧凑摘要（仅 active_goal，不含全量状态
+            # 与对话历史），让模型能判断"这句话是否仍指向该目标/是否已满足"。
+            active = context["active_goal"]
+            compact = json.dumps(
+                {
+                    "active_goal": {
+                        "title": active.get("title"),
+                        "activity": active.get("activity"),
+                        "status": context.get("active_goal_status"),
+                        "constraints": active.get("constraints"),
+                    }
+                },
+                ensure_ascii=False,
+            )
+            model_input = f"{text}\n{compact}"
         if llm_client is not None and llm_client.available():
             raw = llm_client.chat_json(_GOAL_SYSTEM_PROMPT, model_input, schema=_GOAL_SCHEMA)
             self.last_raw = raw if isinstance(raw, dict) else None
@@ -219,6 +233,10 @@ class GoalCompiler:
             return None
         activity = str(raw.get("activity", "") or "home_comfort").strip()[:24] or "home_comfort"
         title = str(raw.get("intent_summary", "") or activity).strip()[:40] or activity
+        # 模型偶发输出 "null"/"none"/"未知" 字面字符串；清洗为可读默认标题。
+        if title.lower() in {"null", "none", "未知", "无", "unknown", "n/a"}:
+            title = f"{activity} 环境目标"
+        title = title[:40]
         goal = CompiledGoal(
             goal_id=f"goal_{uuid.uuid4().hex[:10]}",
             activity=activity,

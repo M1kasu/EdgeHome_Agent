@@ -268,6 +268,8 @@ services:
       retries: 12
       start_period: 240s
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:6053:6053"
     networks:
       - spacebutler
 
@@ -286,6 +288,8 @@ services:
       retries: 12
       start_period: 240s
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:6054:6053"
     networks:
       - spacebutler
 
@@ -304,6 +308,8 @@ services:
       retries: 12
       start_period: 240s
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:6055:6053"
     networks:
       - spacebutler
 
@@ -322,6 +328,8 @@ services:
       retries: 12
       start_period: 240s
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:6056:6053"
     networks:
       - spacebutler
 
