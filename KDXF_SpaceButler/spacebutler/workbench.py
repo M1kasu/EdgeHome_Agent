@@ -995,6 +995,20 @@ _DEVICE_UI_META: dict[str, tuple[str, str, str, str]] = {
 }
 
 
+def _device_icon(device: dict[str, object], default: str) -> str:
+    """Resolve presentation from device metadata; the browser never knows device IDs."""
+    configured = str(device.get("icon", "")).strip()
+    if configured:
+        return configured
+    name = str(device.get("name", "")).casefold()
+    device_type = str(device.get("type", ""))
+    if device_type == "switch" and any(token in name for token in ("电视", "tv", "screen", "display")):
+        return "monitor"
+    if device_type == "light" and any(token in name for token in ("阅读", "台灯", "desk", "reading")):
+        return "lamp-desk"
+    return default
+
+
 def _device_ui(device: dict[str, object]) -> dict[str, object]:
     """Build a complete UI descriptor so the browser never knows concrete devices."""
     device_type = str(device.get("type", ""))
@@ -1002,8 +1016,13 @@ def _device_ui(device: dict[str, object]) -> dict[str, object]:
         device_type,
         (device_type or "设备", "cpu", "blue", "device"),
     )
+    icon = _device_icon(device, icon)
     raw_state = device.get("state")
     state = raw_state if isinstance(raw_state, dict) else {}
+    raw_ha_state = device.get("ha_state")
+    ha_state = raw_ha_state if isinstance(raw_ha_state, dict) else {}
+    raw_attributes = ha_state.get("attributes")
+    attributes = raw_attributes if isinstance(raw_attributes, dict) else {}
     online = bool(device.get("online"))
     controls: list[dict[str, object]] = []
     primary_action: dict[str, object] | None = None
@@ -1083,6 +1102,13 @@ def _device_ui(device: dict[str, object]) -> dict[str, object]:
         mode = str(state.get("mode", "off"))
         temperature = float(state.get("temperature", 24))
         current_temperature = float(state.get("current_temperature", 0))
+        live_modes = attributes.get("hvac_modes")
+        supported_modes = (
+            [str(value).lower() for value in live_modes if str(value).strip()]
+            if isinstance(live_modes, list)
+            else ["off", "cool", "heat"]
+        )
+        turn_on_mode = next((value for value in supported_modes if value != "off"), "cool")
         floor_readout = f"{current_temperature:g}°"
         active = mode != "off"
         mode_label = {"cool": "制冷", "heat": "制热", "off": "已关闭"}.get(mode, mode)
@@ -1091,7 +1117,7 @@ def _device_ui(device: dict[str, object]) -> dict[str, object]:
         primary_action = {
             "label": "关闭" if active else "开启",
             "payload": {
-                "mode": "off" if active else "cool",
+                "mode": "off" if active else turn_on_mode,
                 "temperature": temperature,
             },
         }
@@ -1109,12 +1135,12 @@ def _device_ui(device: dict[str, object]) -> dict[str, object]:
                     "label": "空调模式",
                     "options": [
                         {
-                            "label": label,
+                            "label": {"off": "关闭", "cool": "制冷", "heat": "制热"}.get(value, value),
                             "value": value,
                             "active": mode == value,
                             "payload": {"mode": value, "temperature": temperature},
                         }
-                        for value, label in (("off", "关闭"), ("cool", "制冷"), ("heat", "制热"))
+                        for value in supported_modes
                     ],
                 },
                 {
@@ -1126,7 +1152,7 @@ def _device_ui(device: dict[str, object]) -> dict[str, object]:
                     "max": 30,
                     "step": 0.5,
                     "unit": "°C",
-                    "payload": {"mode": mode if active else "cool"},
+                    "payload": {"mode": mode if active else turn_on_mode},
                 },
             ]
         )

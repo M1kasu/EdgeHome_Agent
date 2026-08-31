@@ -1937,7 +1937,7 @@ body {
   .recommendation-icon { width: 72px; height: 72px; }.proactive-recommendation { grid-template-columns: 72px minmax(0,1fr) 18px; padding-left: 16px; padding-right: 16px; }
 }
 
-@media (max-width: 1240px) {
+@media (max-width: 1320px) {
   .workspace { grid-template-columns: 82px minmax(0,1fr); }
   .rail { padding: 22px 12px 16px; align-items: center; }
   .sidebar-brand > div:last-child, .rail-button span, .sidebar-profile div, .sidebar-profile > svg { display: none; }
@@ -1960,4 +1960,121 @@ body {
   .favorite-grid { height: auto; grid-template-columns: repeat(2,minmax(0,1fr)); }.favorite-device { height: 240px; }
   .room-status-grid { height: auto; grid-template-columns: 1fr; }.room-status-card { min-height: 260px; }
   .dashboard-summary { display: none; }
+}
+
+/* ===== Live picture-elements dashboard ===== */
+.home-weather > svg { fill: none; }
+.room-overview,
+.energy-overview { min-height: 590px; }
+.room-overview { padding: 18px 20px 14px; overflow: hidden; }
+.room-overview-heading { min-height: 52px; align-items: flex-start; gap: 18px; }
+.room-overview-heading > div:first-child { min-width: 210px; }
+.room-overview-heading h2 { margin: 0; }
+.room-overview-heading p { margin: 7px 0 0; color: #89918c; font-size: 13px; }
+.room-overview-heading .icon-button { opacity: 1; pointer-events: auto; flex: 0 0 auto; }
+.floorplan-toolbar { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.floorplan-room-tabs { min-width: 0; display: flex; align-items: center; gap: 5px; overflow-x: auto; scrollbar-width: none; }
+.floorplan-room-tabs::-webkit-scrollbar { display: none; }
+.floorplan-room-tabs button {
+  min-height: 34px;
+  padding: 0 13px;
+  flex: 0 0 auto;
+  color: #68726b;
+  background: #f4f6f3;
+  border: 1px solid #e2e7e2;
+  border-radius: 18px;
+  font-size: 12px;
+}
+.floorplan-room-tabs button:hover { color: #176e48; border-color: #bcd5c5; }
+.floorplan-room-tabs button.active { color: #fff; background: #19774e; border-color: #19774e; }
+.floorplan-runtime { min-width: 0; overflow: hidden; }
+.room-overview .floorplan-stage {
+  min-width: 660px;
+  min-height: 462px;
+  height: 462px;
+  margin: 8px 0 0;
+  background: #e8e0d2;
+  border: 5px solid #303632;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 2px #c5beb2, 0 8px 22px rgba(41,49,43,.08);
+}
+.room-overview .floorplan-space {
+  border: 2px solid #4e534f;
+  transition: opacity .2s ease, filter .2s ease;
+}
+.room-overview .floorplan-space.dimmed { opacity: .34; filter: saturate(.35); }
+.room-overview .floorplan-space[data-theme="0"]::before {
+  left: 8%; bottom: 10%; width: 43%; height: 25%; border-radius: 9px;
+  background: linear-gradient(90deg, #b9a994 0 29%, #d1c3b0 29% 70%, #b9a994 70%);
+}
+.room-overview .floorplan-space[data-theme="0"]::after {
+  right: 10%; bottom: 14%; width: 23%; height: 16%; border-radius: 50%; background: #ddd0bd;
+}
+.room-overview .floorplan-space[data-theme="1"]::before {
+  left: 22%; bottom: 11%; width: 60%; height: 36%; border-radius: 5px 5px 11px 11px;
+  background: linear-gradient(180deg, #faf8f2 0 26%, #cfc7bb 26% 100%);
+  box-shadow: inset 0 0 0 5px rgba(255,255,255,.38), 7px 8px 13px rgba(68,60,47,.09);
+}
+.room-overview .floorplan-space[data-theme="1"]::after {
+  right: 7%; top: 17%; width: 14%; height: 20%; border-radius: 45% 45% 32% 32%; background: #86a86f;
+}
+.room-overview .room-title { left: 14px; top: 12px; padding: 6px 9px; background: rgba(255,255,255,.7); border-radius: 9px; backdrop-filter: blur(5px); }
+.room-overview .room-title strong { font-size: 13px; }.room-overview .room-title span { font-size: 9px; }
+.room-overview .floor-device { z-index: 2; }
+.room-overview .floor-device.dimmed { opacity: .2; pointer-events: none; }
+.room-overview .floor-device-copy {
+  top: calc(100% - 1px);
+  min-width: 96px;
+  max-width: 150px;
+  padding: 7px 9px;
+  color: #25312a;
+  background: rgba(255,255,255,.93);
+  border: 1px solid rgba(218,224,218,.95);
+  border-radius: 10px;
+  box-shadow: 0 7px 18px rgba(38,52,43,.13);
+  opacity: 1;
+  transform: translate(-50%, 0);
+  backdrop-filter: blur(7px);
+}
+.room-overview .floor-device-copy strong { color: #202b24; font-size: 11px; }
+.room-overview .floor-device-copy span { color: #747d77; font-size: 9px; }
+.room-overview .floor-device:hover .floor-device-copy,
+.room-overview .floor-device:focus-visible .floor-device-copy,
+.room-overview .floor-device.selected .floor-device-copy { border-color: #86b69b; box-shadow: 0 9px 24px rgba(34,88,55,.2); }
+.room-overview .floorplan-legend { min-height: 35px; padding: 5px 4px 0; justify-content: flex-start; gap: 14px; font-size: 10px; }
+.room-overview .floor-device-panel { top: 66px; right: 13px; width: 260px; }
+.device-busy { cursor: progress !important; }
+.device-busy .floor-device-visual,
+.favorite-device.device-busy .favorite-device-icon,
+.device-card.device-busy .device-icon { animation: device-working 1s ease-in-out infinite; }
+.device-busy button,
+.device-busy input,
+.device-busy select { cursor: progress !important; }
+@keyframes device-working { 0%,100% { opacity: 1; } 50% { opacity: .42; } }
+
+.energy-overview { padding-top: 20px; }
+.energy-overview .energy-line-chart { height: 340px; margin-top: 5px; }
+.energy-overview .energy-axis { justify-content: space-between; }
+
+@media (max-width: 1380px) {
+  .room-overview,
+  .energy-overview { min-height: 560px; }
+  .room-overview .floorplan-stage { min-height: 430px; height: 430px; }
+  .energy-overview .energy-line-chart { height: 310px; }
+}
+
+@media (max-width: 1320px) {
+  .room-overview,
+  .energy-overview { min-height: 590px; }
+  .room-overview .floorplan-stage { height: 465px; }
+  .energy-overview .energy-line-chart { height: 360px; }
+}
+
+@media (max-width: 760px) {
+  .room-overview-heading { display: block; }
+  .floorplan-toolbar { margin-top: 12px; justify-content: space-between; }
+  .floorplan-runtime { overflow-x: auto; padding-bottom: 5px; }
+  .room-overview .floorplan-stage { min-width: 720px; height: 500px; }
+  .room-overview .floor-device-copy { opacity: 1; }
+  .energy-overview .energy-line-chart { height: 250px; }
 }

@@ -49,9 +49,9 @@
         </div>
         <div class="home-status-strip" aria-label="家庭状态">
           <span class="home-status-pill member-pill"><span class="member-avatar">👴</span><strong id="household-member-status">爷爷 · 卧室</strong></span>
-          <span class="home-status-pill"><i data-lucide="shield-check"></i><strong id="household-device-status">全屋已撤防</strong></span>
+          <span class="home-status-pill"><i data-lucide="shield-check"></i><strong id="household-device-status">设备状态读取中</strong></span>
           <button class="home-status-pill advice-pill" data-view-jump="agent"><i data-lucide="lightbulb"></i><strong id="advice-count">读取主动建议</strong></button>
-          <span class="home-weather"><i data-lucide="moon-star"></i><strong id="indoor-temperature">--°C</strong><small id="temperature-source">晴 · 空气优</small></span>
+          <span class="home-weather"><i data-lucide="thermometer-sun"></i><strong id="indoor-temperature">--°C</strong><small id="temperature-source">HA 实时室温</small></span>
         </div>
         <div class="topbar-actions">
           <div class="health-strip" aria-label="服务状态">
@@ -217,14 +217,27 @@
 
           <section class="panel room-overview" aria-labelledby="room-overview-title">
             <div class="room-overview-heading">
-              <h2 id="room-overview-title">空间状态</h2>
-              <button class="icon-button" id="devices-reload" title="刷新空间状态"><i data-lucide="refresh-cw"></i></button>
+              <div>
+                <h2 id="room-overview-title">全屋空间控制</h2>
+                <p>单击控制 · 长按查看完整设备详情</p>
+              </div>
+              <div class="floorplan-toolbar">
+                <div class="floorplan-room-tabs" id="floorplan-room-tabs" role="tablist" aria-label="空间图筛选"></div>
+                <button class="icon-button" id="devices-reload" title="刷新全屋实时状态"><i data-lucide="refresh-cw"></i></button>
+              </div>
             </div>
-            <div class="room-status-grid" id="room-status-grid">
-              <div class="loading-state compact"><i data-lucide="loader-circle"></i><span>正在读取空间状态</span></div>
-            </div>
-            <div class="legacy-floorplan-runtime" aria-hidden="true">
-              <div id="floorplan-stage"><div id="floorplan-rooms"></div><div id="floorplan-devices"></div><aside id="floor-device-panel" hidden></aside></div>
+            <div class="floorplan-runtime">
+              <div class="floorplan-stage" id="floorplan-stage" aria-label="全屋实时设备平面图">
+                <div class="floorplan-rooms" id="floorplan-rooms"></div>
+                <div class="floor-device-layer" id="floorplan-devices"></div>
+                <aside class="floor-device-panel" id="floor-device-panel" aria-live="polite" hidden></aside>
+              </div>
+              <div class="floorplan-legend" aria-label="设备状态图例">
+                <span><i class="legend-dot active"></i>运行中</span>
+                <span><i class="legend-dot climate"></i>环境设备</span>
+                <span><i class="legend-dot warning"></i>需要关注</span>
+                <span><i class="legend-dot"></i>关闭或只读</span>
+              </div>
             </div>
           </section>
 
@@ -232,20 +245,20 @@
             <div class="energy-heading"><h2>能源摘要</h2></div>
             <div class="energy-metrics">
               <div><span>当前功率</span><strong id="total-power">--</strong></div>
-              <div><span>今日用电</span><strong><span id="estimated-today-energy">--</span> <small>kWh</small></strong></div>
-              <div><span>较昨日</span><strong class="energy-compare" id="energy-compare">-8%<small>↘</small></strong></div>
+              <div><span>今日估算</span><strong><span id="estimated-today-energy">--</span> <small>kWh</small></strong></div>
+              <div><span>在线设备</span><strong class="energy-compare" id="energy-online-devices">--</strong></div>
             </div>
-            <div class="energy-line-chart" aria-label="今日功率趋势">
-              <svg viewBox="0 0 520 168" role="img" aria-label="从零点到现在的功率曲线">
+            <div class="energy-line-chart" aria-label="实时功率趋势">
+              <svg viewBox="0 0 520 168" role="img" aria-label="根据设备实时状态采样的功率曲线">
                 <defs><linearGradient id="energy-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3aa5b0" stop-opacity=".25"/><stop offset="1" stop-color="#3aa5b0" stop-opacity=".03"/></linearGradient></defs>
                 <g class="chart-grid"><line x1="46" y1="18" x2="508" y2="18"/><line x1="46" y1="62" x2="508" y2="62"/><line x1="46" y1="106" x2="508" y2="106"/><line x1="46" y1="150" x2="508" y2="150"/></g>
-                <g class="chart-y-labels"><text x="4" y="22">2.0 kW</text><text x="4" y="66">1.5 kW</text><text x="4" y="110">1.0 kW</text><text x="14" y="154">0 kW</text></g>
-                <path class="chart-area" d="M46,71 L76,91 L106,103 L136,109 L166,94 L196,111 L226,71 L256,58 L286,40 L316,29 L346,55 L376,47 L406,36 L436,51 L466,73 L492,91 L508,100 L508,150 L46,150 Z"/>
-                <polyline class="chart-line" points="46,71 76,91 106,103 136,109 166,94 196,111 226,71 256,58 286,40 316,29 346,55 376,47 406,36 436,51 466,73 492,91 508,100"/>
-                <circle class="chart-current" cx="508" cy="100" r="5"/>
+                <g class="chart-y-labels"><text id="energy-y-max" x="4" y="22">--</text><text id="energy-y-mid" x="4" y="66">--</text><text id="energy-y-low" x="4" y="110">--</text><text x="14" y="154">0 W</text></g>
+                <path class="chart-area" id="energy-area-path" d=""/>
+                <polyline class="chart-line" id="energy-line-points" points=""/>
+                <circle class="chart-current" id="energy-current-point" cx="46" cy="150" r="5" hidden/>
               </svg>
             </div>
-            <div class="energy-axis"><span>00:00</span><span>04:00</span><span>08:00</span><span>12:00</span><span>16:00</span><span>20:00</span><span>24:00</span></div>
+            <div class="energy-axis"><span id="energy-chart-start">--:--</span><span>实时采样</span><span id="energy-chart-end">--:--</span></div>
           </section>
         </div>
         <footer class="dashboard-footer">SpaceButler <span>·</span> 让家更懂你</footer>

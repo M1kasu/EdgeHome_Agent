@@ -10,6 +10,9 @@ const state = {
   roomFilter: "all",
   view: "home",
   floorSelectedId: null,
+  floorRoomFocus: "all",
+  energySamples: [],
+  deviceBusyIds: new Set(),
   proactive: null,
   conversation: null,
   lastMessageId: null,
@@ -95,9 +98,8 @@ function renderStatus(payload) {
     $("#indoor-temperature").textContent = Number.isFinite(Number(climateState.current_temperature))
       ? `${Number(climateState.current_temperature)}°C`
       : "--°C";
-    $("#temperature-source").textContent = "晴 · 空气优";
+    $("#temperature-source").textContent = "HA / ESPHome 实时回读";
   }
-  $("#household-device-status").textContent = "全屋已撤防";
   if (payload.night_safety) {
     const config = payload.night_safety.config || {};
     const room = (payload.night_safety.available_rooms || []).find((item) => item.room === config.origin_room);
@@ -630,9 +632,6 @@ function renderPrimaryAction(device) {
 }
 
 function favoriteDeviceIcon(device) {
-  const name = `${device.name || ""} ${device.ui?.name || ""}`.toLowerCase();
-  if (device.type === "switch" && /(电视|tv|screen|display)/i.test(name)) return "monitor";
-  if (device.type === "light" && /(阅读|台灯|desk)/i.test(name)) return "lamp-desk";
   return device.ui?.icon || "cpu";
 }
 
@@ -675,7 +674,8 @@ function renderFavoriteDevices() {
   grid.innerHTML = devices.map((device) => {
     const icon = favoriteDeviceIcon(device);
     return `
-      <article class="favorite-device" data-device-id="${escapeHtml(device.device_id)}">
+      <article class="favorite-device ${state.deviceBusyIds.has(device.device_id) ? "device-busy" : ""}"
+        data-device-id="${escapeHtml(device.device_id)}" aria-busy="${state.deviceBusyIds.has(device.device_id)}">
         <span class="favorite-device-icon ${dashboardDeviceTone(device)}"><i data-lucide="${escapeHtml(icon)}"></i></span>
         <div class="favorite-device-copy">
           <strong>${escapeHtml(dashboardDeviceName(device))}</strong>
@@ -747,12 +747,24 @@ function floorplanPosition(device, index) {
   };
 }
 
+function renderFloorplanRoomTabs() {
+  const tabs = $("#floorplan-room-tabs");
+  if (!tabs) return;
+  const options = [{ room: "all", name: "全屋" }, ...state.rooms];
+  if (!options.some((item) => item.room === state.floorRoomFocus)) state.floorRoomFocus = "all";
+  tabs.innerHTML = options.map((room) => `
+    <button type="button" role="tab" data-floor-room="${escapeHtml(room.room)}"
+      aria-selected="${state.floorRoomFocus === room.room}"
+      class="${state.floorRoomFocus === room.room ? "active" : ""}">${escapeHtml(room.name)}</button>`).join("");
+}
+
 function renderFloorplanRooms() {
   const roomLayer = $("#floorplan-rooms");
   if (!roomLayer) return;
   const rooms = state.dashboard?.rooms || [];
   roomLayer.innerHTML = rooms.map((room) => `
-    <section class="floorplan-space" data-theme="${Number(room.theme || 0)}"
+    <section class="floorplan-space ${state.floorRoomFocus !== "all" && state.floorRoomFocus !== room.room ? "dimmed" : ""}"
+      data-theme="${Number(room.theme || 0)}" data-room-id="${escapeHtml(room.room)}"
       style="left:${Number(room.left || 0)}%;top:${Number(room.top || 0)}%;width:${Number(room.width || 100)}%;height:${Number(room.height || 100)}%"
       aria-label="${escapeHtml(room.name)}">
       <div class="room-title"><strong>${escapeHtml(room.name)}</strong><span>${Number(room.online || 0)}/${Number(room.devices || 0)} 台在线 · ${Math.round(Number(room.power_w || 0))} W</span></div>
@@ -792,11 +804,13 @@ function renderFloorplan() {
     const floorReadout = floorVisual.readout || "";
     const position = floorplanPosition(device, index);
     const selected = state.floorSelectedId === device.device_id;
+    const dimmed = state.floorRoomFocus !== "all" && state.floorRoomFocus !== device.room;
+    const busy = state.deviceBusyIds.has(device.device_id);
     return `
-      <button class="floor-device ${dashboardDeviceTone(device)} ${selected ? "selected" : ""}"
+      <button class="floor-device ${dashboardDeviceTone(device)} ${selected ? "selected" : ""} ${dimmed ? "dimmed" : ""} ${busy ? "device-busy" : ""}"
         style="left:${position.left}%;top:${position.top}%" data-floor-device-id="${escapeHtml(device.device_id)}"
         data-floor-shape="${escapeHtml(floorShape)}"
-        aria-label="${escapeHtml(dashboardDeviceName(device))}，${escapeHtml(dashboardDeviceState(device))}" aria-pressed="${selected}">
+        aria-label="${escapeHtml(dashboardDeviceName(device))}，${escapeHtml(dashboardDeviceState(device))}" aria-pressed="${selected}" aria-busy="${busy}">
         <span class="floor-device-visual" aria-hidden="true">
           <span class="floor-device-icon"><i data-lucide="${escapeHtml(icon)}"></i></span>
           ${floorReadout ? `<strong class="floor-device-readout">${escapeHtml(floorReadout)}</strong>` : ""}
@@ -811,8 +825,52 @@ function renderFloorplan() {
 function renderSpatialDashboard() {
   renderFavoriteDevices();
   renderRoomStatus();
+  renderFloorplanRoomTabs();
   renderFloorplan();
   refreshIcons();
+}
+
+function formatPowerLabel(value) {
+  return value >= 1000 ? `${(value / 1000).toFixed(1)} kW` : `${Math.round(value)} W`;
+}
+
+function renderEnergyChart(currentPower) {
+  if (!Number.isFinite(currentPower)) return;
+  const timestamp = Date.now();
+  const sample = { timestamp, power: Math.max(0, currentPower) };
+  const previous = state.energySamples.at(-1);
+  if (previous && timestamp - previous.timestamp < 3000) state.energySamples[state.energySamples.length - 1] = sample;
+  else state.energySamples.push(sample);
+  state.energySamples = state.energySamples.slice(-48);
+
+  const samples = state.energySamples;
+  const maximum = Math.max(100, Math.ceil(Math.max(...samples.map((item) => item.power)) * 1.2 / 100) * 100);
+  const chartLeft = 46;
+  const chartRight = 508;
+  const chartTop = 18;
+  const chartBottom = 150;
+  const points = samples.map((item, index) => {
+    const x = samples.length === 1 ? chartLeft : chartLeft + index * (chartRight - chartLeft) / (samples.length - 1);
+    const y = chartBottom - item.power / maximum * (chartBottom - chartTop);
+    return { x: Number(x.toFixed(1)), y: Number(y.toFixed(1)) };
+  });
+  $("#energy-line-points").setAttribute("points", points.map((point) => `${point.x},${point.y}`).join(" "));
+  const area = points.length
+    ? `M${points[0].x},${chartBottom} L${points.map((point) => `${point.x},${point.y}`).join(" L")} L${points.at(-1).x},${chartBottom} Z`
+    : "";
+  $("#energy-area-path").setAttribute("d", area);
+  const current = points.at(-1);
+  $("#energy-current-point").hidden = !current;
+  if (current) {
+    $("#energy-current-point").setAttribute("cx", current.x);
+    $("#energy-current-point").setAttribute("cy", current.y);
+  }
+  $("#energy-y-max").textContent = formatPowerLabel(maximum);
+  $("#energy-y-mid").textContent = formatPowerLabel(maximum * 2 / 3);
+  $("#energy-y-low").textContent = formatPowerLabel(maximum / 3);
+  const time = (value) => new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  $("#energy-chart-start").textContent = time(samples[0].timestamp);
+  $("#energy-chart-end").textContent = time(samples.at(-1).timestamp);
 }
 
 function renderInventory(payload) {
@@ -836,6 +894,14 @@ function renderInventory(payload) {
   $("#online-count").textContent = `${online}/${state.devices.length}`;
   $("#total-power").textContent = `${Math.round(totalPower)} W`;
   $("#estimated-today-energy").textContent = text(state.dashboard.energy?.estimated_today_kwh, "--");
+  $("#energy-online-devices").textContent = `${online}/${state.devices.length}`;
+  $("#household-device-status").textContent = online === state.devices.length
+    ? `全屋 ${online} 台设备在线`
+    : `${state.devices.length - online} 台设备需关注`;
+  const livingDevices = state.devices.filter((device) => device.room === "living_room");
+  const liveTemperature = roomTemperature(livingDevices.length ? livingDevices : state.devices);
+  if (liveTemperature !== null) $("#indoor-temperature").textContent = `${Number(liveTemperature.toFixed(1))}°C`;
+  renderEnergyChart(totalPower);
   $("#inventory-summary").textContent = `${state.devices.length} 台设备 · ${state.rooms.length} 个空间`;
   $("#new-device-type").innerHTML = (state.dashboard.device_types || []).map((item) => `
     <option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join("");
@@ -894,7 +960,8 @@ function renderDeviceCard(device) {
   const discovered = device.discovered ? "HA 已发现" : "等待 HA";
   const runtime = device.runtime && device.runtime.isolation === "dedicated" ? device.runtime : null;
   return `
-    <article class="device-card" data-device-id="${escapeHtml(device.device_id)}">
+    <article class="device-card ${state.deviceBusyIds.has(device.device_id) ? "device-busy" : ""}"
+      data-device-id="${escapeHtml(device.device_id)}" aria-busy="${state.deviceBusyIds.has(device.device_id)}">
       <div class="device-card-heading">
         <div class="device-identity">
           <span class="device-icon ${meta.tone}"><i data-lucide="${meta.icon}"></i></span>
@@ -1222,9 +1289,30 @@ async function post(path, body, successMessage) {
 }
 
 async function controlDevice(device, body, message = "设备状态已更新") {
-  const payload = await post(`/api/devices/${encodeURIComponent(device.device_id)}/control`, body, message);
-  if (payload?.devices) renderInventory(payload);
-  return payload;
+  if (state.deviceBusyIds.has(device.device_id)) return null;
+  setDeviceBusy(device.device_id, true);
+  try {
+    const payload = await post(`/api/devices/${encodeURIComponent(device.device_id)}/control`, body, message);
+    if (payload?.devices) renderInventory(payload);
+    return payload;
+  } finally {
+    setDeviceBusy(device.device_id, false);
+  }
+}
+
+function setDeviceBusy(deviceId, busy) {
+  if (busy) state.deviceBusyIds.add(deviceId);
+  else state.deviceBusyIds.delete(deviceId);
+  const selectors = [
+    `[data-device-id="${CSS.escape(deviceId)}"]`,
+    `[data-floor-device-id="${CSS.escape(deviceId)}"]`,
+  ];
+  $$(selectors.join(",")).forEach((element) => {
+    element.classList.toggle("device-busy", busy);
+    element.setAttribute("aria-busy", String(busy));
+    if (element.matches("button")) element.disabled = busy;
+    $$(`button, input, select`, element).forEach((control) => { control.disabled = busy; });
+  });
 }
 
 function switchView(view) {
@@ -1278,7 +1366,6 @@ async function handleFloorplanClick(event) {
   if (!button) return;
   const device = state.devices.find((item) => item.device_id === button.dataset.floorDeviceId);
   if (!device) return;
-  selectFloorDevice(device.device_id);
   await activateFloorDevice(device);
 }
 
@@ -1336,6 +1423,16 @@ function handleRoomStatusClick(event) {
   renderRoomTabs();
   renderDeviceGrid();
   switchView("devices");
+}
+
+function handleFloorplanRoomTab(event) {
+  const button = event.target.closest("[data-floor-room]");
+  if (!button) return;
+  state.floorRoomFocus = button.dataset.floorRoom;
+  state.floorSelectedId = null;
+  renderFloorplanRoomTabs();
+  renderFloorplan();
+  refreshIcons();
 }
 
 async function confirmDashboardRecommendation() {
@@ -1743,7 +1840,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#device-grid").addEventListener("change", handleDeviceChange);
   $("#favorite-devices").addEventListener("click", handleFavoriteClick);
   $("#favorite-devices").addEventListener("change", handleDeviceChange);
-  $("#room-status-grid").addEventListener("click", handleRoomStatusClick);
+  $("#room-status-grid")?.addEventListener("click", handleRoomStatusClick);
+  $("#floorplan-room-tabs").addEventListener("click", handleFloorplanRoomTab);
   $("#floorplan-devices").addEventListener("click", handleFloorplanClick);
   $("#floorplan-devices").addEventListener("pointerdown", beginFloorLongPress);
   ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => {

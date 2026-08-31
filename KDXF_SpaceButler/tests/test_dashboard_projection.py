@@ -62,6 +62,40 @@ class DashboardProjectionTests(unittest.TestCase):
         self.assertEqual(ui["controls"][1]["options"][1]["payload"]["mode"], "cool")
         self.assertEqual(ui["floorplan"], {"shape": "thermostat", "readout": "27°"})
 
+    def test_climate_controls_follow_live_supported_modes(self) -> None:
+        climate = {
+            "device_id": "loft_climate",
+            "type": "climate",
+            "name": "Loft Climate",
+            "room": "loft",
+            "room_name": "Loft",
+            "state": {"mode": "cool", "temperature": 25, "current_temperature": 27},
+            "online": True,
+            "fault_mode": "none",
+            "capabilities": ["set_mode", "set_temperature", "turn_off"],
+            "ha_state": {"attributes": {"hvac_modes": ["off", "cool"]}},
+        }
+
+        ui = _device_ui(climate)
+        mode_control = next(control for control in ui["controls"] if control["kind"] == "segmented")
+
+        self.assertEqual([option["value"] for option in mode_control["options"]], ["off", "cool"])
+        self.assertEqual(ui["primary_action"]["payload"], {"mode": "off", "temperature": 25.0})
+        self.assertNotIn("heat", {option["value"] for option in mode_control["options"]})
+
+    def test_semantic_device_icons_are_decided_by_backend_descriptor(self) -> None:
+        television = _device("living_tv", "switch", "living_room", {"power": "OFF"}, ["turn_on", "turn_off"])
+        reading_light = _device(
+            "reading_light",
+            "light",
+            "bedroom",
+            {"power": "ON", "brightness": 120},
+            ["turn_on", "turn_off", "set_brightness"],
+        )
+
+        self.assertEqual(television["ui"]["icon"], "monitor")
+        self.assertEqual(reading_light["ui"]["icon"], "lamp-desk")
+
     def test_frontend_contains_no_seed_device_ids_or_device_specific_actions(self) -> None:
         root = Path(__file__).resolve().parents[1]
         configured = yaml.safe_load(
