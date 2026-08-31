@@ -31,6 +31,9 @@
       <button class="rail-button" data-view-target="events" title="执行事件">
         <i data-lucide="bolt"></i><span>能源与事件</span>
       </button>
+      <button class="rail-button" data-view-target="workflow" title="工作流">
+        <i data-lucide="workflow"></i><span>工作流</span>
+      </button>
       <button class="rail-button rail-refresh" id="refresh-all" title="刷新">
         <i data-lucide="refresh-cw"></i><span>刷新状态</span>
       </button>
@@ -510,6 +513,169 @@
             </table>
           </div>
         </section>
+      </section>
+
+      <!-- 工作流视图 -->
+      <section class="view" data-view="workflow">
+        <div class="page-heading workflow-heading">
+          <div>
+            <span class="eyebrow">WORKFLOW ORCHESTRATION</span>
+            <h2>工作流</h2>
+          </div>
+          <div class="workflow-heading-tabs">
+            <button class="primary active" data-workflow-tab="builder">编排</button>
+            <button class="secondary" data-workflow-tab="runner">执行</button>
+          </div>
+        </div>
+
+        <div class="workflow-shell">
+          <!-- 已保存工作流侧边栏（始终可见） -->
+          <aside class="panel saved-workflows-sidebar" id="wf-saved-sidebar">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">SAVED WORKFLOWS</span>
+                <h3>已保存工作流</h3>
+              </div>
+              <div class="sidebar-head-actions">
+                <span class="count-badge" id="wf-saved-count">0</span>
+                <button class="icon-button" id="wf-toggle-saved" title="折叠侧边栏">
+                  <i data-lucide="panel-left-close"></i>
+                </button>
+              </div>
+            </div>
+            <div class="saved-list" id="wf-saved-list">
+              <div class="empty-workflow">暂无保存的工作流</div>
+            </div>
+          </aside>
+
+          <!-- 编排子视图 -->
+          <div class="workflow-pane active" data-workflow-pane="builder">
+            <div class="workflow-layout">
+              <section class="panel editor-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="eyebrow">SCENE BUILDER</span>
+                    <h3>场景编排</h3>
+                  </div>
+                  <div class="header-actions">
+                    <button class="secondary compact-button" id="wf-new">新建工作流</button>
+                    <button class="primary compact-button" id="wf-save">保存设置</button>
+                  </div>
+                </div>
+
+                <div class="workflow-meta-fields">
+                  <label>
+                    <span>场景名称</span>
+                    <input id="wf-name" value="回家模式" maxlength="40">
+                  </label>
+                  <label>
+                    <span>启动口令</span>
+                    <input id="wf-phrase" value="我要到家了" maxlength="60">
+                  </label>
+                  <label>
+                    <span>执行方式</span>
+                    <select id="wf-run-mode">
+                      <option value="sequence">按顺序执行</option>
+                      <option value="parallel">并行预览</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div class="ai-generate-bar">
+                  <div class="ai-generate-copy">
+                    <i data-lucide="sparkles"></i>
+                    <span>AI 生成工作流</span>
+                  </div>
+                  <input id="wf-ai-prompt" class="ai-prompt-input" placeholder="例如：我晚上要睡觉了，帮我把客厅设备关掉" maxlength="200">
+                  <button class="primary compact-button" id="wf-ai-generate">
+                    <i data-lucide="wand-2"></i><span>生成</span>
+                  </button>
+                </div>
+
+                <div class="add-step-bar">
+                  <label>
+                    <span>添加家庭电器</span>
+                    <select id="wf-device-picker"></select>
+                  </label>
+                  <button class="primary compact-button" id="wf-add-device">
+                    <i data-lucide="plus"></i><span>添加到流程</span>
+                  </button>
+                </div>
+                <div class="drag-hint">拖拽步骤左侧手柄可调整执行顺序</div>
+                <div class="step-list" id="wf-steps"></div>
+              </section>
+
+              <aside class="panel state-preview-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="eyebrow">DEVICE PREVIEW</span>
+                    <h3>设备状态</h3>
+                  </div>
+                  <span class="plan-status idle" id="wf-preview-status">待配置</span>
+                </div>
+                <div class="state-list" id="wf-state-preview"></div>
+              </aside>
+            </div>
+          </div>
+
+          <!-- 执行子视图 -->
+          <div class="workflow-pane" data-workflow-pane="runner">
+            <div class="runner-layout">
+              <section class="panel execution-stage">
+                <div class="stage-header">
+                  <div>
+                    <span class="eyebrow">VOICE TRIGGER</span>
+                    <h3 id="wf-runner-title">回家模式</h3>
+                    <p id="wf-runner-subtitle">请确认当前场景、启动口令和设备状态无误后执行。</p>
+                  </div>
+                  <div class="matched-card">
+                    <span>当前口令</span>
+                    <strong id="wf-active-phrase">我要到家了</strong>
+                  </div>
+                </div>
+
+                <div class="agent-reasoning-bar">
+                  <div class="reasoning-label">
+                    <i data-lucide="brain-circuit"></i>
+                    <span>Agent 推理链路</span>
+                  </div>
+                  <div class="reasoning-steps" id="wf-reasoning-steps">
+                    <span class="reasoning-step idle">等待执行</span>
+                  </div>
+                </div>
+
+                <div class="command-panel">
+                  <input id="wf-voice-cmd" value="我要到家了" autocomplete="off" class="phrase-input">
+                  <button class="primary" id="wf-run-btn">
+                    <i data-lucide="play"></i><span>执行</span>
+                  </button>
+                </div>
+                <p class="match-copy" id="wf-command-match">已匹配：回家模式</p>
+
+                <div class="execution-timeline" id="wf-timeline"></div>
+              </section>
+
+              <aside class="panel state-column">
+                <div class="panel-heading">
+                  <div>
+                    <span class="eyebrow">EXECUTION STATE</span>
+                    <h3>执行状态</h3>
+                  </div>
+                  <span class="plan-status idle" id="wf-exec-status">待触发</span>
+                </div>
+                <div class="state-list" id="wf-state-list"></div>
+
+                <div class="reflection-card" id="wf-reflection" hidden>
+                  <div class="reflection-head">
+                    <i data-lucide="lightbulb"></i>
+                    <strong>AI 评估</strong>
+                  </div>
+                  <p id="wf-reflection-text"></p>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
       </section>
     </section>
   </main>
