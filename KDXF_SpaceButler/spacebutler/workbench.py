@@ -20,13 +20,14 @@ from .agent import SpaceButlerAgent
 from .agent.runtime import AgentRuntime
 from .control_context import ControlContextRegistry, ManualControlContext
 from .edge_language import EdgeLanguageRouter
-from .esphome_registry import ESPHOME_ALIAS_REGISTRY, device_record
+from .esphome_registry import device_record, discover_entities
 from .home_assistant import EnergyEntityMap, HomeAssistantClient, HomeAssistantRuntime, HomeAssistantSpaceAdapter
 from .interaction import InteractionResponse, SpaceButlerSession
 from .memory import HouseholdMemory
 from .models import DeviceState, EnvironmentState, HouseholdMember, MemberRole, SpatialSnapshot
 from .proactive import ENERGY_RULE_ID, NIGHT_SAFETY_RULE_ID, ProactiveRuleStore
 from .runtime import execute_and_verify
+from .voice import CHUNK_BYTES, VoiceError, VoiceService
 
 
 class WorkbenchController:
@@ -551,7 +552,8 @@ class WorkbenchController:
                 for item in self._ha.states()
                 if isinstance(item.get("entity_id"), str)
             }
-            devices = self._esphome_devices(ha_states, set())
+            resolved, diagnostics = discover_entities(list(ha_states.values()))
+            devices = self._esphome_devices(ha_states, set(), resolved)
             rooms = _room_summaries(devices)
             dashboard = _dashboard_projection(devices, rooms)
             favorite_ids = set(dashboard["favorite_device_ids"])
@@ -559,25 +561,35 @@ class WorkbenchController:
                 ui = device.get("ui")
                 if isinstance(ui, dict):
                     ui["favorite"] = str(device.get("device_id", "")) in favorite_ids
-            return {"devices": devices, "rooms": rooms, "dashboard": dashboard}
+            return {"devices": devices, "rooms": rooms, "dashboard": dashboard,
+                    "diagnostics": {key: value for key, value in diagnostics.items() if key != "ha_entities"}}
+
+    def device_diagnostics(self) -> dict[str, object]:
+        """Read HA identities without creating integrations or sending controls."""
+        with self._lock:
+            _, diagnostics = discover_entities(self._ha.states())
+            base_url = getattr(self._ha, "base_url", "")
+            if isinstance(base_url, str):
+                diagnostics["ha_host"] = urlparse(base_url).hostname
+            return diagnostics
 
     @staticmethod
     def _esphome_devices(
         ha_states: dict[str, dict[str, object]],
         known_device_ids: set[str],
+        resolved_entities: dict[str, str] | None = None,
     ) -> list[dict[str, object]]:
         """Synthesize inventory records for ESPHome entities that HA already exposes."""
         devices: list[dict[str, object]] = []
-        seen: set[str] = set()
-        for entity_id, ha_state in ha_states.items():
-            record = _esphome_match(entity_id, ha_state)
-            if record is None:
+        if resolved_entities is None:
+            resolved_entities, _ = discover_entities([
+                {**state, "entity_id": entity_id} for entity_id, state in ha_states.items()
+            ])
+        for device_id, entity_id in resolved_entities.items():
+            record = device_record(device_id)
+            if record is None or device_id in known_device_ids:
                 continue
-            device_id = str(record["device_id"])
-            if device_id in known_device_ids or device_id in seen:
-                # legacy MQTT 容器同时在线时以 Fleet 记录为准，避免同 id 重复。
-                continue
-            seen.add(device_id)
+            ha_state = ha_states[entity_id]
             device_type = str(record["type"])
             value = str(ha_state.get("state", "unavailable"))
             room = str(record["room"])
@@ -930,10 +942,6 @@ class WorkbenchController:
         raise TimeoutError("workbench scene did not stabilize")
 
 
-# ESPHome 实体按 friendly_name 别名 + domain 匹配；entity_id 始终运行时解析。
-# 注册表来自真实 Ubuntu 四节点，不再与 MQTT 模拟设备合并。
-_ESPHOME_DEVICE_REGISTRY = ESPHOME_ALIAS_REGISTRY
-
 _ESPHOME_ROOM_NAMES = {"living_room": "客厅", "bedroom": "卧室", "home": "全屋"}
 _ESPHOME_READONLY_TYPES = {"presence", "contact", "illuminance", "temperature"}
 
@@ -941,16 +949,6 @@ _ESPHOME_READONLY_TYPES = {"presence", "contact", "illuminance", "temperature"}
 def _esphome_record(device_id: str) -> dict[str, object] | None:
     """Return the registry record for a merged ESPHome device id, else None."""
     return device_record(device_id)
-
-
-def _esphome_match(entity_id: str, ha_state: dict[str, object]) -> dict[str, object] | None:
-    """Match one HA entity to the ESPHome registry by friendly name and domain."""
-    attributes = ha_state.get("attributes")
-    friendly = str(attributes.get("friendly_name", "")) if isinstance(attributes, dict) else ""
-    record = _ESPHOME_DEVICE_REGISTRY.get(friendly)
-    if record is None or not entity_id.startswith(f"{record['domain']}."):
-        return None
-    return {**record, "entity_id": entity_id}
 
 
 def _esphome_device_state(device_type: str, ha_state: dict[str, object]) -> dict[str, object]:
@@ -1753,17 +1751,25 @@ def serve_workbench(
     static_root: Path,
     host: str = "127.0.0.1",
     port: int = 8765,
+    voice_service: VoiceService | None = None,
 ) -> ThreadingHTTPServer:
     static_root = static_root.resolve()
+    voice = voice_service if voice_service is not None else VoiceService()
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path.startswith("/api/voice/"):
+                self._voice("GET", path)
+                return
             if path == "/api/status":
                 self._api(controller.status)
                 return
             if path == "/api/devices":
                 self._api(controller.devices)
+                return
+            if path == "/api/devices/diagnostics":
+                self._api(controller.device_diagnostics)
                 return
             if path == "/api/proactive":
                 self._api(controller.proactive)
@@ -1787,6 +1793,9 @@ def serve_workbench(
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path.startswith("/api/voice/"):
+                self._voice("POST", path)
+                return
             if path == "/api/devices":
                 self._api(lambda: controller.add_device(self._body()))
                 return
@@ -1837,11 +1846,62 @@ def serve_workbench(
 
         def do_DELETE(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path.startswith("/api/voice/"):
+                self._voice("DELETE", path)
+                return
             parts = path.strip("/").split("/")
             if len(parts) != 3 or parts[:2] != ["api", "devices"]:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
                 return
             self._api(lambda: controller.remove_device(unquote(parts[2])))
+
+        def _voice(self, method: str, path: str) -> None:
+            # Prevent another website from consuming the local user's speech quota.
+            origin = self.headers.get("Origin", "")
+            parsed_origin = urlparse(origin)
+            if ((origin and (parsed_origin.scheme not in {"http", "https"}
+                             or parsed_origin.netloc != self.headers.get("Host")))
+                    or self.headers.get("Sec-Fetch-Site") == "cross-site"
+                    or (method != "GET" and not origin)):
+                self._json(HTTPStatus.FORBIDDEN, {"error": "语音接口只允许当前页面访问。"})
+                return
+            try:
+                parts = path.strip("/").split("/")
+                if method == "GET" and path == "/api/voice/status":
+                    payload = voice.status()
+                elif method == "POST" and path == "/api/voice/sessions":
+                    payload = voice.create()
+                elif len(parts) in (4, 5) and parts[:3] == ["api", "voice", "sessions"]:
+                    session_id = parts[3]
+                    if len(parts) == 4 and method == "GET":
+                        payload = voice.get(session_id).snapshot()
+                    elif len(parts) == 4 and method == "DELETE":
+                        payload = voice.cancel(session_id)
+                    elif len(parts) == 5 and parts[4] == "audio" and method == "POST":
+                        length = int(self.headers.get("Content-Length", "0"))
+                        if (not 0 < length <= CHUNK_BYTES or length % 2
+                                or self.headers.get_content_type() != "application/octet-stream"):
+                            raise VoiceError("音频分片大小或格式不正确。")
+                        self.connection.settimeout(10)
+                        audio = self.rfile.read(length)
+                        if len(audio) != length:
+                            raise VoiceError("音频分片传输不完整。")
+                        payload = voice.get(session_id).send_audio(audio, int(self.headers.get("X-Audio-Sequence", "-1")))
+                    elif len(parts) == 5 and parts[4] == "finish" and method == "POST":
+                        payload = voice.get(session_id).finish()
+                    else:
+                        self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+                        return
+                else:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+                    return
+                self._json(HTTPStatus.OK, payload)
+            except VoiceError as error:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            except (ValueError, TimeoutError):
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "语音请求无效或传输超时。"})
+            except Exception:
+                self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "语音服务暂不可用，请重试。"})
 
         def _api(self, callback: Any) -> None:
             try:
@@ -1889,7 +1949,12 @@ def serve_workbench(
         def log_message(self, format: str, *args: Any) -> None:
             return
 
-    return ThreadingHTTPServer((host, port), Handler)
+    class WorkbenchHTTPServer(ThreadingHTTPServer):
+        def server_close(self) -> None:
+            voice.close()
+            super().server_close()
+
+    return WorkbenchHTTPServer((host, port), Handler)
 
 
 def to_jsonable(value: object) -> object:

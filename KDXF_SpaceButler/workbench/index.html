@@ -7,6 +7,7 @@
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/styles.css">
   <script src="/vendor/lucide.min.js" defer></script>
+  <script src="/voice-input.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -103,6 +104,18 @@
                 <i data-lucide="leaf"></i><span>节能分析</span>
               </button>
             </div>
+            <section class="voice-panel" id="voice-panel" data-phase="idle" aria-label="语音输入">
+              <div class="voice-toolbar">
+                <button type="button" class="secondary voice-hold" id="voice-hold" aria-pressed="false" title="按住说话，松开提交；也可以长按 V">
+                  <i data-lucide="mic"></i><span>按住说话</span><kbd>V</kbd>
+                </button>
+                <span class="voice-timer" id="voice-timer">00:00</span>
+                <button type="button" class="secondary compact-button" id="voice-cancel" hidden>取消 <kbd>Esc</kbd></button>
+              </div>
+              <p class="voice-status" id="voice-status" role="status">正在检测语音服务…</p>
+              <p class="voice-transcript" id="voice-transcript" aria-live="polite" aria-atomic="true">识别文字将在这里实时出现</p>
+              <span class="voice-privacy">录音时音频发送至豆包语音服务 · 本地不保存录音 · 松开后才提交任务</span>
+            </section>
             <form class="chat-composer" id="chat-form">
               <textarea id="chat-input" maxlength="500" rows="2" placeholder="输入家居目标或继续当前会话" autocomplete="off"></textarea>
               <button class="primary chat-send" id="chat-send" type="submit" title="发送">

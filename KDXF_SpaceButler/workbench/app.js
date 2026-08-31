@@ -4,6 +4,7 @@ const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selec
 const state = {
   status: null,
   devices: [],
+  deviceDiagnostics: null,
   rooms: [],
   dashboard: null,
   favoriteDeviceIds: null,
@@ -29,6 +30,7 @@ const state = {
   floorLongPressTimer: null,
   floorLongPressTriggered: false,
 };
+let voiceInput = null;
 
 const intentLabels = {
   device_control: "设备控制",
@@ -153,14 +155,16 @@ function renderConversation(payload) {
 
 function setChatBusy(busy) {
   state.chatBusy = busy;
-  $("#chat-input").disabled = busy;
-  $("#chat-send").disabled = busy;
-  $("#clear-chat").disabled = busy;
+  const composerBusy = busy || Boolean(voiceInput?.active);
+  $("#chat-input").disabled = composerBusy;
+  $("#chat-send").disabled = composerBusy;
+  $("#clear-chat").disabled = composerBusy;
+  $("#voice-hold").disabled = busy;
   $$(".prompt-strip [data-chat-prompt]").forEach((button) => {
-    button.disabled = busy;
+    button.disabled = composerBusy;
   });
-  $("#confirm-chat-plan").disabled = busy;
-  $("#cancel-chat-plan").disabled = busy;
+  $("#confirm-chat-plan").disabled = composerBusy;
+  $("#cancel-chat-plan").disabled = composerBusy;
   const conversationState = $("#conversation-state");
   conversationState.className = `conversation-state${busy ? " busy" : ""}`;
   conversationState.textContent = busy ? "理解与规划中" : "准备就绪";
@@ -875,6 +879,7 @@ function renderEnergyChart(currentPower) {
 
 function renderInventory(payload) {
   state.devices = payload.devices || [];
+  state.deviceDiagnostics = payload.diagnostics || null;
   state.rooms = payload.rooms || [];
   state.dashboard = payload.dashboard || { favorite_device_ids: [], rooms: [], device_positions: {}, energy: {} };
   const availableIds = new Set(state.devices.map((item) => item.device_id));
@@ -895,12 +900,17 @@ function renderInventory(payload) {
   $("#total-power").textContent = `${Math.round(totalPower)} W`;
   $("#estimated-today-energy").textContent = text(state.dashboard.energy?.estimated_today_kwh, "--");
   $("#energy-online-devices").textContent = `${online}/${state.devices.length}`;
-  $("#household-device-status").textContent = online === state.devices.length
-    ? `全屋 ${online} 台设备在线`
-    : `${state.devices.length - online} 台设备需关注`;
+  const missingCount = state.deviceDiagnostics?.missing_devices?.length || 0;
+  $("#household-device-status").textContent = !state.devices.length
+    ? "尚未匹配到 HA 设备"
+    : missingCount
+      ? `${online} 台在线 · ${missingCount} 项待匹配`
+      : online === state.devices.length
+        ? `全屋 ${online} 台设备在线`
+        : `${state.devices.length - online} 台设备需关注`;
   const livingDevices = state.devices.filter((device) => device.room === "living_room");
   const liveTemperature = roomTemperature(livingDevices.length ? livingDevices : state.devices);
-  if (liveTemperature !== null) $("#indoor-temperature").textContent = `${Number(liveTemperature.toFixed(1))}°C`;
+  $("#indoor-temperature").textContent = liveTemperature !== null ? `${Number(liveTemperature.toFixed(1))}°C` : "--°C";
   renderEnergyChart(totalPower);
   $("#inventory-summary").textContent = `${state.devices.length} 台设备 · ${state.rooms.length} 个空间`;
   $("#new-device-type").innerHTML = (state.dashboard.device_types || []).map((item) => `
@@ -934,11 +944,16 @@ function renderDeviceGrid() {
     : state.devices.filter((device) => device.room === state.roomFilter);
   const grid = $("#device-grid");
   if (!devices.length) {
+    const unmatched = !state.devices.length;
+    const haCount = state.deviceDiagnostics?.ha_entity_count;
     grid.innerHTML = `
       <div class="empty-inventory">
         <i data-lucide="package-open"></i>
-        <strong>这个空间还没有设备</strong>
-        <button class="primary" data-open-add-device><i data-lucide="plus"></i><span>添加设备</span></button>
+        <strong>${unmatched ? "尚未匹配到 HA 设备" : "这个空间还没有设备"}</strong>
+        <p>${unmatched && Number.isFinite(haCount)
+          ? `HA 返回 ${haCount} 个实体，但尚未匹配到唯一的客厅设备。请检查实体名称或配置绑定。`
+          : "ESPHome 设备需先接入 Home Assistant，再由工作台读取。"}</p>
+        <a href="/api/devices/diagnostics" target="_blank" rel="noopener noreferrer">查看设备匹配诊断</a>
       </div>`;
     refreshIcons();
     return;
@@ -1316,6 +1331,7 @@ function setDeviceBusy(deviceId, busy) {
 }
 
 function switchView(view) {
+  if (view !== "assistant" && voiceInput?.active) voiceInput.cancel();
   state.view = view;
   $$(".view").forEach((element) => element.classList.toggle("active", element.dataset.view === view));
   $$(".rail-button[data-view-target]").forEach((button) => {
@@ -1449,7 +1465,7 @@ async function confirmDashboardRecommendation() {
 }
 
 async function sendChat(textValue) {
-  if (state.chatBusy) return;
+  if (state.chatBusy || voiceInput?.active) return;
   const input = $("#chat-input");
   const textValueNormalized = textValue.trim();
   if (!textValueNormalized) return;
@@ -1784,6 +1800,14 @@ function toast(message, error = false) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  voiceInput = new window.PushToTalk({
+    input: $("#chat-input"), button: $("#voice-hold"), cancelButton: $("#voice-cancel"),
+    panel: $("#voice-panel"), status: $("#voice-status"), transcript: $("#voice-transcript"), timer: $("#voice-timer"),
+    isBusy: () => state.chatBusy || Boolean(state.conversation?.busy),
+    onStart: () => switchView("assistant"),
+    onActive: () => setChatBusy(state.chatBusy),
+    onSubmit: sendChat,
+  });
   $("#welcome-date").textContent = new Intl.DateTimeFormat("zh-CN", {
     month: "long",
     day: "numeric",
