@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from spacebutler.esphome_registry import esphome_nodes  # noqa: E402
+from spacebutler.configuration import load_project_environment  # noqa: E402
 
 
 def main() -> int:
@@ -21,6 +22,7 @@ def main() -> int:
     parser.add_argument("--container", default="spacebutler-home-assistant")
     parser.add_argument("--timeout", type=float, default=3.0)
     args = parser.parse_args()
+    load_project_environment()
     if shutil.which("docker") is None:
         print(
             json.dumps(

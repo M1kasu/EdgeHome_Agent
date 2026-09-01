@@ -1,10 +1,16 @@
-# Local demo startup: local docker ESPHome nodes published on 6053-6056.
-# LLM: EdgeHome llama.cpp (3B) already running on 8080.
-$secretsPath = 'E:\code\znjj\KDXF_SpaceButler\deployment\esphome\secrets.yaml'
-$psk = (Select-String -Path $secretsPath -Pattern 'api_key:\s*"?([^"]+)"?').Matches[0].Groups[1].Value
-$env:ESPHOME_NOISE_PSK = $psk
-$env:ESPHOME_HOST = 'host.docker.internal'
-$env:SPACEBUTLER_LLM_BASE_URL = 'http://127.0.0.1:8080'
-$env:SPACEBUTLER_LLM_TIMEOUT = '240'
-Set-Location E:\code\znjj\KDXF_SpaceButler
-python scripts\run_workbench.py --port 8765
+# Settings are loaded by run_workbench.py from this project's .env.
+# This wrapper does not start HA, models, or ESPHome devices.
+param(
+    [string]$Python = 'python',
+    [string]$HostAddress = '127.0.0.1',
+    [int]$Port = 8765
+)
+
+$ErrorActionPreference = 'Stop'
+$projectRoot = Split-Path -Parent $PSScriptRoot
+& $Python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 'Python 3.11+ required; pass -Python with a supported interpreter path.')"
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+& $Python (Join-Path $projectRoot 'scripts/run_workbench.py') --host $HostAddress --port $Port
+exit $LASTEXITCODE

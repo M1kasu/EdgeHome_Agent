@@ -69,9 +69,9 @@ class MqttProjectionTests(unittest.TestCase):
         self.assertTrue(window["readonly"])
         self.assertTrue(window["ui"]["warning"])
 
-    def test_esphome_record_wins_when_both_transports_claim_one_device_id(self) -> None:
+    def test_ambiguous_esphome_entities_are_not_projected(self) -> None:
         states = _mixed_states()
-        # 同一 device_id 同时由 MQTT 容器上报时，仍以 ESPHome 固件为准。
+        # 同一设备匹配到两个 ESPHome 实体时必须拒绝猜测，避免控制错设备。
         states["light.spacebutler_living_room_main_legacy"] = _named(
             "off", "SpaceButler Living Room Main", {"brightness": 0}
         )
@@ -79,8 +79,7 @@ class MqttProjectionTests(unittest.TestCase):
         devices = WorkbenchController._projected_devices(states)
 
         matching = [item for item in devices if item["device_id"] == "living_room_main_light"]
-        self.assertEqual(len(matching), 1)
-        self.assertEqual(matching[0]["source"], "esphome")
+        self.assertEqual(matching, [])
 
     def test_switch_folds_in_its_companion_power_meter(self) -> None:
         devices = WorkbenchController._projected_devices(_mixed_states())

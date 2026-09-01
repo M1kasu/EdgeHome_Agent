@@ -153,6 +153,43 @@ class EsphomeInventoryMergeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             controller.set_device_fault("living_room_ac", "offline")
 
+    def test_prefixed_ha_entities_populate_inventory_and_controls_use_the_same_id(self) -> None:
+        states = {
+            "light.living_room_light_living_room_light": _named("on", "Living-Room-Light Living Room Light"),
+            "cover.living_room_curtain_living_room_curtain": _named("open", "Living-Room-Curtain Living Room Curtain"),
+            "climate.living_room_ac_living_room_ac": _named("cool", "Living-Room-Ac Living Room AC"),
+            "sensor.living_room_ac_living_room_temperature": _named("28.1", "Living-Room-Ac Living Room Temperature"),
+            "binary_sensor.living_room_presence_living_room_presence": _named("on", "Living-Room-Presence Living Room Presence"),
+        }
+        controller = _controller(states)
+        payload = controller.devices()
+        self.assertEqual(len(payload["devices"]), 5)
+        self.assertEqual(payload["diagnostics"]["missing_devices"], [])
+        controller.control_device("living_room_main_light", {"power": "on", "brightness": 30})
+        self.assertEqual(controller._ha.call_service.call_args[0][2]["entity_id"],
+                         "light.living_room_light_living_room_light")
+
+    def test_ambiguous_light_is_reported_and_never_controlled(self) -> None:
+        states = {
+            "light.living_room_light": _named("on", "Living Room Light"),
+            "light.living_room_light_2": _named("on", "Living Room Light"),
+        }
+        controller = _controller(states)
+        self.assertEqual(controller.devices()["devices"], [])
+        self.assertEqual(controller.device_diagnostics()["missing_devices"][0]["reason"], "ambiguous")
+        with self.assertRaises(ValueError):
+            controller.control_device("living_room_main_light", {"power": "off"})
+        controller._ha.call_service.assert_not_called()
+
+    def test_health_reports_the_five_resolved_entity_roles(self) -> None:
+        controller = _controller(_esphome_ha_states())
+        controller._agent_runtime = Mock()
+        controller._agent_runtime.status.return_value = {"llm_available": True}
+        controller._agent_runtime.runtime_health.return_value = {"status": "ready"}
+        health = controller.health()
+        self.assertEqual(set(health["esphome_devices"].values()), {"ok"})
+        self.assertEqual(health["agent"]["status"], "ready")
+
 
 if __name__ == "__main__":
     unittest.main()

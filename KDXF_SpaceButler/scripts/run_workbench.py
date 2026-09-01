@@ -21,6 +21,7 @@ from ha_bootstrap import (  # noqa: E402
 )
 from spacebutler import EdgeLanguageRouter, EdgeLlmClient, HomeAssistantClient, HouseholdMemory  # noqa: E402
 from spacebutler.llm import LlmClient  # noqa: E402
+from spacebutler.configuration import load_project_environment  # noqa: E402
 from spacebutler.workbench import WorkbenchController, serve_workbench  # noqa: E402
 
 
@@ -44,6 +45,7 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
+    load_project_environment()
     ha_url = os.getenv("SPACEBUTLER_HA_URL", "http://127.0.0.1:12900")
     edge_llm_url = os.getenv("EDGE_LLM_URL", "http://127.0.0.1:12881")
     auth_store = ROOT / "deployment" / "homeassistant" / ".storage" / "auth"

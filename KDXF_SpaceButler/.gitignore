@@ -4,6 +4,10 @@ __pycache__/
 .venv/
 *.egg-info/
 .env
+.env.*
+!.env.example
+# Keep old local secret files ignored even after migrating to .env.
+deployment/voice.local.json
 deployment/homeassistant/.storage/
 deployment/homeassistant/.cloud/
 deployment/homeassistant/blueprints/

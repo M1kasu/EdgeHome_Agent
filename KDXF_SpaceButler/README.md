@@ -2,6 +2,99 @@
 
 SpaceButler 是面向科大讯飞 SpaceMind 家庭应用场景赛题的 AI Agent。项目采用“新 Agent 外壳 + 旧项目设备底座迁移”，聚焦主动理解、家庭记忆、自学习、多设备协同和多成员个性化服务。
 
+## 本次主要交付：Agent 前的语音识别
+
+本次开发重点是语音输入层：**用户长按 V 说话 → 实时字幕 → 松开后提交最终文本 → 复用已有 Agent 进行任务拆解**。语音模块不代替 Agent 规划，也不直接调用设备服务；HA 实体匹配修复与诊断用于配合完整链路联调。
+
+### 使用行为
+
+1. 在「AI 管家」长按 **V** 或「按住说话」按钮，允许麦克风权限，看到「正在聆听」后讲话。
+2. 讲话时字幕和输入框持续更新；停顿或服务商确认某一分句，不会提前提交任务。
+3. 松开后停止采集，发送最后的音频分片，等待最终识别结果，再通过 `/api/chat` 提交一次。
+4. 按 Esc、点击取消、窗口失焦、隐藏页面或切换视图均取消本次输入；静音、权限拒绝、网络失败和超时不提交任务，并恢复原草稿。
+
+输入框中轻按 V 仍输入字符，长按才触发录音；中文输入法组字和修饰组合键不会触发。单次录音上限 90 秒，超过 Agent 500 字限制的文本需手动精简后发送。
+
+### 语音链路与实现位置
+
+```text
+浏览器麦克风 → AudioWorklet（16kHz / 单声道 / PCM16，200ms 分片）
+    → 本地 HTTP 语音会话 → 服务端 WebSocket → 豆包流式识别
+    ← 实时文字轮询 ← partial / final
+松开 V → 等待 final → /api/chat → LangGraph → HA → ESPHome → 状态回读
+```
+
+| 模块 | 负责内容 |
+| --- | --- |
+| [`workbench/voice-capture.js`](workbench/voice-capture.js) | 麦克风音频重采样与 PCM16 分片 |
+| [`workbench/voice-input.js`](workbench/voice-input.js) | 长按、实时字幕、取消和最终文本提交 |
+| [`spacebutler/voice.py`](spacebutler/voice.py) | ASR 二进制协议、服务端鉴权、会话与最终结果处理 |
+| [`spacebutler/workbench.py`](spacebutler/workbench.py) | `/api/voice/*` 接口，与原有 `/api/chat` 共用端口 |
+| [`spacebutler/configuration.py`](spacebutler/configuration.py) | 从项目 `.env` 加载配置，进程环境变量优先 |
+| [`scripts/check_voice_asr.py`](scripts/check_voice_asr.py) | 不依赖 Agent 或 HA 的上游语音验证 |
+
+语音音频会发送给云端豆包服务，因此语音入口需要联网；麦克风录音仅在内存中缓冲，本项目不落盘。最终文字提交后沿用原有 Agent 的会话与记忆行为。
+
+### 配置语音 API Key
+
+依赖 Python 3.11+。在本目录创建虚拟环境并安装依赖；已有可用环境时可直接使用，不必重复创建：
+
+```powershell
+# 从仓库根目录进入子项目，先确认 python 指向 Python 3.11+。
+Set-Location KDXF_SpaceButler
+python -m venv .venv
+$python = '.\.venv\Scripts\python.exe'
+& $python -m pip install -e ".[dev]"
+if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
+```
+
+编辑 **本目录的 `.env`**，不要覆盖已有配置，也不要把真实值写入 `.env.example`：
+
+```dotenv
+SPACEBUTLER_ASR_API_KEY=<你的语音 API Key>
+SPACEBUTLER_ASR_RESOURCE_ID=volc.seedasr.sauc.duration
+SPACEBUTLER_ASR_ENABLE_NONSTREAM=true
+```
+
+服务端连接 `wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async`，使用 `X-Api-Key` 鉴权。本接入不需要通用云 AccessKeyID / SecretAccessKey。示例开启最终二遍识别；排查基础流式链路时可改为 `false`。Key、资源授权和可用额度都必须有效。
+
+`.env` 及 `.env.*` 已被 Git 忽略，仅保留无真实密钥的 `.env.example`。密钥不会返回浏览器；修改配置后需重启工作台。`.env` 是本机明文文件，曾在聊天中分享的临时凭据建议轮换。
+
+### 先独立验证语音，再验证完整任务
+
+```powershell
+# 不需要 HA、ESPHome 或 LLM，也不会调用 Agent / 控制设备。
+& $python scripts\check_voice_asr.py
+# 可选：测试文件将上传到语音服务商，需为单声道 / 16kHz / PCM16 WAV。
+& $python scripts\check_voice_asr.py --wav 'C:\Audio\command.wav'
+# 比较关闭二遍识别时的基础流式结果。
+& $python scripts\check_voice_asr.py --wav 'C:\Audio\command.wav' --no-second-pass
+```
+
+不带 `--wav` 时只发送一秒静音，检查鉴权、音频传输和最终包；成功标志为 `connected: true` 和最终 `state: "final"`，不代表人声准确度验证通过。带语音文件时还应检查 `partial` 更新与最终 `text`。脚本会消耗少量上游语音额度。
+
+完整网页验收需按下方启动工作台，在 [localhost 页面](http://127.0.0.1:8765) 允许麦克风，先问“客厅主灯现在是什么状态？”，检查字幕实时更新、松开后仅提交一次，再测试需要的设备控制。设备执行成功还需 HA 回读验证，不能仅凭字幕判断。
+
+| 检查项 | 地址或操作 |
+| --- | --- |
+| 语音配置是否被读取 | `/api/voice/status`；`configured: true` 只表示已配置 Key，不表示上游调用通过 |
+| HA、模型和 Agent 状态 | `/api/health` |
+| 设备实体匹配 | `/api/devices/diagnostics`，或运行 `scripts/check_ha_devices.py` |
+| 麦克风权限问题 | 使用 localhost 或 HTTPS，检查浏览器权限，首次授权后重新长按 |
+| 字幕正常但任务失败 | 分别检查模型、HA 和实体绑定；不要归因于语音转写 |
+
+本地自动化验证不调用真实语音服务或设备：
+
+```powershell
+& $python -B -m pytest -c pyproject.toml tests -q
+node --test tests/voice-input.test.cjs
+& $python -m ruff check --no-cache .
+node --check workbench/voice-input.js
+node --check workbench/voice-capture.js
+```
+
+2026-09-01 回归结果：155 项 Python 测试、10 项前端语音测试通过。真实 API 的合成语音验证与限制见 [验证记录](docs/VOICE_VERIFICATION.md)；麦克风交互、错误码和更多选项见 [语音输入说明](docs/VOICE_INPUT.md)。真实麦克风到设备执行的现场验收仍需在你的部署环境完成。
+
 ## 赛题定位
 
 - **场景方向**：家庭智能管家 + 老人关怀安全守护 + 家庭能源管理 + 多成员个性化服务。
@@ -25,23 +118,33 @@ SpaceButler 是面向科大讯飞 SpaceMind 家庭应用场景赛题的 AI Agent
 - 边缘语言路由：调用 llama.cpp 理解自然语言偏好，模型候选必须通过字段白名单和范围校验。
 - 现场工作台：AI 管家、空间与设备、主动服务、执行事件四个视图；夜间安全场景可绑定起身/照度实体、查看实时条件和接管 TTL，并模拟真实上升沿与执行回读。
 
-## 快速运行
+## 完整工作台运行（HA / ESPHome / LLM）
 
-当前机器已验证可用的解释器是 `E:\Anaconda\envs\Agent-Hub\python.exe`
-（Python 3.12，已安装 LangGraph 1.1.6）。Ubuntu 上的四个 ESPHome 节点必须已经运行，
-并把其现有 Noise PSK 作为环境变量传入；程序不会生成或覆盖密钥。
+麦克风入口支持长按 **V** 说话、实时显示字幕、松开后提交 Agent。
+语音 Key 配置、权限排查和测试步骤见 [语音输入说明](docs/VOICE_INPUT.md)。
+HA 已连接但工作台显示 0 台时，见 [设备匹配与只读诊断](docs/DEVICE_DISCOVERY.md)。
+
+Ubuntu 上的四个 ESPHome 节点必须已经运行，并把其现有 Noise PSK 填入本目录 `.env` 的 `ESPHOME_NOISE_PSK`；程序不会生成或覆盖密钥。HA 已部署在虚拟机时，复用该实例，不需要再启动 Windows 本地 HA。
+
+例如 HA 和 ESPHome 同在 Ubuntu、HA 使用 Docker host 网络时：
+
+```dotenv
+SPACEBUTLER_HA_URL=http://192.168.111.134:8123
+HA_TOKEN=<该 HA 实例的长期访问令牌>
+ESPHOME_HOST=127.0.0.1
+ESPHOME_NOISE_PSK=<现有 ESPHome API 加密密钥>
+SPACEBUTLER_LLM_BASE_URL=http://127.0.0.1:12881
+EDGE_LLM_URL=http://127.0.0.1:12881
+```
+
+以上地址需按实际部署调整。`ESPHOME_HOST` 是 **HA 访问 ESPHome 的地址**，这里的 `127.0.0.1` 指 HA 所在 Ubuntu；`SPACEBUTLER_HA_URL` 则是 Windows 工作台访问 HA 的地址。
 
 ```powershell
-$python = 'E:\Anaconda\envs\Agent-Hub\python.exe'
-& $python -m pip install -e ".[dev]"
-$env:ESPHOME_NOISE_PSK = '<复制 Ubuntu secrets.yaml 中现有的 api_encryption_key>'
-$env:ESPHOME_HOST = '192.168.111.134'
-docker compose -f deployment\docker-compose.yml up -d spacebutler-home-assistant
-& $python scripts\check_ha_esphome_network.py
+# 在子项目目录使用前面选定的 $python；HA、ESPHome 和模型需先就绪。
 & $python scripts\run_workbench.py --port 8765
 ```
 
-浏览器打开 `http://127.0.0.1:8765`。工作台启动时会完成本地 Home Assistant 初始化，并按下表接入 Ubuntu 节点：
+浏览器打开 `http://127.0.0.1:8765`。启动脚本会检查配置的 HA、获取令牌并确认 ESPHome 集成；已有集成会复用。以下是项目本地 Compose 的默认值，虚拟机部署以 `.env` 为准：
 
 | 服务 | 默认地址 |
 | --- | --- |
@@ -68,11 +171,10 @@ docker compose -f deployment\docker-compose.yml up -d spacebutler-home-assistant
 按交付方案演示（工作台 AI 管家对话框 + "Agent Activity" 决策链面板）：
 
 ```powershell
-# Ubuntu 上的节点已运行；这里只启动 HA，不启动项目内 ESPHome/模拟设备
-docker compose -f deployment\docker-compose.yml up -d spacebutler-home-assistant
-python scripts\check_ha_esphome_network.py
-python scripts\run_workbench.py --port 8765
-python scripts\demo_reset.py                  # 灯 80%、窗帘全开、空调关
+# 复用已配置的 HA、ESPHome 和模型，不重复创建设备。
+& $python scripts\run_workbench.py --port 8765
+# 以下操作需要另开终端，并会改变设备状态。
+& $python scripts\demo_reset.py                  # 灯 80%、窗帘全开、空调关
 ```
 
 | Demo | 操作 | 预期现象 |
