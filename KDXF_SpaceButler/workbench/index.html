@@ -34,10 +34,8 @@
       <button class="rail-button rail-refresh" id="refresh-all" title="刷新">
         <i data-lucide="refresh-cw"></i><span>刷新状态</span>
       </button>
-      <div class="sidebar-profile">
-        <span>SB</span>
-        <div><strong>张先生</strong><small>家庭管理员</small></div>
-        <i data-lucide="chevron-down"></i>
+      <div class="sidebar-footer">
+        <span class="sidebar-source-count" id="sidebar-source-count" title="已接入设备来源">--</span>
       </div>
     </nav>
 
@@ -45,21 +43,20 @@
       <header class="topbar">
         <div class="welcome-copy">
           <p id="welcome-date">今天</p>
-          <h1>晚上好，家里一切正常</h1>
+          <h1 id="home-headline">正在读取家庭状态</h1>
         </div>
         <div class="home-status-strip" aria-label="家庭状态">
-          <span class="home-status-pill member-pill"><span class="member-avatar">👴</span><strong id="household-member-status">爷爷 · 卧室</strong></span>
-          <span class="home-status-pill"><i data-lucide="shield-check"></i><strong id="household-device-status">设备状态读取中</strong></span>
-          <button class="home-status-pill advice-pill" data-view-jump="agent"><i data-lucide="lightbulb"></i><strong id="advice-count">读取主动建议</strong></button>
-          <span class="home-weather"><i data-lucide="thermometer-sun"></i><strong id="indoor-temperature">--°C</strong><small id="temperature-source">HA 实时室温</small></span>
+          <span class="ha-badge"><i data-lucide="shield-check"></i><strong id="household-device-status">设备状态读取中</strong></span>
+          <button class="ha-badge is-button" data-view-jump="agent"><i data-lucide="lightbulb"></i><strong id="advice-count">读取主动建议</strong></button>
+          <span class="ha-badge tone-cool"><i data-lucide="thermometer"></i><strong id="indoor-temperature">--°C</strong></span>
         </div>
         <div class="topbar-actions">
           <div class="health-strip" aria-label="服务状态">
             <span class="status-dot" id="health-dot"></span>
             <strong id="health-label">连接中</strong>
           </div>
-          <button class="primary command-button" id="open-add-device">
-            <i data-lucide="plus"></i><span>添加设备</span>
+          <button class="secondary command-button" id="open-esphome-nodes">
+            <i data-lucide="radio-tower"></i><span>设备接入</span>
           </button>
         </div>
       </header>
@@ -189,7 +186,7 @@
                 <span class="timestamp" id="snapshot-time">--</span>
               </div>
             </div>
-            <div class="favorite-grid" id="favorite-devices">
+            <div class="ha-grid" id="favorite-devices">
               <div class="loading-state compact"><i data-lucide="loader-circle"></i><span>正在读取收藏设备</span></div>
             </div>
           </section>
@@ -199,7 +196,7 @@
             <div class="proactive-recommendation">
               <span class="recommendation-icon"><i data-lucide="leaf"></i></span>
               <div class="recommendation-copy">
-                <h2 id="dashboard-proactive-title">无人开窗空调节能保护</h2>
+                <h2 id="dashboard-proactive-title">读取主动服务规则</h2>
                 <p id="dashboard-proactive-copy">正在读取家庭环境信号</p>
               </div>
               <i class="recommendation-chevron" data-lucide="chevron-right"></i>
@@ -209,8 +206,8 @@
               </div>
             </div>
             <button class="night-service-row" data-view-jump="agent">
-              <span class="night-service-icon"><i data-lucide="shield-user"></i></span>
-              <span><strong>老人夜间起身守护</strong><small>已开启</small></span>
+              <span class="night-service-icon"><i data-lucide="moon-star"></i></span>
+              <span><strong id="night-service-name">夜间起身守护</strong><small id="night-service-state">读取中</small></span>
               <i data-lucide="chevron-right"></i>
             </button>
           </section>
@@ -241,24 +238,25 @@
             </div>
           </section>
 
-          <section class="panel energy-overview">
-            <div class="energy-heading"><h2>能源摘要</h2></div>
-            <div class="energy-metrics">
-              <div><span>当前功率</span><strong id="total-power">--</strong></div>
-              <div><span>今日估算</span><strong><span id="estimated-today-energy">--</span> <small>kWh</small></strong></div>
-              <div><span>在线设备</span><strong class="energy-compare" id="energy-online-devices">--</strong></div>
+          <section class="panel energy-overview ha-energy-card">
+            <div class="ha-energy-head">
+              <div class="ha-energy-figures">
+                <div class="ha-energy-figure"><span>当前功率</span><strong id="total-power">--</strong></div>
+                <div class="ha-energy-figure"><span>区间累计</span><strong><span id="energy-period-kwh">--</span> <small>kWh</small></strong></div>
+                <div class="ha-energy-figure"><span>在线设备</span><strong id="energy-online-devices">--</strong></div>
+              </div>
+              <div class="ha-energy-range" id="energy-range" role="group" aria-label="时间范围">
+                <button data-energy-hours="3">3 小时</button>
+                <button class="active" data-energy-hours="6">6 小时</button>
+                <button data-energy-hours="24">24 小时</button>
+              </div>
             </div>
-            <div class="energy-line-chart" aria-label="实时功率趋势">
-              <svg viewBox="0 0 520 168" role="img" aria-label="根据设备实时状态采样的功率曲线">
-                <defs><linearGradient id="energy-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3aa5b0" stop-opacity=".25"/><stop offset="1" stop-color="#3aa5b0" stop-opacity=".03"/></linearGradient></defs>
-                <g class="chart-grid"><line x1="46" y1="18" x2="508" y2="18"/><line x1="46" y1="62" x2="508" y2="62"/><line x1="46" y1="106" x2="508" y2="106"/><line x1="46" y1="150" x2="508" y2="150"/></g>
-                <g class="chart-y-labels"><text id="energy-y-max" x="4" y="22">--</text><text id="energy-y-mid" x="4" y="66">--</text><text id="energy-y-low" x="4" y="110">--</text><text x="14" y="154">0 W</text></g>
-                <path class="chart-area" id="energy-area-path" d=""/>
-                <polyline class="chart-line" id="energy-line-points" points=""/>
-                <circle class="chart-current" id="energy-current-point" cx="46" cy="150" r="5" hidden/>
-              </svg>
+            <div class="ha-energy-plot" id="energy-plot" aria-label="功率历史曲线">
+              <div class="ha-energy-empty">正在读取 Home Assistant 历史记录</div>
             </div>
-            <div class="energy-axis"><span id="energy-chart-start">--:--</span><span>实时采样</span><span id="energy-chart-end">--:--</span></div>
+            <div class="ha-energy-axis"><span id="energy-chart-start">--:--</span><span id="energy-chart-end">--:--</span></div>
+            <span class="ha-energy-model" id="energy-model-note"><i data-lucide="info"></i><span>读取中</span></span>
+            <div class="ha-energy-devices" id="energy-devices"></div>
           </section>
         </div>
         <footer class="dashboard-footer">SpaceButler <span>·</span> 让家更懂你</footer>
@@ -527,41 +525,23 @@
     </section>
   </main>
 
-  <dialog id="add-device-dialog">
-    <form method="dialog" class="dialog-shell" id="add-device-form">
+  <dialog id="esphome-nodes-dialog">
+    <div class="dialog-shell">
       <div class="dialog-heading">
         <div>
-          <span class="eyebrow">DEVICE REGISTRATION</span>
-          <h2>添加虚拟设备</h2>
+          <span class="eyebrow">DEVICE ONBOARDING</span>
+          <h2>设备接入状态</h2>
         </div>
-        <button class="icon-button" type="button" title="关闭"><i data-lucide="x"></i></button>
+        <button class="icon-button" type="button" id="close-esphome-nodes" title="关闭"><i data-lucide="x"></i></button>
       </div>
-      <div class="form-grid">
-        <label>
-          <span>设备名称</span>
-          <input id="new-device-name" name="name" maxlength="40" required placeholder="例如：卧室阅读灯">
-        </label>
-          <label>
-            <span>设备类型</span>
-            <select id="new-device-type" name="type" required></select>
-        </label>
-        <label>
-          <span>所在空间</span>
-          <input id="new-device-room" name="room" list="room-options" required pattern="[a-z0-9_]{1,32}" placeholder="选择或输入空间标识">
-          <datalist id="room-options"></datalist>
-        </label>
+      <div class="ha-node-list" id="esphome-node-list">
+        <div class="loading-state compact"><i data-lucide="loader-circle"></i><span>正在读取节点状态</span></div>
       </div>
       <div class="dialog-note">
         <i data-lucide="radio-tower"></i>
-        <span>注册后设备将通过 MQTT Discovery 自动进入 Home Assistant。</span>
+        <span id="esphome-node-note">设备由 ESPHome 节点固件和 MQTT 容器定义，新增设备需在节点侧注册后由 Home Assistant 自动发现。</span>
       </div>
-      <div class="dialog-actions">
-        <button class="secondary" type="button">取消</button>
-        <button class="primary" id="submit-add-device" type="submit">
-          <i data-lucide="plus"></i><span>注册设备</span>
-        </button>
-      </div>
-    </form>
+    </div>
   </dialog>
 
   <div class="toast" id="toast" role="status"></div>

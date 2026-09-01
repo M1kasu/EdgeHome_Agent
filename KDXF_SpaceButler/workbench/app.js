@@ -11,7 +11,7 @@ const state = {
   view: "home",
   floorSelectedId: null,
   floorRoomFocus: "all",
-  energySamples: [],
+  energyHours: 6,
   deviceBusyIds: new Set(),
   proactive: null,
   conversation: null,
@@ -98,12 +98,21 @@ function renderStatus(payload) {
     $("#indoor-temperature").textContent = Number.isFinite(Number(climateState.current_temperature))
       ? `${Number(climateState.current_temperature)}°C`
       : "--°C";
-    $("#temperature-source").textContent = "HA / ESPHome 实时回读";
   }
   if (payload.night_safety) {
+    // 首页夜间守护摘要读真实配置，不写死开启状态。
     const config = payload.night_safety.config || {};
     const room = (payload.night_safety.available_rooms || []).find((item) => item.room === config.origin_room);
-    $("#household-member-status").textContent = `${config.member_name || "家庭成员"} · ${room?.name || config.origin_room || "家中"}`;
+    const nameNode = $("#night-service-name");
+    const stateNode = $("#night-service-state");
+    if (nameNode) {
+      nameNode.textContent = `${config.member_name || "家庭成员"}夜间起身守护`;
+    }
+    if (stateNode) {
+      const enabled = config.enabled !== false;
+      const where = room?.name || config.origin_room || "";
+      stateNode.textContent = enabled ? `已开启${where ? ` · ${where}` : ""}` : "已停用";
+    }
   }
   if (payload.proactive) renderProactive(payload.proactive);
   if (payload.night_safety) renderNightSafety(payload.night_safety);
@@ -619,51 +628,6 @@ function controlPayloadAttribute(payload) {
   return escapeHtml(JSON.stringify(payload || {}));
 }
 
-function renderPrimaryAction(device) {
-  const action = device.ui?.primary_action;
-  if (!action) {
-    return `<button class="icon-button" data-favorite-open title="查看状态"><i data-lucide="search"></i></button>`;
-  }
-  return `
-    <button class="power-button ${deviceIsActive(device) ? "on" : ""}"
-      data-control-payload="${controlPayloadAttribute(action.payload)}" title="${escapeHtml(action.label)}">
-      <i data-lucide="power"></i>
-    </button>`;
-}
-
-function favoriteDeviceIcon(device) {
-  return device.ui?.icon || "cpu";
-}
-
-function renderFavoriteControl(device) {
-  const controls = device.ui?.controls || [];
-  const range = controls.find((control) => control.kind === "range");
-  const stepper = controls.find((control) => control.kind === "stepper");
-  let detail = "";
-  if (range) {
-    detail = `
-      <label class="favorite-range" title="${escapeHtml(range.label)}">
-        <input type="range" min="${Number(range.min)}" max="${Number(range.max)}" step="${Number(range.step)}"
-          value="${Number(range.value)}" data-control-range data-control-field="${escapeHtml(range.field)}"
-          data-control-payload="${controlPayloadAttribute(range.payload)}">
-      </label>`;
-  } else if (stepper) {
-    const value = Number(stepper.value);
-    const step = Number(stepper.step);
-    const minimum = Number(stepper.min);
-    const maximum = Number(stepper.max);
-    const lowerPayload = { ...(stepper.payload || {}), [stepper.field]: Math.max(minimum, value - step) };
-    const upperPayload = { ...(stepper.payload || {}), [stepper.field]: Math.min(maximum, value + step) };
-    detail = `
-      <div class="favorite-temperature" aria-label="${escapeHtml(stepper.label)}">
-        <button data-control-payload="${controlPayloadAttribute(lowerPayload)}" title="降低温度"><i data-lucide="minus"></i></button>
-        <strong>${escapeHtml(value)}°C</strong>
-        <button data-control-payload="${controlPayloadAttribute(upperPayload)}" title="升高温度"><i data-lucide="plus"></i></button>
-      </div>`;
-  }
-  return `<div class="favorite-control">${renderPrimaryAction(device)}${detail}</div>`;
-}
-
 function renderFavoriteDevices() {
   const grid = $("#favorite-devices");
   if (!grid) return;
@@ -671,19 +635,7 @@ function renderFavoriteDevices() {
   const devices = configuredIds
     .map((deviceId) => state.devices.find((item) => item.device_id === deviceId))
     .filter(Boolean);
-  grid.innerHTML = devices.map((device) => {
-    const icon = favoriteDeviceIcon(device);
-    return `
-      <article class="favorite-device ${state.deviceBusyIds.has(device.device_id) ? "device-busy" : ""}"
-        data-device-id="${escapeHtml(device.device_id)}" aria-busy="${state.deviceBusyIds.has(device.device_id)}">
-        <span class="favorite-device-icon ${dashboardDeviceTone(device)}"><i data-lucide="${escapeHtml(icon)}"></i></span>
-        <div class="favorite-device-copy">
-          <strong>${escapeHtml(dashboardDeviceName(device))}</strong>
-          <span>${escapeHtml(dashboardDeviceState(device))}</span>
-        </div>
-        ${renderFavoriteControl(device)}
-      </article>`;
-  }).join("");
+  grid.innerHTML = devices.map((device) => renderHaTile(device)).join("");
 }
 
 function roomTemperature(devices) {
@@ -834,43 +786,106 @@ function formatPowerLabel(value) {
   return value >= 1000 ? `${(value / 1000).toFixed(1)} kW` : `${Math.round(value)} W`;
 }
 
-function renderEnergyChart(currentPower) {
-  if (!Number.isFinite(currentPower)) return;
-  const timestamp = Date.now();
-  const sample = { timestamp, power: Math.max(0, currentPower) };
-  const previous = state.energySamples.at(-1);
-  if (previous && timestamp - previous.timestamp < 3000) state.energySamples[state.energySamples.length - 1] = sample;
-  else state.energySamples.push(sample);
-  state.energySamples = state.energySamples.slice(-48);
-
-  const samples = state.energySamples;
-  const maximum = Math.max(100, Math.ceil(Math.max(...samples.map((item) => item.power)) * 1.2 / 100) * 100);
-  const chartLeft = 46;
-  const chartRight = 508;
-  const chartTop = 18;
-  const chartBottom = 150;
-  const points = samples.map((item, index) => {
-    const x = samples.length === 1 ? chartLeft : chartLeft + index * (chartRight - chartLeft) / (samples.length - 1);
-    const y = chartBottom - item.power / maximum * (chartBottom - chartTop);
-    return { x: Number(x.toFixed(1)), y: Number(y.toFixed(1)) };
-  });
-  $("#energy-line-points").setAttribute("points", points.map((point) => `${point.x},${point.y}`).join(" "));
-  const area = points.length
-    ? `M${points[0].x},${chartBottom} L${points.map((point) => `${point.x},${point.y}`).join(" L")} L${points.at(-1).x},${chartBottom} Z`
-    : "";
-  $("#energy-area-path").setAttribute("d", area);
-  const current = points.at(-1);
-  $("#energy-current-point").hidden = !current;
-  if (current) {
-    $("#energy-current-point").setAttribute("cx", current.x);
-    $("#energy-current-point").setAttribute("cy", current.y);
+// 能耗曲线来自 Home Assistant recorder 真实历史（/api/energy-history），
+// 不再用前端采样或按当前功率外推。功率本身是额定模型估算，界面明确标注。
+async function loadEnergyHistory() {
+  const plot = $("#energy-plot");
+  if (!plot) return;
+  try {
+    const payload = await api(`/api/energy-history?hours=${state.energyHours}`);
+    renderEnergyHistory(payload);
+  } catch (error) {
+    plot.innerHTML = `<div class="ha-energy-empty">${escapeHtml(error.message)}</div>`;
+    const note = $("#energy-model-note span");
+    if (note) note.textContent = "历史读取失败";
   }
-  $("#energy-y-max").textContent = formatPowerLabel(maximum);
-  $("#energy-y-mid").textContent = formatPowerLabel(maximum * 2 / 3);
-  $("#energy-y-low").textContent = formatPowerLabel(maximum / 3);
+}
+
+function renderEnergyHistory(payload) {
+  const plot = $("#energy-plot");
+  if (!plot) return;
+  const points = payload.points || [];
+  $("#energy-period-kwh").textContent = text(payload.period_kwh, "--");
+  const note = $("#energy-model-note span");
+  if (note) note.textContent = `${payload.model_label} · 近 ${payload.hours} 小时`;
+  $("#energy-devices").innerHTML = (payload.tracked_devices || []).map((device) => `
+    <span class="ha-energy-device ${device.recorded ? "" : "missing"}">
+      ${escapeHtml(device.name)}${device.recorded ? "" : " · 无历史记录"}
+    </span>`).join("");
+
+  if (points.length < 2) {
+    plot.innerHTML = `<div class="ha-energy-empty">该区间没有可用的历史记录</div>`;
+    return;
+  }
+  const values = points.map((point) => Number(point.power_w) || 0);
+  const maximum = Math.max(100, Math.ceil(Math.max(...values) * 1.15 / 100) * 100);
+  const left = 44;
+  const right = 512;
+  const top = 12;
+  const bottom = 178;
+  const coords = points.map((point, index) => ({
+    x: Number((left + index * (right - left) / (points.length - 1)).toFixed(1)),
+    y: Number((bottom - (Number(point.power_w) || 0) / maximum * (bottom - top)).toFixed(1)),
+  }));
+  const line = coords.map((point) => `${point.x},${point.y}`).join(" ");
+  const area = `M${coords[0].x},${bottom} L${line.split(" ").join(" L")} L${coords.at(-1).x},${bottom} Z`;
+  plot.innerHTML = `
+    <svg viewBox="0 0 524 196" role="img" aria-label="按额定功率模型换算的历史功率曲线">
+      <defs>
+        <linearGradient id="ha-energy-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#03a9f4" stop-opacity=".28"/>
+          <stop offset="1" stop-color="#03a9f4" stop-opacity=".02"/>
+        </linearGradient>
+      </defs>
+      <g stroke="#eceff4" stroke-width="1">
+        ${[top, top + (bottom - top) / 3, top + (bottom - top) * 2 / 3, bottom].map((y) => `<line x1="${left}" y1="${y}" x2="${right}" y2="${y}"/>`).join("")}
+      </g>
+      <g fill="#727272" font-size="10">
+        <text x="2" y="${top + 4}">${formatPowerLabel(maximum)}</text>
+        <text x="2" y="${top + (bottom - top) / 3 + 4}">${formatPowerLabel(maximum * 2 / 3)}</text>
+        <text x="2" y="${top + (bottom - top) * 2 / 3 + 4}">${formatPowerLabel(maximum / 3)}</text>
+        <text x="2" y="${bottom + 4}">0 W</text>
+      </g>
+      <path d="${area}" fill="url(#ha-energy-fill)"/>
+      <polyline points="${line}" fill="none" stroke="#03a9f4" stroke-width="2" stroke-linejoin="round"/>
+      <circle cx="${coords.at(-1).x}" cy="${coords.at(-1).y}" r="4" fill="#03a9f4"/>
+    </svg>`;
   const time = (value) => new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
-  $("#energy-chart-start").textContent = time(samples[0].timestamp);
-  $("#energy-chart-end").textContent = time(samples.at(-1).timestamp);
+  $("#energy-chart-start").textContent = time(points[0].at);
+  $("#energy-chart-end").textContent = time(points.at(-1).at);
+}
+
+// 问候语按真实时间段 + 真实设备状态生成，不写死"一切正常"。
+function renderHomeHeadline(online) {
+  const node = $("#home-headline");
+  if (!node) return;
+  const hour = new Date().getHours();
+  const greeting = hour < 6 ? "凌晨好" : hour < 11 ? "早上好" : hour < 14 ? "中午好" : hour < 18 ? "下午好" : "晚上好";
+  const total = state.devices.length;
+  if (!total) {
+    node.textContent = `${greeting}，尚未发现已接入设备`;
+    return;
+  }
+  const offline = total - online;
+  const warnings = state.devices.filter((device) => device.online && device.ui?.warning);
+  if (offline) {
+    node.textContent = `${greeting}，${offline} 台设备离线需要检查`;
+    return;
+  }
+  if (warnings.length) {
+    node.textContent = `${greeting}，${warnings.map((device) => device.ui?.name || device.name).join("、")}需要关注`;
+    return;
+  }
+  node.textContent = `${greeting}，${total} 台设备均在线运行`;
+}
+
+function renderSourceCount() {
+  const node = $("#sidebar-source-count");
+  if (!node) return;
+  const esphome = state.devices.filter((device) => device.source === "esphome").length;
+  const mqtt = state.devices.filter((device) => device.source === "mqtt").length;
+  node.textContent = `${esphome + mqtt}`;
+  node.title = `已接入 ${esphome} 台 ESPHome 设备、${mqtt} 台 MQTT 设备`;
 }
 
 function renderInventory(payload) {
@@ -893,7 +908,6 @@ function renderInventory(payload) {
   $("#device-count").textContent = state.devices.length;
   $("#online-count").textContent = `${online}/${state.devices.length}`;
   $("#total-power").textContent = `${Math.round(totalPower)} W`;
-  $("#estimated-today-energy").textContent = text(state.dashboard.energy?.estimated_today_kwh, "--");
   $("#energy-online-devices").textContent = `${online}/${state.devices.length}`;
   $("#household-device-status").textContent = online === state.devices.length
     ? `全屋 ${online} 台设备在线`
@@ -901,12 +915,9 @@ function renderInventory(payload) {
   const livingDevices = state.devices.filter((device) => device.room === "living_room");
   const liveTemperature = roomTemperature(livingDevices.length ? livingDevices : state.devices);
   if (liveTemperature !== null) $("#indoor-temperature").textContent = `${Number(liveTemperature.toFixed(1))}°C`;
-  renderEnergyChart(totalPower);
+  renderHomeHeadline(online);
+  renderSourceCount();
   $("#inventory-summary").textContent = `${state.devices.length} 台设备 · ${state.rooms.length} 个空间`;
-  $("#new-device-type").innerHTML = (state.dashboard.device_types || []).map((item) => `
-    <option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join("");
-  $("#room-options").innerHTML = state.rooms.map((room) => `<option value="${escapeHtml(room.room)}">${escapeHtml(room.name)}</option>`).join("");
-  if (!$("#new-device-room").value && state.rooms[0]) $("#new-device-room").value = state.rooms[0].room;
   renderRoomTabs();
   const grid = $("#device-grid");
   if (!grid.contains(document.activeElement)) renderDeviceGrid();
@@ -938,64 +949,50 @@ function renderDeviceGrid() {
       <div class="empty-inventory">
         <i data-lucide="package-open"></i>
         <strong>这个空间还没有设备</strong>
-        <button class="primary" data-open-add-device><i data-lucide="plus"></i><span>添加设备</span></button>
+        <button class="secondary" data-open-esphome-nodes><i data-lucide="radio-tower"></i><span>查看接入状态</span></button>
       </div>`;
     refreshIcons();
     return;
   }
-  grid.innerHTML = devices.map(renderDeviceCard).join("");
+  // 按空间分组渲染 HA sections；单空间筛选时不重复显示分组标题。
+  if (state.roomFilter !== "all") {
+    grid.innerHTML = `<div class="ha-grid">${devices.map(renderDeviceDetailTile).join("")}</div>`;
+    refreshIcons();
+    return;
+  }
+  const byRoom = new Map();
+  for (const device of devices) {
+    const key = device.room || "home";
+    if (!byRoom.has(key)) byRoom.set(key, { name: device.room_name || key, items: [] });
+    byRoom.get(key).items.push(device);
+  }
+  grid.innerHTML = `<div class="ha-sections">${[...byRoom.values()].map((group) => `
+    <section>
+      <h3 class="ha-section-heading">
+        <i data-lucide="layout-grid"></i>
+        <span>${escapeHtml(group.name)}</span>
+        <span class="ha-section-count">${group.items.length} 台</span>
+      </h3>
+      <div class="ha-grid">${group.items.map(renderDeviceDetailTile).join("")}</div>
+    </section>`).join("")}</div>`;
   refreshIcons();
 }
 
-function renderDeviceCard(device) {
-  const meta = {
-    label: device.ui?.type_label || "设备",
-    icon: device.ui?.icon || "cpu",
-    tone: device.ui?.tone || "blue",
-  };
-  const status = {
-    primary: device.ui?.state_primary || (device.online ? "状态未知" : "设备离线"),
-    secondary: device.ui?.state_secondary || "等待设备上报",
-  };
-  const discovered = device.discovered ? "HA 已发现" : "等待 HA";
-  const runtime = device.runtime && device.runtime.isolation === "dedicated" ? device.runtime : null;
-  return `
-    <article class="device-card ${state.deviceBusyIds.has(device.device_id) ? "device-busy" : ""}"
-      data-device-id="${escapeHtml(device.device_id)}" aria-busy="${state.deviceBusyIds.has(device.device_id)}">
-      <div class="device-card-heading">
-        <div class="device-identity">
-          <span class="device-icon ${meta.tone}"><i data-lucide="${meta.icon}"></i></span>
-          <div>
-            <h3>${escapeHtml(device.name)}</h3>
-            <p>${escapeHtml(device.room_name)} · ${escapeHtml(meta.label)}</p>
-          </div>
-        </div>
-        <div class="device-tools">
-          <button class="icon-button favorite-toggle ${state.favoriteDeviceIds?.includes(device.device_id) ? "selected" : ""}"
-            data-favorite-toggle title="${state.favoriteDeviceIds?.includes(device.device_id) ? "取消收藏" : "加入收藏"}">
-            <i data-lucide="star"></i>
-          </button>
-          ${runtime ? `<span class="runtime-badge ${runtime.status === "running" ? "running" : "stopped"}" title="独立容器：${escapeHtml(runtime.container)}"><i data-lucide="container"></i></span>` : ""}
-          <span class="device-online ${device.online ? "online" : "offline"}">${device.online ? "在线" : "离线"}</span>
-          ${device.removable ? `<button class="icon-button danger-ghost" data-device-action="delete" title="删除设备"><i data-lucide="trash-2"></i></button>` : ""}
-        </div>
-      </div>
-      <div class="device-state">
-        <strong>${escapeHtml(status.primary)}</strong>
-        <span>${escapeHtml(status.secondary)}</span>
-      </div>
-      ${renderDeviceControls(device)}
-      <div class="device-footer">
-        <span class="discovery-state ${device.discovered ? "ready" : ""}"><i data-lucide="${device.discovered ? "badge-check" : "loader-circle"}"></i>${discovered}</span>
-        <code title="${escapeHtml(device.entity_id)}">${escapeHtml(device.entity_id)}</code>
-      </div>
-      <label class="fault-control">
-        <span>故障模式</span>
-        <select data-device-fault>
-          ${faultOptions(device.fault_mode, device.ui?.fault_options || [])}
-        </select>
-      </label>
-    </article>`;
+// 设备页的 tile 额外显示实体 id 和故障注入选项（若后端提供）。
+function renderDeviceDetailTile(device) {
+  const faultOptions = device.ui?.fault_options || [];
+  const extras = `
+    <div class="ha-features">
+      <div class="ha-feature-readonly"><i data-lucide="tag"></i><span>${escapeHtml(device.entity_id)}</span></div>
+      ${faultOptions.length && !device.readonly ? `
+        <label class="fault-control">
+          <span>故障模式</span>
+          <select data-device-fault>${faultOptions.map((option) => `
+            <option value="${escapeHtml(option.value)}" ${device.fault_mode === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+          </select>
+        </label>` : ""}
+    </div>`;
+  return renderHaTile(device).replace("</article>", `${extras}</article>`);
 }
 
 function renderDeviceControls(device) {
@@ -1046,9 +1043,111 @@ function renderControlDescriptor(control) {
   return "";
 }
 
-function faultOptions(selected, options) {
-  return options.map((option) => `
-    <option value="${escapeHtml(option.value)}" ${selected === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
+// ============================================================
+// Home Assistant tile 卡片。所有控件都由后端 ui.controls 描述符驱动，
+// 复用既有 data-control-* 事件管线，前端不预置任何设备行为。
+// ============================================================
+
+const HA_TONE_BY_TYPE = {
+  light: "on-light",
+  switch: "on-switch",
+  curtain: "on-cover",
+  climate: "on-cool",
+  presence: "on-cover",
+  contact: "on-light",
+  illuminance: "on-light",
+  temperature: "on-cool",
+};
+
+function haTileIconClass(device) {
+  if (!device.online) return "offline";
+  if (device.ui?.warning) return "warning";
+  if (!device.ui?.active) return "";
+  if (device.type === "climate") {
+    return device.state?.mode === "heat" ? "on-heat" : "on-cool";
+  }
+  return HA_TONE_BY_TYPE[device.type] || "on-switch";
+}
+
+function haSourceLabel(device) {
+  return { esphome: "ESPHome", mqtt: "MQTT" }[device.source] || "";
+}
+
+function renderHaTile(device, { showBadge = true } = {}) {
+  const toggle = (device.ui?.controls || []).find((control) => control.kind === "toggle" && !control.test_control);
+  const busy = state.deviceBusyIds.has(device.device_id);
+  const clickable = Boolean(toggle) && device.online;
+  const badge = showBadge ? haSourceLabel(device) : "";
+  return `
+    <article class="ha-tile" data-device-id="${escapeHtml(device.device_id)}" aria-busy="${busy}">
+      <button class="ha-tile-main" ${clickable ? `data-control-payload="${controlPayloadAttribute(toggle.payload)}"` : "disabled"}
+        title="${escapeHtml(clickable ? toggle.label : device.ui?.state_label || device.name)}">
+        <span class="ha-tile-icon ${haTileIconClass(device)}"><i data-lucide="${escapeHtml(device.ui?.icon || "cpu")}"></i></span>
+        <span class="ha-tile-copy">
+          <strong>${escapeHtml(device.ui?.name || device.name)}</strong>
+          <span>${escapeHtml(device.online ? device.ui?.state_label || "状态未知" : "不可用")}</span>
+        </span>
+        ${badge ? `<span class="ha-tile-badge">${escapeHtml(badge)}</span>` : ""}
+      </button>
+      ${renderHaFeatures(device)}
+    </article>`;
+}
+
+function renderHaFeatures(device) {
+  if (!device.online) return "";
+  // 只展示真实可用的控制项；测试注入类控件不进 tile。
+  const controls = (device.ui?.controls || []).filter((control) => !control.test_control);
+  const features = controls.map(renderHaFeature).filter(Boolean);
+  if (!features.length) {
+    if (!device.readonly) return "";
+    return `<div class="ha-features"><div class="ha-feature-readonly"><i data-lucide="activity"></i><span>${escapeHtml(device.ui?.state_secondary || "只读传感器")}</span></div></div>`;
+  }
+  return `<div class="ha-features">${features.join("")}</div>`;
+}
+
+function renderHaFeature(control) {
+  if (control.kind === "range") {
+    const value = Number(control.value);
+    const min = Number(control.min);
+    const max = Number(control.max);
+    const percent = max > min ? Math.round(((value - min) / (max - min)) * 100) : 0;
+    const isCover = control.field === "position";
+    return `
+      <div class="ha-slider ${isCover ? "cover-slider" : ""}">
+        <div class="ha-slider-fill" style="width: ${percent}%"></div>
+        <div class="ha-slider-label">
+          <i data-lucide="${isCover ? "blinds" : "sun"}"></i>
+          <span>${escapeHtml(value)}${escapeHtml(control.unit || "")}</span>
+        </div>
+        <input type="range" min="${min}" max="${max}" step="${Number(control.step)}" value="${value}"
+          aria-label="${escapeHtml(control.label)}"
+          data-control-range data-control-field="${escapeHtml(control.field)}"
+          data-control-payload="${controlPayloadAttribute(control.payload)}">
+      </div>`;
+  }
+  if (control.kind === "segmented") {
+    return `
+      <div class="ha-modes" role="group" aria-label="${escapeHtml(control.label)}">
+        ${(control.options || []).map((option) => `
+          <button class="${option.active ? "active" : ""} mode-${escapeHtml(option.value)}"
+            data-control-payload="${controlPayloadAttribute(option.payload)}">${escapeHtml(option.label)}</button>`).join("")}
+      </div>`;
+  }
+  if (control.kind === "stepper") {
+    const value = Number(control.value);
+    const step = Number(control.step);
+    const min = Number(control.min);
+    const max = Number(control.max);
+    const lower = { ...(control.payload || {}), [control.field]: Math.max(min, value - step) };
+    const upper = { ...(control.payload || {}), [control.field]: Math.min(max, value + step) };
+    return `
+      <div class="ha-stepper" aria-label="${escapeHtml(control.label)}">
+        <button data-control-payload="${controlPayloadAttribute(lower)}" title="降低"><i data-lucide="minus"></i></button>
+        <output>${escapeHtml(value)}${escapeHtml(control.unit || "")}</output>
+        <button data-control-payload="${controlPayloadAttribute(upper)}" title="升高"><i data-lucide="plus"></i></button>
+      </div>`;
+  }
+  return "";
 }
 
 async function loadStatus() {
@@ -1269,7 +1368,7 @@ function fmt(value) {
 }
 
 async function loadAll() {
-  await Promise.all([loadStatus(), loadDevices(), loadConversation(), loadAgentActivity()]);
+  await Promise.all([loadStatus(), loadDevices(), loadConversation(), loadAgentActivity(), loadEnergyHistory()]);
   if (state.view === "events") await loadEvents();
 }
 
@@ -1668,8 +1767,8 @@ async function writeTestScene() {
 }
 
 async function handleDeviceClick(event) {
-  if (event.target.closest("[data-open-add-device]")) {
-    $("#add-device-dialog").showModal();
+  if (event.target.closest("[data-open-esphome-nodes]")) {
+    await openEsphomeNodes();
     return;
   }
   const favoriteButton = event.target.closest("[data-favorite-toggle]");
@@ -1749,27 +1848,32 @@ async function handleDeviceChange(event) {
   renderSpatialDashboard();
 }
 
-async function addDevice(event) {
-  event.preventDefault();
-  const name = $("#new-device-name").value.trim();
-  const type = $("#new-device-type").value;
-  const room = $("#new-device-room").value;
-  if (!name) return;
-  $("#submit-add-device").disabled = true;
+// 设备由节点固件和 MQTT 容器定义，工作台不能创建设备。这里如实展示
+// 各 ESPHome 节点端点与 Home Assistant 的解析状态。
+async function openEsphomeNodes() {
+  const dialog = $("#esphome-nodes-dialog");
+  const list = $("#esphome-node-list");
+  dialog.showModal();
+  list.innerHTML = `<div class="loading-state compact"><i data-lucide="loader-circle"></i><span>正在读取节点状态</span></div>`;
+  refreshIcons();
   try {
-    const payload = await api("/api/devices", {
-      method: "POST",
-      body: JSON.stringify({ name, type, room }),
-    });
-    renderInventory(payload);
-    $("#add-device-dialog").close();
-    $("#add-device-form").reset();
-    toast(`${name} 已注册并进入 Home Assistant`);
-    await loadEvents();
+    const payload = await api("/api/esphome-nodes");
+    list.innerHTML = (payload.nodes || []).map((node) => `
+      <div class="ha-node ${node.connected ? "connected" : ""}">
+        <span class="ha-node-dot"></span>
+        <span class="ha-node-copy">
+          <strong>${escapeHtml(node.label)}</strong>
+          <span>${escapeHtml(node.host)}:${escapeHtml(node.port)} · ESPHome Native API</span>
+        </span>
+        <span class="ha-node-state">${node.connected ? "已解析" : "未发现实体"}</span>
+      </div>`).join("");
+    const projected = payload.projected || {};
+    $("#esphome-node-note").textContent =
+      `当前已接入 ${projected.esphome || 0} 台 ESPHome 设备、${projected.mqtt || 0} 台 MQTT 设备。`
+      + "新增设备需在节点侧注册后由 Home Assistant 自动发现，工作台不创建设备。";
+    refreshIcons();
   } catch (error) {
-    toast(error.message, true);
-  } finally {
-    $("#submit-add-device").disabled = false;
+    list.innerHTML = `<div class="ha-energy-empty">${escapeHtml(error.message)}</div>`;
   }
 }
 
@@ -1825,10 +1929,15 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("#devices-reload").addEventListener("click", loadDevices);
   $("#events-reload").addEventListener("click", loadEvents);
-  $("#open-add-device").addEventListener("click", () => $("#add-device-dialog").showModal());
-  $("#add-device-dialog .dialog-heading button").addEventListener("click", () => $("#add-device-dialog").close());
-  $("#add-device-dialog .dialog-actions .secondary").addEventListener("click", () => $("#add-device-dialog").close());
-  $("#add-device-form").addEventListener("submit", addDevice);
+  $("#open-esphome-nodes").addEventListener("click", openEsphomeNodes);
+  $("#close-esphome-nodes").addEventListener("click", () => $("#esphome-nodes-dialog").close());
+  $("#energy-range").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-energy-hours]");
+    if (!button) return;
+    state.energyHours = Number(button.dataset.energyHours);
+    $$("#energy-range button").forEach((item) => item.classList.toggle("active", item === button));
+    loadEnergyHistory();
+  });
   $("#room-tabs").addEventListener("click", (event) => {
     const tab = event.target.closest("[data-room]");
     if (!tab) return;

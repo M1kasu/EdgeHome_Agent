@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,13 +14,19 @@ from pathlib import Path
 import threading
 import time
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .agent import SpaceButlerAgent
 from .agent.runtime import AgentRuntime
 from .control_context import ControlContextRegistry, ManualControlContext
 from .edge_language import EdgeLanguageRouter
-from .esphome_registry import ESPHOME_ALIAS_REGISTRY, device_record
+from .esphome_registry import (
+    DEFAULT_ESPHOME_HOST,
+    ESPHOME_ALIAS_REGISTRY,
+    device_record,
+    esphome_nodes,
+)
+from .mqtt_registry import MQTT_ALIAS_REGISTRY, device_record as mqtt_device_record
 from .home_assistant import EnergyEntityMap, HomeAssistantClient, HomeAssistantRuntime, HomeAssistantSpaceAdapter
 from .interaction import InteractionResponse, SpaceButlerSession
 from .memory import HouseholdMemory
@@ -551,7 +557,7 @@ class WorkbenchController:
                 for item in self._ha.states()
                 if isinstance(item.get("entity_id"), str)
             }
-            devices = self._esphome_devices(ha_states, set())
+            devices = self._projected_devices(ha_states)
             rooms = _room_summaries(devices)
             dashboard = _dashboard_projection(devices, rooms)
             favorite_ids = set(dashboard["favorite_device_ids"])
@@ -561,21 +567,37 @@ class WorkbenchController:
                     ui["favorite"] = str(device.get("device_id", "")) in favorite_ids
             return {"devices": devices, "rooms": rooms, "dashboard": dashboard}
 
-    @staticmethod
-    def _esphome_devices(
+    @classmethod
+    def _projected_devices(
+        cls,
         ha_states: dict[str, dict[str, object]],
-        known_device_ids: set[str],
     ) -> list[dict[str, object]]:
-        """Synthesize inventory records for ESPHome entities that HA already exposes."""
+        """Project every deployed ESPHome and MQTT entity that HA already exposes."""
+        # ESPHome 先扫：同 device_id 时 ESPHome 固件记录优先于 MQTT 容器。
+        esphome = cls._registry_devices(ha_states, _esphome_match)
+        mqtt = cls._registry_devices(
+            ha_states,
+            _mqtt_match,
+            excluded_device_ids={str(item["device_id"]) for item in esphome},
+        )
+        return esphome + mqtt
+
+    @staticmethod
+    def _registry_devices(
+        ha_states: dict[str, dict[str, object]],
+        matcher: Any,
+        excluded_device_ids: set[str] | None = None,
+    ) -> list[dict[str, object]]:
+        """Synthesize inventory records for entities matching one registry."""
         devices: list[dict[str, object]] = []
         seen: set[str] = set()
-        for entity_id, ha_state in ha_states.items():
-            record = _esphome_match(entity_id, ha_state)
+        blocked = excluded_device_ids or set()
+        for entity_id, ha_state in sorted(ha_states.items()):
+            record = matcher(entity_id, ha_state)
             if record is None:
                 continue
             device_id = str(record["device_id"])
-            if device_id in known_device_ids or device_id in seen:
-                # legacy MQTT 容器同时在线时以 Fleet 记录为准，避免同 id 重复。
+            if device_id in blocked or device_id in seen:
                 continue
             seen.add(device_id)
             device_type = str(record["type"])
@@ -588,10 +610,10 @@ class WorkbenchController:
                 "name": record["name"],
                 "room": room,
                 "room_name": _ESPHOME_ROOM_NAMES.get(room, room),
-                "source": "esphome",
+                "source": str(record.get("source", "esphome")),
                 "online": value not in {"unknown", "unavailable"},
                 "readonly": device_type in _ESPHOME_READONLY_TYPES,
-                "state": _esphome_device_state(device_type, ha_state),
+                "state": _projected_device_state(device_type, ha_state, record, ha_states),
                 "ha_state": ha_state,
                 "feedback": None,
                 "discovered": True,
@@ -602,17 +624,17 @@ class WorkbenchController:
         return devices
 
     def add_device(self, payload: dict[str, object]) -> dict[str, object]:
-        raise ValueError("模拟设备已禁用；请在 Ubuntu ESPHome 节点中注册真实设备")
+        raise ValueError("工作台不创建设备；请在 ESPHome 节点或 MQTT 设备容器中注册真实设备")
 
     def remove_device(self, device_id: str) -> dict[str, object]:
-        raise ValueError("ESPHome 设备由 Ubuntu 节点固件定义，不能从工作台删除")
+        raise ValueError("设备由节点固件和设备容器定义，不能从工作台删除")
 
     def control_device(self, device_id: str, payload: dict[str, object]) -> dict[str, object]:
         with self._lock:
             esphome_entity_id = self._esphome_entity_id(device_id)
             if esphome_entity_id is not None:
                 return self._control_esphome_device(device_id, esphome_entity_id, payload)
-            raise ValueError(f"未在 Home Assistant 中发现真实 ESPHome 设备：{device_id}")
+            raise ValueError(f"未在 Home Assistant 中发现该真实设备：{device_id}")
 
     def set_device_fault(self, device_id: str, mode: str, delay_ms: int = 0) -> dict[str, object]:
         if mode not in {
@@ -626,7 +648,7 @@ class WorkbenchController:
             "stuck",
         }:
             raise ValueError("unsupported fault mode")
-        raise ValueError("真实 ESPHome 设备不支持模拟故障注入")
+        raise ValueError("真实设备不支持模拟故障注入")
 
     def reset_scene(
         self,
@@ -648,7 +670,7 @@ class WorkbenchController:
             ):
                 entity_id = self._esphome_entity_id(device_id)
                 if entity_id is None:
-                    raise ValueError(f"真实 ESPHome 设备未注册：{device_id}")
+                    raise ValueError(f"真实设备未注册：{device_id}")
                 self._control_esphome_device(device_id, entity_id, payload)
             self._session = self._new_session()
             self._last_response = None
@@ -696,6 +718,93 @@ class WorkbenchController:
 
     def chat(self, text: str) -> dict[str, object]:
         return self._agent_runtime.submit_text(text)
+
+    def energy_history(self, hours: int = 6, samples: int = 72) -> dict[str, object]:
+        """Rebuild a power curve from recorder history using the rated-power model.
+
+        Power is an estimate derived from device state, not meter readings; the
+        response says so explicitly so the UI can label it honestly.
+        """
+        if not 1 <= hours <= 48:
+            raise ValueError("hours must be between 1 and 48")
+        if not 2 <= samples <= 500:
+            raise ValueError("samples must be between 2 and 500")
+        with self._lock:
+            ha_states = {
+                str(item.get("entity_id")): item
+                for item in self._ha.states()
+                if isinstance(item.get("entity_id"), str)
+            }
+            devices = self._projected_devices(ha_states)
+            tracked = [
+                device
+                for device in devices
+                if _device_contributes_power(device)
+            ]
+            entity_ids = [str(device["entity_id"]) for device in tracked]
+            now = datetime.now().astimezone()
+            start = now - timedelta(hours=hours)
+            series = self._ha.history(entity_ids, start) if entity_ids else []
+            by_entity = {
+                str(points[0].get("entity_id")): points
+                for points in series
+                if points and isinstance(points[0].get("entity_id"), str)
+            }
+            points = _power_timeline(tracked, by_entity, start, now, samples)
+            return {
+                "hours": hours,
+                "model": "rated_estimate",
+                "model_label": "按设备额定功率估算，非电表实测",
+                "points": points,
+                "current_power_w": points[-1]["power_w"] if points else 0.0,
+                "period_kwh": _trapezoid_kwh(points),
+                "tracked_devices": [
+                    {
+                        "device_id": str(device["device_id"]),
+                        "name": str(device["name"]),
+                        "room_name": str(device["room_name"]),
+                        "entity_id": str(device["entity_id"]),
+                        "recorded": str(device["entity_id"]) in by_entity,
+                    }
+                    for device in tracked
+                ],
+            }
+
+    def esphome_nodes(self) -> dict[str, object]:
+        """Report the configured ESPHome endpoints and whether HA resolved each one."""
+        with self._lock:
+            ha_states = {
+                str(item.get("entity_id")): item
+                for item in self._ha.states()
+                if isinstance(item.get("entity_id"), str)
+            }
+            devices = self._projected_devices(ha_states)
+            by_source: dict[str, list[dict[str, object]]] = {"esphome": [], "mqtt": []}
+            for device in devices:
+                source = str(device.get("source", ""))
+                if source in by_source:
+                    by_source[source].append(device)
+            resolved_roles = {
+                _ESPHOME_NODE_ROLE_BY_TYPE.get(str(device["type"]), "")
+                for device in by_source["esphome"]
+            }
+            return {
+                "host_hint": DEFAULT_ESPHOME_HOST,
+                "nodes": [
+                    {
+                        "role": role,
+                        "label": _ESPHOME_NODE_LABELS.get(role, role),
+                        "host": host,
+                        "port": port,
+                        "connected": role in resolved_roles,
+                    }
+                    for role, host, port in esphome_nodes()
+                ],
+                "projected": {
+                    "esphome": len(by_source["esphome"]),
+                    "mqtt": len(by_source["mqtt"]),
+                },
+            }
 
     def agent_status(self) -> dict[str, object]:
         return self._agent_runtime.status()
@@ -813,7 +922,7 @@ class WorkbenchController:
     def _esphome_entity_id(self, device_id: str) -> str | None:
         # devices() 使用可重入锁，运行时解析实际 entity_id（可能带 _2 后缀）。
         for item in self.devices()["devices"]:
-            if str(item.get("device_id")) == device_id and item.get("source") == "esphome":
+            if str(item.get("device_id")) == device_id and item.get("source") in {"esphome", "mqtt"}:
                 return str(item["entity_id"])
         return None
 
@@ -829,7 +938,7 @@ class WorkbenchController:
             raise RuntimeError(f"unknown ESPHome device: {device_id}")
         device_type = str(record["type"])
         if device_type in _ESPHOME_READONLY_TYPES:
-            raise ValueError("ESPHome 传感器为只读设备，不支持控制指令")
+            raise ValueError("该设备是只读传感器，不支持控制指令")
         ha_state = self._optional_ha_state(entity_id)
         if ha_state is None or str(ha_state.get("state", "")) in {"unknown", "unavailable"}:
             raise ValueError("device is not available for control")
@@ -933,24 +1042,79 @@ class WorkbenchController:
 # ESPHome 实体按 friendly_name 别名 + domain 匹配；entity_id 始终运行时解析。
 # 注册表来自真实 Ubuntu 四节点，不再与 MQTT 模拟设备合并。
 _ESPHOME_DEVICE_REGISTRY = ESPHOME_ALIAS_REGISTRY
+_MQTT_DEVICE_REGISTRY = MQTT_ALIAS_REGISTRY
+_ESPHOME_NODE_LABELS = {
+    "light": "客厅主灯节点",
+    "curtain": "客厅窗帘节点",
+    "ac": "客厅空调节点",
+    "presence": "客厅人体存在节点",
+}
+# 节点角色与设备类型的对应关系，用于判断某节点是否已被 HA 解析。
+_ESPHOME_NODE_ROLE_BY_TYPE = {
+    "light": "light",
+    "curtain": "curtain",
+    "climate": "ac",
+    "presence": "presence",
+}
 
 _ESPHOME_ROOM_NAMES = {"living_room": "客厅", "bedroom": "卧室", "home": "全屋"}
 _ESPHOME_READONLY_TYPES = {"presence", "contact", "illuminance", "temperature"}
 
 
 def _esphome_record(device_id: str) -> dict[str, object] | None:
-    """Return the registry record for a merged ESPHome device id, else None."""
-    return device_record(device_id)
+    """Return the registry record for a projected device id, ESPHome first."""
+    return device_record(device_id) or mqtt_device_record(device_id)
 
 
 def _esphome_match(entity_id: str, ha_state: dict[str, object]) -> dict[str, object] | None:
     """Match one HA entity to the ESPHome registry by friendly name and domain."""
+    return _registry_match(entity_id, ha_state, _ESPHOME_DEVICE_REGISTRY, "esphome")
+
+
+def _mqtt_match(entity_id: str, ha_state: dict[str, object]) -> dict[str, object] | None:
+    """Match one HA entity to the deployed MQTT registry by friendly name and domain."""
+    return _registry_match(entity_id, ha_state, _MQTT_DEVICE_REGISTRY, "mqtt")
+
+
+def _registry_match(
+    entity_id: str,
+    ha_state: dict[str, object],
+    registry: dict[str, dict[str, object]],
+    source: str,
+) -> dict[str, object] | None:
+    """Resolve one HA entity against a friendly-name registry, tagging its source."""
     attributes = ha_state.get("attributes")
     friendly = str(attributes.get("friendly_name", "")) if isinstance(attributes, dict) else ""
-    record = _ESPHOME_DEVICE_REGISTRY.get(friendly)
+    record = registry.get(friendly)
     if record is None or not entity_id.startswith(f"{record['domain']}."):
         return None
-    return {**record, "entity_id": entity_id}
+    return {**record, "entity_id": entity_id, "source": source}
+
+
+def _projected_device_state(
+    device_type: str,
+    ha_state: dict[str, object],
+    record: dict[str, object],
+    ha_states: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    """Project one entity state, folding in a companion power meter when configured."""
+    state = _esphome_device_state(device_type, ha_state)
+    power_entity_id = record.get("power_entity_id")
+    if isinstance(power_entity_id, str):
+        measured = _numeric_entity_state(ha_states.get(power_entity_id))
+        if measured is not None:
+            state["power_w"] = measured
+    return state
+
+
+def _numeric_entity_state(ha_state: dict[str, object] | None) -> float | None:
+    """Read one HA entity state as a float, or None when it is not numeric."""
+    if not isinstance(ha_state, dict):
+        return None
+    try:
+        return float(str(ha_state.get("state", "")))
+    except ValueError:
+        return None
 
 
 def _esphome_device_state(device_type: str, ha_state: dict[str, object]) -> dict[str, object]:
@@ -975,11 +1139,20 @@ def _esphome_device_state(device_type: str, ha_state: dict[str, object]) -> dict
         }
     if device_type == "presence":
         return {"occupied": value == "on"}
+    if device_type == "switch":
+        return {"power": "ON" if value == "on" else "OFF"}
+    if device_type == "contact":
+        return {"open": value == "on"}
     if device_type == "temperature":
         try:
             return {"temperature": float(value)}
         except ValueError:
             return {"temperature": 0.0}
+    if device_type == "illuminance":
+        try:
+            return {"illuminance": float(value)}
+        except ValueError:
+            return {"illuminance": 0.0}
     return {}
 
 
@@ -1007,6 +1180,15 @@ def _device_icon(device: dict[str, object], default: str) -> str:
     if device_type == "light" and any(token in name for token in ("阅读", "台灯", "desk", "reading")):
         return "lamp-desk"
     return default
+
+
+_SOURCE_LABELS = {"esphome": "ESPHome 固件", "mqtt": "MQTT 设备"}
+
+
+def _source_readout(device: dict[str, object], suffix: str) -> str:
+    """Describe where a reading came from, using the device's real transport."""
+    source = str(device.get("source", ""))
+    return f"{_SOURCE_LABELS.get(source, '设备')}{suffix}"
 
 
 def _device_ui(device: dict[str, object]) -> dict[str, object]:
@@ -1165,7 +1347,7 @@ def _device_ui(device: dict[str, object]) -> dict[str, object]:
         else:
             state_primary = "窗户打开" if active else "窗户关闭"
             reported_status = "打开" if active else "关闭"
-        state_secondary = "ESPHome 固件上报" if bool(device.get("readonly")) else "实时传感器上报"
+        state_secondary = _source_readout(device, "上报")
         warning = device_type == "contact" and active
         if not bool(device.get("readonly")):
             controls.append(
@@ -1200,7 +1382,7 @@ def _device_ui(device: dict[str, object]) -> dict[str, object]:
     elif device_type == "temperature":
         temperature = float(state.get("temperature", 0) or 0)
         state_primary = f"{temperature:g}°C"
-        state_secondary = "ESPHome 实时室温"
+        state_secondary = _source_readout(device, "实时室温")
         floor_readout = f"{temperature:g}°"
 
     state_label = state_primary if state_secondary == "等待状态" else f"{state_primary} · {state_secondary}"
@@ -1303,8 +1485,6 @@ def _dashboard_projection(
         )
 
     total_power = round(sum(float(room.get("power_w", 0)) for room in rooms), 1)
-    now = datetime.now().astimezone()
-    elapsed_hours = now.hour + now.minute / 60
     return {
         "device_types": [
             {"value": device_type, "label": meta[0]}
@@ -1313,9 +1493,10 @@ def _dashboard_projection(
         "favorite_device_ids": favorite_device_ids,
         "rooms": projected_rooms,
         "device_positions": device_positions,
+        # 累计电量不在这里外推；由 /api/energy-history 用 recorder 真实历史积分得出。
         "energy": {
             "current_power_w": total_power,
-            "estimated_today_kwh": round(total_power * elapsed_hours / 1000, 1),
+            "model": "rated_estimate",
         },
     }
 
@@ -1338,6 +1519,83 @@ def _room_summaries(devices: list[dict[str, object]]) -> list[dict[str, object]]
         summary["online"] = int(summary["online"]) + int(bool(device.get("online")))
         summary["power_w"] = round(float(summary["power_w"]) + _estimated_device_power(device), 1)
     return sorted(rooms.values(), key=lambda item: str(item["name"]))
+
+
+def _device_contributes_power(device: dict[str, object]) -> bool:
+    """Return whether the rated-power model attributes any draw to this device."""
+    return str(device.get("type", "")) in {"light", "switch", "climate"}
+
+
+def _parse_history_time(value: object) -> datetime | None:
+    """Parse a recorder timestamp, tolerating the trailing Z form."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _state_at(points: list[dict[str, object]], moment: datetime) -> dict[str, object] | None:
+    """Return the last recorded state at or before ``moment``."""
+    resolved: dict[str, object] | None = None
+    for point in points:
+        changed = _parse_history_time(point.get("last_updated") or point.get("last_changed"))
+        if changed is None or changed > moment:
+            break
+        resolved = point
+    return resolved
+
+
+def _power_timeline(
+    devices: list[dict[str, object]],
+    history: dict[str, list[dict[str, object]]],
+    start: datetime,
+    end: datetime,
+    samples: int,
+) -> list[dict[str, object]]:
+    """Sample total estimated power at even intervals across the window."""
+    span = (end - start).total_seconds()
+    if span <= 0:
+        return []
+    timeline: list[dict[str, object]] = []
+    for index in range(samples):
+        moment = start + timedelta(seconds=span * index / (samples - 1))
+        total = 0.0
+        for device in devices:
+            points = history.get(str(device["entity_id"]))
+            if not points:
+                continue
+            recorded = _state_at(points, moment)
+            if recorded is None:
+                continue
+            value = str(recorded.get("state", "unavailable"))
+            if value in {"unknown", "unavailable"}:
+                continue
+            device_type = str(device["type"])
+            state = _esphome_device_state(device_type, recorded)
+            # 开关类设备的历史属性自带 power_w，优先使用真实记录值。
+            attributes = recorded.get("attributes")
+            if isinstance(attributes, dict) and isinstance(attributes.get("power_w"), (int, float)):
+                state["power_w"] = float(attributes["power_w"])
+            total += _estimated_device_power(
+                {"type": device_type, "online": True, "state": state}
+            )
+        timeline.append({"at": moment.isoformat(), "power_w": round(total, 1)})
+    return timeline
+
+
+def _trapezoid_kwh(points: list[dict[str, object]]) -> float:
+    """Integrate a sampled power curve into energy, in kWh."""
+    total_wh = 0.0
+    for earlier, later in zip(points, points[1:]):
+        started = _parse_history_time(earlier.get("at"))
+        ended = _parse_history_time(later.get("at"))
+        if started is None or ended is None:
+            continue
+        hours = (ended - started).total_seconds() / 3600
+        total_wh += (float(earlier["power_w"]) + float(later["power_w"])) / 2 * hours
+    return round(total_wh / 1000, 3)
 
 
 def _estimated_device_power(device: dict[str, object]) -> float:
@@ -1782,6 +2040,14 @@ def serve_workbench(
                 return
             if path == "/api/events":
                 self._api(controller.events)
+                return
+            if path == "/api/energy-history":
+                query = parse_qs(urlparse(self.path).query)
+                hours = int(query.get("hours", ["6"])[0])
+                self._api(lambda: controller.energy_history(hours))
+                return
+            if path == "/api/esphome-nodes":
+                self._api(controller.esphome_nodes)
                 return
             self._static()
 

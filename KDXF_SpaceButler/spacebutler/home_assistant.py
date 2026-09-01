@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import json
 import socket
 import threading
 import time
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from .models import (
@@ -58,6 +60,26 @@ class HomeAssistantClient:
 
     def call_service(self, domain: str, service: str, data: dict[str, object]) -> object:
         return self._request("POST", f"/api/services/{domain}/{service}", data)
+
+    def history(self, entity_ids: list[str], start: datetime) -> list[list[dict[str, Any]]]:
+        """Read recorder history for the given entities since ``start``.
+
+        Returns one series per entity, each ordered oldest first. Home Assistant
+        omits entities without recorded history, so the result may be shorter
+        than ``entity_ids``.
+        """
+        if not entity_ids:
+            return []
+        query = urlencode({"filter_entity_id": ",".join(entity_ids)})
+        path = f"/api/history/period/{quote(start.isoformat())}?{query}"
+        response = self._request("GET", path)
+        if not isinstance(response, list):
+            raise HomeAssistantRequestError("invalid Home Assistant history response")
+        series: list[list[dict[str, Any]]] = []
+        for item in response:
+            if isinstance(item, list) and all(isinstance(point, dict) for point in item):
+                series.append(item)
+        return series
 
     def _request(self, method: str, path: str, body: dict[str, object] | None = None) -> object:
         stale_token = self._token

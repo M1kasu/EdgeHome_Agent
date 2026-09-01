@@ -1,29 +1,41 @@
+/* Home Assistant 浅色主题设计令牌。颜色语义与 HA 仪表盘一致：
+   活跃灯光=琥珀、制冷=蓝、制热=橙红、窗帘=绿、非活跃=灰。 */
 :root {
   color-scheme: light;
-  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-  color: #202622;
-  background: #f4f6f3;
+  font-family: Roboto, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  color: #212121;
+  background: #f2f4f9;
   letter-spacing: 0;
   --surface: #ffffff;
-  --surface-subtle: #f7f9f6;
-  --line: #dce2da;
-  --line-strong: #cbd4c8;
-  --muted: #6a746b;
-  --green: #24754a;
-  --green-soft: #e5f3ea;
-  --blue: #326e9a;
-  --blue-soft: #e7f0f7;
-  --cyan: #187985;
-  --cyan-soft: #e1f2f3;
-  --amber: #a7660b;
-  --amber-soft: #fff1d5;
-  --red: #b34039;
-  --red-soft: #fae8e6;
-  --ink: #222a24;
+  --surface-subtle: #f7f8fb;
+  --line: #e0e0e0;
+  --line-strong: #cfcfcf;
+  --muted: #727272;
+  --ink: #212121;
+  --primary: #03a9f4;
+  --card-radius: 12px;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, .08);
+  /* HA 状态色 */
+  --state-light: #ffc107;
+  --state-cool: #2196f3;
+  --state-heat: #ff5722;
+  --state-cover: #4caf50;
+  --state-switch: #03a9f4;
+  --state-inactive: #9e9e9e;
+  --green: #43a047;
+  --green-soft: #e8f5e9;
+  --blue: #1e88e5;
+  --blue-soft: #e3f2fd;
+  --cyan: #00acc1;
+  --cyan-soft: #e0f7fa;
+  --amber: #ffa000;
+  --amber-soft: #fff8e1;
+  --red: #e53935;
+  --red-soft: #ffebee;
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; background: #f4f6f3; }
+body { margin: 0; min-width: 320px; background: #f2f4f9; }
 button, input, select, output { font: inherit; letter-spacing: 0; }
 button { cursor: pointer; }
 button:disabled { cursor: wait; opacity: .6; }
@@ -620,7 +632,14 @@ input[type="range"] { width: 100%; accent-color: var(--green); }
 .loading-state svg { animation: spin 1.1s linear infinite; }
 .empty-inventory strong { color: #485149; font-size: 14px; }
 
-.panel { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 7px; }
+/* HA 卡片规格：白底、12px 圆角、轻阴影，不用重边框。 */
+.panel {
+  min-width: 0;
+  background: var(--surface);
+  border: 0;
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow);
+}
 .panel-heading {
   min-height: 56px;
   padding: 11px 14px;
@@ -1051,24 +1070,24 @@ dialog::backdrop { background: rgba(31, 38, 33, .46); }
 }
 
 /* SpaceButler spatial dashboard */
-body { background: #f7f8f5; }
+body { background: #f2f4f9; }
 
 .workspace {
   min-height: 100vh;
   grid-template-columns: 230px minmax(0, 1fr);
 }
 
+/* HA 侧边栏：白底、细分隔线，活跃项用主色。 */
 .rail {
   top: 0;
   height: 100vh;
-  padding: 26px 18px 18px;
+  padding: 18px 10px;
   align-items: stretch;
-  gap: 8px;
-  background:
-    radial-gradient(circle at 24% 0%, rgba(60, 142, 94, .2), transparent 34%),
-    linear-gradient(165deg, #073e2b 0%, #003423 100%);
-  color: #fff;
-  box-shadow: 8px 0 30px rgba(9, 58, 40, .08);
+  gap: 3px;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  color: var(--ink);
+  box-shadow: none;
   z-index: 18;
 }
 
@@ -1087,63 +1106,43 @@ body { background: #f7f8f5; }
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  color: #0a4932;
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, .12);
+  color: #fff;
+  background: var(--primary);
+  border-radius: 10px;
+  box-shadow: none;
 }
 
 .sidebar-brand-mark svg { width: 21px; height: 21px; }
-.sidebar-brand strong { display: block; font-size: 19px; line-height: 1.15; letter-spacing: -.3px; }
-.sidebar-brand span { display: block; margin-top: 5px; color: rgba(255, 255, 255, .67); font-size: 10px; }
+.sidebar-brand strong { display: block; color: var(--ink); font-size: 17px; line-height: 1.15; font-weight: 500; }
+.sidebar-brand span { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
 
+/* HA 侧边栏项：非活跃为次文本色，活跃为主色 + 浅主色底。 */
 .rail-button {
   width: 100%;
-  height: 48px;
+  height: 44px;
   display: flex;
   grid-template: none;
   justify-content: flex-start;
-  gap: 13px;
-  padding: 0 15px;
-  color: rgba(255, 255, 255, .7);
-  border-radius: 12px;
+  gap: 12px;
+  padding: 0 13px;
+  color: var(--muted);
+  background: transparent;
+  border-radius: 9px;
   font-size: 13px;
-  font-weight: 600;
-  transition: background .18s ease, color .18s ease, transform .18s ease;
+  font-weight: 400;
+  transition: background .16s ease, color .16s ease;
 }
 
-.rail-button:hover { color: #fff; background: rgba(255, 255, 255, .1); transform: translateX(2px); }
-.rail-button.active { color: #fff; background: linear-gradient(135deg, #2d8351, #247448); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08), 0 9px 20px rgba(0,0,0,.12); }
+.rail-button:hover { color: var(--ink); background: var(--surface-subtle); transform: none; }
+.rail-button.active {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  box-shadow: none;
+  font-weight: 500;
+}
 .rail-button svg { width: 20px; height: 20px; }
 .rail-button span { white-space: nowrap; }
 .rail-refresh { margin-top: auto; }
-
-.sidebar-profile {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 16px;
-  align-items: center;
-  gap: 10px;
-  margin-top: 10px;
-  padding: 16px 4px 2px;
-  border-top: 1px solid rgba(255,255,255,.15);
-}
-
-.sidebar-profile > span {
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  color: #fff;
-  background: #3c945e;
-  border-radius: 50%;
-  font-size: 12px;
-  font-weight: 750;
-}
-
-.sidebar-profile strong, .sidebar-profile small { display: block; }
-.sidebar-profile strong { font-size: 12px; }
-.sidebar-profile small { margin-top: 3px; color: rgba(255,255,255,.58); font-size: 9px; }
-.sidebar-profile > svg { width: 15px; color: rgba(255,255,255,.65); }
 
 .content { padding: 0; background: #f7f8f5; }
 .content > .topbar {
@@ -1165,26 +1164,6 @@ body { background: #f7f8f5; }
 .welcome-copy p { margin-bottom: 4px; color: #8b948c; font-size: 10px; font-weight: 650; }
 .welcome-copy h1 { color: #17231c; font-size: 26px; letter-spacing: -.7px; }
 .home-status-strip { display: flex; align-items: center; gap: 8px; }
-.home-status-pill {
-  min-height: 40px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  color: #405047;
-  background: #fff;
-  border: 1px solid #e2e7e0;
-  border-radius: 12px;
-  white-space: nowrap;
-  font-size: 11px;
-}
-button.home-status-pill { cursor: pointer; }
-.home-status-pill svg { width: 17px; height: 17px; color: #2d9155; }
-.advice-pill svg { color: #e3a10c; }
-.home-weather { display: grid; grid-template-columns: 28px auto; column-gap: 7px; align-items: center; min-width: 88px; padding-left: 8px; }
-.home-weather > svg { grid-row: 1 / span 2; width: 26px; height: 26px; color: #f2b51b; }
-.home-weather strong { font-size: 19px; font-weight: 500; }
-.home-weather small { color: #8b938d; font-size: 9px; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
 .content > .topbar .health-strip { min-height: 38px; gap: 7px; padding: 0 10px; background: #f5f7f4; border-radius: 10px; }
 .content > .topbar .command-button { min-height: 40px; border-radius: 10px; }
@@ -1450,7 +1429,7 @@ button.home-status-pill { cursor: pointer; }
 @media (max-width: 1380px) {
   .content > .topbar { grid-template-columns: minmax(270px,1fr) auto; }
   .topbar-actions { display: none; }
-  .home-status-pill:nth-child(2) { display: none; }
+  .ha-badge:nth-child(2) { display: none; }
   .dashboard-grid { grid-template-columns: minmax(560px, 1.45fr) minmax(310px, .85fr); }
   .floor-device-copy { max-width: 140px; }
 }
@@ -1458,11 +1437,11 @@ button.home-status-pill { cursor: pointer; }
 @media (max-width: 1100px) {
   .workspace { grid-template-columns: 82px minmax(0,1fr); }
   .rail { padding: 22px 12px 16px; align-items: center; }
-  .sidebar-brand { margin-bottom: 24px; padding: 0; }.sidebar-brand > div:last-child, .rail-button span, .sidebar-profile div, .sidebar-profile > svg { display: none; }
+  .sidebar-brand { margin-bottom: 24px; padding: 0; }.sidebar-brand > div:last-child, .rail-button span { display: none; }
   .rail-button { width: 48px; justify-content: center; padding: 0; }
-  .sidebar-profile { display: block; padding-top: 16px; }
+  .sidebar-footer { padding-top: 14px; }
   .content > .topbar { grid-template-columns: 1fr auto; padding: 16px 20px; }
-  .home-status-pill:first-child { display: none; }
+  .ha-badge:first-child { display: none; }
   .view { padding-left: 20px; padding-right: 20px; }
   .favorite-grid { grid-template-columns: repeat(2, minmax(180px,1fr)); }
   .dashboard-grid { grid-template-columns: 1fr; }
@@ -1473,9 +1452,11 @@ button.home-status-pill { cursor: pointer; }
   .workspace { display: block; }
   .content > .topbar { min-height: 82px; grid-template-columns: 1fr auto; padding: 12px 14px; }
   .welcome-copy p { display: none; }.welcome-copy h1 { font-size: 20px; }
-  .home-status-strip { gap: 4px; }.home-status-pill { min-height: 34px; padding: 0 8px; }.home-status-pill strong { display: none; }.home-weather { display: none; }
+  .home-status-strip { gap: 4px; }
+  .ha-badge { min-height: 32px; padding: 0 9px; }
+  .ha-badge strong { display: none; }
   .rail { left: 0; right: 0; bottom: 0; top: auto; width: 100%; height: 66px; padding: 7px 8px; flex-direction: row; justify-content: space-around; border-top: 1px solid rgba(255,255,255,.15); }
-  .sidebar-brand, .rail-refresh, .sidebar-profile { display: none; }.rail-button { width: 54px; height: 50px; margin: 0; }
+  .sidebar-brand, .rail-refresh, .sidebar-footer { display: none; }.rail-button { width: 54px; height: 50px; margin: 0; }
   .content { padding: 0; }.view { padding: 14px 10px 88px; }
   .dashboard-section-heading { align-items: flex-start; }.dashboard-summary { display: none; }
   .favorite-grid { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
@@ -1528,12 +1509,8 @@ button.home-status-pill { cursor: pointer; }
 
 
 /* ======== Visual polish v2 (HA demo inspired) ======== */
-body {
-  background:
-    radial-gradient(1200px 500px at 85% -10%, #eef4ee 0%, transparent 60%),
-    radial-gradient(900px 420px at -10% 0%, #edf3f7 0%, transparent 55%),
-    #f4f6f3;
-}
+/* HA 仪表盘用纯色页面底，靠卡片阴影建立层次，不用渐变。 */
+body { background: #f2f4f9; }
 .topbar {
   position: sticky;
   top: 0;
@@ -1547,26 +1524,14 @@ body {
 .inventory-section,
 .night-safety-panel,
 .agent-activity-panel {
-  border-radius: 18px;
-  border: 1px solid rgba(220, 226, 218, 0.9);
-  box-shadow:
-    0 1px 2px rgba(34, 42, 36, 0.04),
-    0 8px 24px -18px rgba(34, 42, 36, 0.18);
-  transition: box-shadow 0.25s ease, transform 0.25s ease;
-}
-.panel:hover {
-  box-shadow:
-    0 2px 4px rgba(34, 42, 36, 0.05),
-    0 14px 34px -18px rgba(34, 42, 36, 0.24);
-}
-.rail {
-  background: linear-gradient(180deg, #14301f 0%, #0f2418 100%);
+  border-radius: var(--card-radius);
+  border: 0;
+  box-shadow: var(--card-shadow);
 }
 .rail-button {
-  border-radius: 12px;
-  transition: background 0.2s ease, transform 0.15s ease;
+  border-radius: 9px;
+  transition: background .16s ease, color .16s ease;
 }
-.rail-button:hover { transform: translateX(2px); }
 .favorite-grid .device-card,
 .device-grid .device-card {
   border-radius: 16px;
@@ -1651,60 +1616,21 @@ body {
 }
 .rail-refresh { height: 48px; margin-top: auto; font-size: 13px; opacity: .82; }
 .rail-refresh svg { width: 20px; height: 20px; }
-.sidebar-profile {
-  grid-template-columns: 50px minmax(0, 1fr) 20px;
-  gap: 13px;
-  margin-top: 12px;
-  padding: 18px 8px 0;
-}
-.sidebar-profile > span { width: 50px; height: 50px; font-size: 15px; }
-.sidebar-profile strong { font-size: 16px; }
-.sidebar-profile small { margin-top: 4px; font-size: 12px; }
-
-.content { background: #fbfcfb; }
+.content { background: #f2f4f9; }
 .content > .topbar {
-  min-height: 120px;
-  grid-template-columns: minmax(400px, 1fr) auto;
-  gap: 28px;
-  padding: 0 38px;
-  background: rgba(255,255,255,.97);
-  border-bottom: 1px solid #e9ece9;
-  backdrop-filter: blur(14px);
+  min-height: 92px;
+  grid-template-columns: minmax(280px, 1fr) auto auto;
+  gap: 22px;
+  padding: 0 30px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: none;
 }
-.welcome-copy p { display: none; }
-.welcome-copy h1 { font-size: 31px; font-weight: 720; letter-spacing: -1.3px; }
-.home-status-strip { gap: 18px; }
-.home-status-pill {
-  min-height: 62px;
-  gap: 12px;
-  padding: 0 18px;
-  color: #17211c;
-  border-color: #e3e7e3;
-  border-radius: 16px;
-  box-shadow: 0 1px 2px rgba(30,45,36,.03);
-  font-size: 17px;
-}
-.home-status-pill svg { width: 24px; height: 24px; }
-.member-avatar {
-  width: 31px;
-  height: 31px;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-  background: #f1ece4;
-  border-radius: 50%;
-  font-size: 22px;
-}
-.home-weather {
-  min-width: 145px;
-  grid-template-columns: 42px auto;
-  column-gap: 12px;
-  padding-left: 20px;
-}
-.home-weather > svg { width: 38px; height: 38px; color: #ffb000; fill: #ffb000; stroke: #ffb000; }
-.home-weather strong { font-size: 24px; }
-.home-weather small { font-size: 13px; }
-.topbar-actions { display: none !important; }
+.welcome-copy p { display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.welcome-copy h1 { color: var(--ink); font-size: 22px; font-weight: 400; letter-spacing: 0; }
+.home-status-strip { gap: 8px; }
+/* 顶栏操作区承载真实的服务健康指示与设备接入入口，必须可见。 */
+.topbar-actions { display: flex; align-items: center; gap: 9px; }
 
 .view.home-dashboard { padding: 0 17px 15px; }
 .home-overview-grid {
@@ -1930,8 +1856,7 @@ body {
 
 @media (max-width: 1380px) {
   .content > .topbar { grid-template-columns: minmax(300px,1fr) auto; gap: 16px; padding: 0 24px; }
-  .home-status-strip { gap: 8px; }.home-status-pill { padding: 0 12px; font-size: 14px; }
-  .home-weather { min-width: 116px; padding-left: 10px; }
+  .home-status-strip { gap: 8px; }.ha-badge { padding: 0 12px; font-size: 13px; }
   .home-overview-grid { grid-template-columns: minmax(640px,1.5fr) minmax(385px,1fr); }
   .favorite-grid { gap: 10px; }.favorite-device { padding-left: 10px; padding-right: 10px; }
   .recommendation-icon { width: 72px; height: 72px; }.proactive-recommendation { grid-template-columns: 72px minmax(0,1fr) 18px; padding-left: 16px; padding-right: 16px; }
@@ -1940,21 +1865,22 @@ body {
 @media (max-width: 1320px) {
   .workspace { grid-template-columns: 82px minmax(0,1fr); }
   .rail { padding: 22px 12px 16px; align-items: center; }
-  .sidebar-brand > div:last-child, .rail-button span, .sidebar-profile div, .sidebar-profile > svg { display: none; }
+  .sidebar-brand > div:last-child, .rail-button span { display: none; }
   .sidebar-brand { margin-bottom: 22px; }.sidebar-brand-mark { display: grid; }
   .rail-button { width: 50px; height: 52px; justify-content: center; padding: 0; }
   .content > .topbar { min-height: 96px; }
   .welcome-copy h1 { font-size: 25px; }
-  .home-status-pill:nth-child(2) { display: none; }
+  .ha-badge:nth-child(2) { display: none; }
   .home-overview-grid { grid-template-columns: 1fr; grid-template-areas: "favorites" "proactive" "rooms" "energy"; }
 }
 
 @media (max-width: 760px) {
   .workspace { display: block; }
   .content > .topbar { min-height: 80px; padding: 0 14px; }.welcome-copy h1 { font-size: 20px; }
-  .home-status-pill strong, .home-weather { display: none; }.home-status-pill { width: 42px; min-height: 42px; padding: 0; justify-content: center; }
+  .ha-badge strong { display: none; }
+  .ha-badge { min-height: 40px; padding: 0 11px; }
   .rail { position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: 100%; height: 66px; padding: 7px 8px; flex-direction: row; justify-content: space-around; }
-  .sidebar-brand, .rail-refresh, .sidebar-profile { display: none; }
+  .sidebar-brand, .rail-refresh, .sidebar-footer { display: none; }
   .view.home-dashboard { padding: 10px 9px 80px; }
   .favorites-section, .proactive-overview, .room-overview, .energy-overview { min-height: auto; }
   .favorite-grid { height: auto; grid-template-columns: repeat(2,minmax(0,1fr)); }.favorite-device { height: 240px; }
@@ -1963,7 +1889,6 @@ body {
 }
 
 /* ===== Live picture-elements dashboard ===== */
-.home-weather > svg { fill: none; }
 .room-overview,
 .energy-overview { min-height: 590px; }
 .room-overview { padding: 18px 20px 14px; overflow: hidden; }
@@ -2077,4 +2002,357 @@ body {
   .room-overview .floorplan-stage { min-width: 720px; height: 500px; }
   .room-overview .floor-device-copy { opacity: 1; }
   .energy-overview .energy-line-chart { height: 250px; }
+}
+
+/* ============================================================
+   Home Assistant 仪表盘组件：tile 卡片 / features 控制行 / sections 布局
+   ============================================================ */
+
+.ha-sections { display: flex; flex-direction: column; gap: 26px; max-width: 1400px; }
+
+.ha-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 11px;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 500;
+}
+.ha-section-heading svg { width: 19px; height: 19px; color: var(--muted); }
+.ha-section-heading .ha-section-count { color: var(--muted); font-size: 13px; font-weight: 400; }
+
+.ha-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 9px;
+}
+
+/* --- tile 卡片 --- */
+.ha-tile {
+  background: var(--surface);
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+.ha-tile[aria-busy="true"] { opacity: .62; pointer-events: none; }
+
+.ha-tile-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  background: none;
+  text-align: left;
+  color: inherit;
+}
+.ha-tile-main:not(:disabled) { cursor: pointer; }
+.ha-tile-main:not(:disabled):hover { background: rgba(0, 0, 0, .03); }
+.ha-tile-main:disabled { cursor: default; }
+
+.ha-tile-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: var(--state-inactive);
+  background: color-mix(in srgb, var(--state-inactive) 16%, var(--surface));
+  transition: color .18s, background .18s;
+}
+.ha-tile-icon svg { width: 22px; height: 22px; }
+.ha-tile-icon.on-light { color: var(--state-light); background: color-mix(in srgb, var(--state-light) 20%, var(--surface)); }
+.ha-tile-icon.on-cool { color: var(--state-cool); background: color-mix(in srgb, var(--state-cool) 18%, var(--surface)); }
+.ha-tile-icon.on-heat { color: var(--state-heat); background: color-mix(in srgb, var(--state-heat) 18%, var(--surface)); }
+.ha-tile-icon.on-cover { color: var(--state-cover); background: color-mix(in srgb, var(--state-cover) 18%, var(--surface)); }
+.ha-tile-icon.on-switch { color: var(--state-switch); background: color-mix(in srgb, var(--state-switch) 18%, var(--surface)); }
+.ha-tile-icon.warning { color: var(--red); background: color-mix(in srgb, var(--red) 16%, var(--surface)); }
+.ha-tile-icon.offline { color: #bdbdbd; background: #f5f5f5; }
+
+.ha-tile-copy { min-width: 0; flex: 1; }
+.ha-tile-copy strong {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ha-tile-copy span {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ha-tile-badge {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--surface-subtle);
+  font-size: 10px;
+  letter-spacing: .2px;
+}
+
+/* --- features 控制行 --- */
+.ha-features { display: flex; flex-direction: column; gap: 7px; padding: 0 12px 12px; }
+.ha-feature-readonly {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  color: var(--muted);
+  background: var(--surface-subtle);
+  font-size: 12px;
+}
+.ha-feature-readonly svg { width: 15px; height: 15px; }
+
+/* HA 风格粗滑条：轨道即填充条，拖动时不提交，松手才发命令 */
+.ha-slider { position: relative; height: 42px; border-radius: 9px; background: var(--surface-subtle); }
+.ha-slider-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--state-light) 42%, var(--surface));
+  pointer-events: none;
+  transition: width .12s;
+}
+.ha-slider.cover-slider .ha-slider-fill { background: color-mix(in srgb, var(--state-cover) 38%, var(--surface)); }
+.ha-slider-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  pointer-events: none;
+}
+.ha-slider-label svg { width: 16px; height: 16px; }
+.ha-slider input[type="range"] {
+  position: relative;
+  width: 100%;
+  height: 42px;
+  margin: 0;
+  background: none;
+  appearance: none;
+  cursor: ew-resize;
+}
+.ha-slider input[type="range"]::-webkit-slider-thumb {
+  width: 4px;
+  height: 42px;
+  border: 0;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, .28);
+  appearance: none;
+}
+.ha-slider input[type="range"]::-moz-range-thumb {
+  width: 4px;
+  height: 42px;
+  border: 0;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, .28);
+}
+
+/* HA 模式按钮组 */
+.ha-modes { display: flex; gap: 5px; }
+.ha-modes button {
+  flex: 1;
+  min-height: 42px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--muted);
+  background: var(--surface-subtle);
+  font-size: 13px;
+  font-weight: 500;
+}
+.ha-modes button:hover { background: #eceff4; }
+.ha-modes button.active { color: #fff; background: var(--state-inactive); }
+.ha-modes button.active.mode-cool { background: var(--state-cool); }
+.ha-modes button.active.mode-heat { background: var(--state-heat); }
+
+/* HA 温度加减 */
+.ha-stepper {
+  display: grid;
+  grid-template-columns: 46px 1fr 46px;
+  align-items: center;
+  height: 42px;
+  border-radius: 9px;
+  background: var(--surface-subtle);
+  overflow: hidden;
+}
+.ha-stepper button {
+  height: 42px;
+  border: 0;
+  color: var(--ink);
+  background: none;
+  display: grid;
+  place-items: center;
+}
+.ha-stepper button:hover { background: #eceff4; }
+.ha-stepper button svg { width: 17px; height: 17px; }
+.ha-stepper output {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: center;
+}
+
+/* --- 顶部 badges --- */
+.ha-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.ha-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 18px;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
+  font-size: 13px;
+}
+.ha-badge svg { width: 17px; height: 17px; color: var(--muted); }
+.ha-badge strong { font-weight: 500; }
+.ha-badge.tone-light svg { color: var(--state-light); }
+.ha-badge.tone-cool svg { color: var(--state-cool); }
+.ha-badge.tone-cover svg { color: var(--state-cover); }
+.ha-badge.tone-warning { color: var(--red); }
+.ha-badge.tone-warning svg { color: var(--red); }
+.ha-badge.is-button { cursor: pointer; }
+.ha-badge.is-button:hover { background: var(--surface-subtle); }
+
+/* --- 能耗曲线（真实 recorder 历史） --- */
+.ha-energy-card {
+  padding: 16px;
+  background: var(--surface);
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow);
+}
+.ha-energy-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.ha-energy-figures { display: flex; gap: 26px; }
+.ha-energy-figure span { display: block; color: var(--muted); font-size: 12px; }
+.ha-energy-figure strong { display: block; margin-top: 3px; font-size: 21px; font-weight: 500; }
+.ha-energy-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  color: var(--muted);
+  background: var(--surface-subtle);
+  font-size: 11px;
+}
+.ha-energy-model svg { width: 14px; height: 14px; }
+.ha-energy-range { display: flex; gap: 5px; }
+.ha-energy-range button {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 12px;
+}
+.ha-energy-range button.active { color: #fff; border-color: var(--primary); background: var(--primary); }
+.ha-energy-plot { position: relative; height: 210px; }
+.ha-energy-plot svg { width: 100%; height: 100%; overflow: visible; }
+.ha-energy-axis { display: flex; justify-content: space-between; margin-top: 7px; color: var(--muted); font-size: 11px; }
+.ha-energy-empty {
+  display: grid;
+  place-items: center;
+  height: 210px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.ha-energy-devices { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
+.ha-energy-device {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  color: var(--muted);
+  background: var(--surface-subtle);
+  font-size: 11px;
+}
+.ha-energy-device.missing { color: var(--red); background: var(--red-soft); }
+
+/* --- ESPHome 接入指引面板 --- */
+.ha-node-list { display: flex; flex-direction: column; gap: 8px; }
+.ha-node {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.ha-node-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--state-inactive); }
+.ha-node.connected .ha-node-dot { background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+.ha-node-copy { flex: 1; min-width: 0; }
+.ha-node-copy strong { display: block; font-size: 13px; font-weight: 500; }
+.ha-node-copy span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+.ha-node-state { flex: 0 0 auto; font-size: 11px; }
+.ha-node.connected .ha-node-state { color: var(--green); }
+.ha-node:not(.connected) .ha-node-state { color: var(--muted); }
+
+/* --- 侧边栏底部：真实接入设备数 --- */
+.sidebar-footer { margin-top: auto; display: grid; place-items: center; padding-top: 10px; }
+.sidebar-source-count {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  font-size: 13px;
+  font-weight: 500;
+  cursor: help;
+}
+
+/* --- 设备页 tile 内的故障注入选择器 --- */
+.ha-features .fault-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: 12px;
+}
+.ha-features .fault-control select {
+  min-height: 30px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+}
+.ha-features .ha-feature-readonly span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
