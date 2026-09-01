@@ -243,29 +243,54 @@ class LlmClient:
 
 
 def _validate_schema(data: dict[str, Any], schema: dict[str, Any]) -> str | None:
-    """极简 schema 校验：required 字段 + 顶层类型 + 枚举。返回错误分类或 None。"""
+    """极简 schema 校验：required 字段 + 类型 + 枚举，含数组元素递归。
+
+    可选字段给 null 等同于未提供：模型用 null 表达"这一维没有值"是合理输出，
+    按类型错误拒掉整次编译会让本来正确的目标失败。required 字段仍不接受 null。
+    """
     for key in schema.get("required", []) or []:
-        if key not in data:
+        if key not in data or data[key] is None:
             return "missing_field"
     properties = schema.get("properties", {}) or {}
     for key, rule in properties.items():
         if key not in data:
             continue
-        expected = rule.get("type")
         value = data[key]
-        if expected == "object" and not isinstance(value, dict):
-            return "schema_error"
-        if expected == "array" and not isinstance(value, list):
-            return "schema_error"
-        if expected == "boolean" and not isinstance(value, bool):
-            return "schema_error"
-        if expected in {"number", "integer"} and not isinstance(value, (int, float)):
-            return "schema_error"
-        if expected == "string" and not isinstance(value, str):
-            return "schema_error"
-        enum = rule.get("enum")
-        if enum and value not in enum:
-            return "invalid_enum"
+        if value is None:
+            continue
+        stage = _validate_value(value, rule)
+        if stage is not None:
+            return stage
+    return None
+
+
+def _validate_value(value: Any, rule: dict[str, Any]) -> str | None:
+    """校验单个值：类型、枚举，数组逐元素、对象逐属性递归。"""
+    expected = rule.get("type")
+    if expected == "object" and not isinstance(value, dict):
+        return "schema_error"
+    if expected == "array" and not isinstance(value, list):
+        return "schema_error"
+    if expected == "boolean" and not isinstance(value, bool):
+        return "schema_error"
+    if expected in {"number", "integer"} and (
+        isinstance(value, bool) or not isinstance(value, (int, float))
+    ):
+        return "schema_error"
+    if expected == "string" and not isinstance(value, str):
+        return "schema_error"
+    enum = rule.get("enum")
+    if enum and value not in enum:
+        return "invalid_enum"
+    if expected == "array":
+        item_rule = rule.get("items")
+        if isinstance(item_rule, dict):
+            for item in value:
+                stage = _validate_value(item, item_rule)
+                if stage is not None:
+                    return stage
+    if expected == "object" and isinstance(value, dict):
+        return _validate_schema(value, rule)
     return None
 
 

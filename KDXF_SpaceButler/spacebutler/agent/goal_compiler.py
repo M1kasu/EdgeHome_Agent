@@ -212,10 +212,14 @@ class GoalCompiler:
                 isinstance(value, (int, float)) and not isinstance(value, bool) for value in target_range
             ):
                 lower, upper = sorted(float(value) for value in target_range)
-                lower = max(lower, bounds[0])
-                upper = min(upper, bounds[1])
-                if lower > upper:
-                    lower, upper = None, None
+                # 亮度 0 是"关灯"这一合法诉求，不能被下界 1 夹成空区间。
+                if metric == "brightness" and lower <= 0 and upper <= 0:
+                    lower = upper = 0.0
+                else:
+                    lower = max(lower, bounds[0])
+                    upper = min(upper, bounds[1])
+                    if lower > upper:
+                        lower, upper = None, None
             direction = str(item.get("direction", "") or "").strip().lower()
             if lower is None and direction:
                 lower, upper = self._range_from_direction(direction, metric)
@@ -265,10 +269,14 @@ class GoalCompiler:
         cooling_words = ("cool", "lower", "reduce", "闷", "热", "凉")
         dimming_words = ("dark", "black", "dim", "lower", "reduce")
         brightening_words = ("bright", "warmer", "亮")
+        off_words = ("off", "关掉", "关闭", "关灯", "熄")
         if metric == "curtain_position" and any(
             word in normalized for word in ("close", "reduce", "lower", "关闭", "减少")
         ):
             return 0.0, 20.0
+        if metric == "brightness" and any(word in normalized for word in off_words):
+            # 关灯是开关意图而非调暗：目标亮度锁定 0，由 planner 路由到 turn_off。
+            return 0.0, 0.0
         if metric == "brightness" and any(word in normalized for word in dimming_words):
             # 调暗：从当前亮度向下推一个宽区间。
             if anchor is None:

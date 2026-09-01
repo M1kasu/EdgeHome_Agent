@@ -31,6 +31,7 @@ from spacebutler.agent.models import (
     CompiledGoal,
     FreshObservation,
     GoalStatus,
+    PlannedAction,
     RoomState,
     now,
 )
@@ -42,6 +43,17 @@ from spacebutler.agent.world_model import HomeWorldModel
 from spacebutler.llm.client import LlmClient
 
 _CHANGE_TOLERANCE = 1.5
+
+# 会话面板展示的思考阶段。措辞对应 LangGraph 的真实节点，不额外编造步骤。
+_STAGE_LABELS: dict[str, str] = {
+    "observe": "读取设备实时状态",
+    "understand": "理解意图与语义目标",
+    "activate": "确认目标并接管",
+    "plan": "生成候选计划并评分",
+    "execute": "下发设备命令",
+    "verify": "回读校验执行结果",
+    "respond": "组织回复",
+}
 
 
 class AgentRuntime:
@@ -83,9 +95,12 @@ class AgentRuntime:
         self._last_runtime_error: str | None = None
         self._last_graph_trace: list[str] = []
         self._lock = threading.RLock()
+        self._turn_lock = threading.Lock()
         self._messages: list[dict[str, object]] = [
             {"role": "assistant", "content": "自治智能体已就绪：说出目标即可，我会规划、执行并持续盯住环境。", "ts": now()}
         ]
+        self._turn: dict[str, object] | None = None
+        self._turn_seq = 0
         self._workflow = LangGraphAgentWorkflow(
             AgentGraphHandlers(
                 observe=self._graph_observe,
@@ -95,7 +110,8 @@ class AgentRuntime:
                 execute=self._graph_execute,
                 verify=self._graph_verify,
                 respond=self._graph_respond,
-            )
+            ),
+            on_stage=self._note_stage,
         )
 
     # ---- chat entry --------------------------------------------------
@@ -106,12 +122,74 @@ class AgentRuntime:
             raise ValueError("message must contain 1 to 500 characters")
         if is_cancel_text(text):
             return self._cancel_goal()
-        with self._lock:
-            result = self._workflow.invoke({"text": normalized, "background": False, "trace": []})
-            self._last_graph_trace = list(result.get("trace", []))
-            return self.history()
+        self._begin_turn(normalized)
+        try:
+            with self._lock:
+                result = self._workflow.invoke({"text": normalized, "background": False, "trace": []})
+                self._last_graph_trace = list(result.get("trace", []))
+                return self.history()
+        finally:
+            self._finish_turn()
+
+    # ---- streaming progress ------------------------------------------
+    # 进度用独立的锁：规划期间 _lock 被 invoke 持有，轮询线程必须仍能读到
+    # "现在走到哪一步"，否则前端只能干等到全部结束。
+    def _begin_turn(self, text: str) -> None:
+        with self._turn_lock:
+            self._turn_seq += 1
+            self._turn = {
+                "turn_id": f"turn_{self._turn_seq}",
+                "text": text,
+                "stage": "queued",
+                "stages": [],
+                "started_at": now(),
+                "done": False,
+            }
+
+    def _note_stage(self, name: str) -> None:
+        if name not in _STAGE_LABELS:
+            return
+        with self._turn_lock:
+            turn = self._turn
+            if turn is None or turn["done"]:
+                return
+            turn["stage"] = name
+            stages = turn["stages"]
+            if isinstance(stages, list) and name not in stages:
+                stages.append(name)
+
+    def _finish_turn(self) -> None:
+        with self._turn_lock:
+            if self._turn is not None:
+                self._turn["done"] = True
+                self._turn["stage"] = "done"
+
+    def progress(self) -> dict[str, object]:
+        """Which graph stage the in-flight turn is on, readable while it runs."""
+        with self._turn_lock:
+            turn = dict(self._turn) if self._turn is not None else None
+        if turn is None:
+            return {"busy": False, "turn": None, "stage": "", "stage_label": "", "stages": []}
+        stage = str(turn["stage"])
+        stages = [
+            {"name": name, "label": _STAGE_LABELS[name]}
+            for name in turn["stages"]
+            if name in _STAGE_LABELS
+        ]
+        return {
+            "busy": not bool(turn["done"]),
+            "turn": turn["turn_id"],
+            "text": turn["text"],
+            "stage": stage,
+            "stage_label": _STAGE_LABELS.get(stage, "已完成" if stage == "done" else ""),
+            "stages": stages,
+            "started_at": turn["started_at"],
+        }
 
     def history(self) -> dict[str, object]:
+        # 会话与进度分开取：规划期间 _lock 被占用，历史只在拿到锁后读，
+        # 而 progress() 不需要 _lock，因此轮询永远能拿到最新阶段。
+        progress = self.progress()
         with self._lock:
             llm_provider, llm_model = _llm_identity(self._llm)
             return {
@@ -119,13 +197,50 @@ class AgentRuntime:
                 "messages": list(self._messages[-30:]),
                 "plans": [],
                 "active_plan": self._plan_view(),
-                "busy": False,
+                "task_plan": self._task_plan_view(),
+                "busy": bool(progress["busy"]),
+                "progress": progress,
                 "llm_available": bool(self._llm and self._llm.available()),
                 "llm_provider": llm_provider,
                 "llm_model": llm_model,
                 "orchestrator": "langgraph",
                 "graph_trace": list(self._last_graph_trace),
             }
+
+    def history_snapshot(self) -> dict[str, object]:
+        """History for pollers: never waits on the planning lock.
+
+        While a turn is in flight ``_lock`` is held for seconds, so the polling
+        endpoint returns the pending turn plus live stage progress instead of
+        blocking until planning ends.
+        """
+        progress = self.progress()
+        if not progress["busy"]:
+            return self.history()
+        llm_provider, llm_model = _llm_identity(self._llm)
+        messages = list(self._messages[-30:])
+        pending_text = str(progress.get("text", ""))
+        # 用户这句话此刻还没写进会话（respond 节点才落库），先乐观显示出来。
+        if pending_text and not any(
+            item.get("role") == "user" and item.get("content") == pending_text for item in messages[-2:]
+        ):
+            messages.append({"role": "user", "content": pending_text, "ts": progress["started_at"], "pending": True})
+        return {
+            "conversation_id": "agent",
+            "messages": messages,
+            "plans": [],
+            "active_plan": None,
+            # 轮询期间保留上一回合的计划：置 None 会让前端每次轮询都把
+            # "意图与任务拆解"面板刷成空态，并盖掉 POST 返回的真实计划。
+            "task_plan": self._task_plan_view(),
+            "busy": True,
+            "progress": progress,
+            "llm_available": bool(self._llm and self._llm.available()),
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
+            "orchestrator": "langgraph",
+            "graph_trace": list(self._last_graph_trace),
+        }
 
     def clear(self) -> dict[str, object]:
         """Clear visible conversation state without changing physical devices."""
@@ -438,6 +553,21 @@ class AgentRuntime:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=join_timeout)
 
+    def observe_now(self) -> dict[str, object]:
+        """Run one observation/decision cycle immediately, outside the poll loop.
+
+        演示时扰动注入后需要立刻看到决策链刷新，不能等一个轮询周期。
+        错误按后台循环的同一套口径记录，避免调用方拿到半截状态。
+        """
+        try:
+            self._tick()
+        except (RuntimeError, TimeoutError, ValueError, OSError) as error:
+            self._last_runtime_error = str(error)
+            self._world.record_event("runtime_error", f"运行时错误：{error}")
+        finally:
+            self._last_tick_at = now()
+        return self.status()
+
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
@@ -592,6 +722,46 @@ class AgentRuntime:
         outcome = self._last_outcome
         return outcome.to_dict() if outcome is not None else None
 
+    def _task_plan_view(self) -> dict[str, object] | None:
+        """Project the planning outcome into the 意图与任务拆解 panel's shape.
+
+        The panel needs intent/summary/steps; ``PlanningOutcome`` speaks
+        candidates/selected/actions. Without this projection every field the
+        panel reads is undefined and it renders empty.
+        """
+        outcome = self._last_outcome
+        if outcome is None:
+            return None
+        goal, goal_status = self._world.active_goal()
+        selected = outcome.selected
+        actions = list(selected.actions) if selected is not None else []
+        if outcome.no_action:
+            status = "completed"
+        elif not actions:
+            status = "clarification"
+        elif all(action.verified is True for action in actions):
+            status = "completed"
+        elif any(action.verified is False for action in actions):
+            status = "partial_success" if any(action.verified for action in actions) else "failed"
+        else:
+            status = "executing"
+        constraints = [item.to_dict() for item in goal.constraints] if goal is not None else []
+        return {
+            "plan_id": goal.goal_id if goal is not None else "--",
+            "intent": "device_control" if actions else "query_state",
+            "route": f"langgraph · {outcome.planner_mode}",
+            "status": status,
+            "summary": goal.title if goal is not None else outcome.reason,
+            "reasoning": outcome.reason,
+            "goal_status": goal_status.value,
+            "activity": goal.activity if goal is not None else "",
+            "room": goal.room if goal is not None else "",
+            "constraints": constraints,
+            "candidate_count": len(outcome.candidates),
+            "planner_mode": outcome.planner_mode,
+            "steps": [_task_step(action) for action in actions],
+        }
+
     def _append(self, role: str, content: str) -> None:
         with self._lock:
             self._messages.append({"role": role, "content": content, "ts": now()})
@@ -677,6 +847,77 @@ def _action_text(action: object) -> str:
         return template.format(value=action.value)
     except (KeyError, IndexError, ValueError):
         return template
+
+
+def _task_step(action: PlannedAction) -> dict[str, object]:
+    """One PlannedAction as the task-breakdown panel's step record."""
+    verified = getattr(action, "verified", None)
+    status = "pending" if verified is None else "success" if verified else "failed"
+    observed = getattr(action, "observed", None)
+    error = ""
+    if isinstance(observed, dict) and isinstance(observed.get("error"), str):
+        error = str(observed["error"])
+    return {
+        "device_id": getattr(action, "device_id", ""),
+        "device_name": getattr(action, "device_name", "") or getattr(action, "device_id", ""),
+        "entity_id": getattr(action, "entity_id", ""),
+        "action": getattr(action, "capability", ""),
+        "value": getattr(action, "value", None),
+        "mode": getattr(action, "mode", None),
+        "status": status,
+        "verified": bool(verified),
+        "reason": _step_reason(action),
+        "after": _observed_evidence(observed) if not error else None,
+        "error": error,
+    }
+
+
+def _observed_evidence(observed: object) -> dict[str, object] | None:
+    """Reshape a raw HA entity payload into the panel's evidence shape.
+
+    ``observed`` is what HA returned (``{"state": ..., "attributes": {...}}``);
+    the panel reads a flat ``{state: {power|mode|position|...}}`` record, so the
+    read-back line renders words instead of dumped JSON.
+    """
+    if not isinstance(observed, dict):
+        return None
+    raw_state = observed.get("state")
+    attributes = observed.get("attributes") if isinstance(observed.get("attributes"), dict) else {}
+    state: dict[str, object] = {}
+    if isinstance(attributes.get("current_position"), (int, float)):
+        state["position"] = round(float(attributes["current_position"]))
+    elif isinstance(attributes.get("temperature"), (int, float)):
+        state["mode"] = str(raw_state or "")
+        state["temperature"] = float(attributes["temperature"])
+    else:
+        state["power"] = "ON" if str(raw_state or "").lower() == "on" else "OFF"
+        if isinstance(attributes.get("brightness"), (int, float)):
+            state["brightness"] = float(attributes["brightness"])
+    return {"state": state}
+
+
+def _step_reason(action: PlannedAction) -> str:
+    capability = str(getattr(action, "capability", ""))
+    value = getattr(action, "value", None)
+    mode = getattr(action, "mode", None)
+    if capability == "set_brightness":
+        return f"将亮度调整到 {value:g}%" if isinstance(value, (int, float)) else "调整亮度"
+    if capability == "set_position":
+        return f"将窗帘调整到 {value:g}%" if isinstance(value, (int, float)) else "调整窗帘"
+    if capability == "set_temperature":
+        mode_label = {"cool": "制冷", "heat": "制热"}.get(str(mode or ""), str(mode or ""))
+        return f"设定 {value:g}°C{f'（{mode_label}）' if mode_label else ''}" if isinstance(value, (int, float)) else "设定温度"
+    if capability == "set_hvac_mode":
+        return {
+            "cool": "切换到制冷",
+            "heat": "切换到制热",
+            "off": "关闭空调",
+        }.get(str(value or ""), f"切换模式 {value}")
+    if capability == "turn_off":
+        return "关闭设备"
+    if capability == "turn_on":
+        return "开启设备"
+    return capability
 
 
 def _device_signatures(

@@ -178,6 +178,69 @@ class GoalCompilerTests(unittest.TestCase):
         self.assertIsNotNone(brightness.lower)
         self.assertGreaterEqual(brightness.lower, 10)
 
+    def test_null_optional_activity_is_not_a_schema_error(self) -> None:
+        llm = FakeLlm(
+            {
+                "is_home_goal": True,
+                "location": "living_room",
+                "intent_summary": "打开客厅主灯",
+                "activity": None,
+                "constraints": [
+                    {"dimension": "lighting", "direction": "brighter", "target_range": [45, 80]}
+                ],
+            }
+        )
+        goal, mode, _semantic = self.compiler.compile("把客厅主灯打开", llm)
+        self.assertEqual(mode, "llm")
+        assert goal is not None
+        self.assertEqual(goal.room, "living_room")
+
+    def test_turn_off_target_range_zero_survives_clamping(self) -> None:
+        llm = FakeLlm(
+            {
+                "is_home_goal": True,
+                "location": "bedroom",
+                "intent_summary": "关闭卧室灯光",
+                "activity": None,
+                "constraints": [
+                    {"dimension": "lighting", "direction": "off", "target_range": [0, 0]}
+                ],
+            }
+        )
+        goal, mode, _semantic = self.compiler.compile("把卧室灯关掉", llm)
+        self.assertEqual(mode, "llm")
+        assert goal is not None
+        brightness = next(item for item in goal.constraints if item.metric == "brightness")
+        self.assertEqual(brightness.lower, 0.0)
+        self.assertEqual(brightness.upper, 0.0)
+
+    def test_off_direction_without_range_compiles_to_zero(self) -> None:
+        llm = FakeLlm(
+            {
+                "is_home_goal": True,
+                "location": "bedroom",
+                "intent_summary": "关灯",
+                "constraints": [{"dimension": "lighting", "direction": "off"}],
+            }
+        )
+        goal, mode, _semantic = self.compiler.compile("关灯", llm)
+        self.assertEqual(mode, "llm")
+        assert goal is not None
+        brightness = next(item for item in goal.constraints if item.metric == "brightness")
+        self.assertEqual(brightness.upper, 0.0)
+
+    def test_nested_constraint_dimension_enum_is_validated(self) -> None:
+        llm = FakeLlm(
+            {
+                "is_home_goal": True,
+                "location": "living_room",
+                "intent_summary": "非法维度",
+                "constraints": [{"dimension": "BOGUS", "target_range": [10, 20]}],
+            }
+        )
+        _goal, mode, _semantic = self.compiler.compile("随便", llm)
+        self.assertNotEqual(mode, "llm")
+
     def test_llm_malformed_output_is_not_replaced_by_a_scene_template(self) -> None:
         llm = FakeLlm({"unexpected": "shape"})
         goal, mode, _semantic = self.compiler.compile("我想看电影", llm)

@@ -2,6 +2,8 @@
 class PushToTalk {
   constructor(options) {
     Object.assign(this, options);
+    // 多个入口共享 document 级 V 键监听，靠 enabled() 决定这一次归谁。
+    this.enabled = options.enabled || (() => true);
     this.current = null;
     this.config = null;
     this.keyHeld = false;
@@ -59,6 +61,7 @@ class PushToTalk {
   }
 
   keydown(event) {
+    if (!this.enabled() && !this.active && !this.keyHeld) return;
     if (event.key === "Escape" && (this.active || this.keyHeld)) {
       event.preventDefault();
       this.cancel();
@@ -96,7 +99,7 @@ class PushToTalk {
   }
 
   async start() {
-    if (this.active || this.isBusy()) return;
+    if (this.active || this.isBusy() || !this.enabled()) return;
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode) {
       this.show("error", "请使用 localhost / HTTPS，并在浏览器中允许麦克风。");
       return;

@@ -54,7 +54,12 @@ class AgentGraphHandlers:
 class LangGraphAgentWorkflow:
     """Compiled observe → understand → plan → act → verify workflow."""
 
-    def __init__(self, handlers: AgentGraphHandlers) -> None:
+    def __init__(
+        self,
+        handlers: AgentGraphHandlers,
+        on_stage: Callable[[str], None] | None = None,
+    ) -> None:
+        self._on_stage = on_stage
         builder = StateGraph(AgentGraphState)
         builder.add_node("observe", self._traced("observe", handlers.observe))
         builder.add_node("understand", self._traced("understand", handlers.understand))
@@ -85,9 +90,11 @@ class LangGraphAgentWorkflow:
         builder.add_edge("respond", END)
         self._graph = builder.compile()
 
-    @staticmethod
-    def _traced(name: str, node: GraphNode) -> GraphNode:
+    def _traced(self, name: str, node: GraphNode) -> GraphNode:
         def invoke(state: AgentGraphState) -> dict[str, Any]:
+            # 阶段开始时先播报：UI 要在这一步真正耗时之前就显示"正在做什么"。
+            if self._on_stage is not None:
+                self._on_stage(name)
             return {**node(state), "trace": [name]}
 
         return invoke

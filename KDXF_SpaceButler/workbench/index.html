@@ -168,32 +168,32 @@
           </aside>
         </div>
 
-        <section class="panel agent-activity-panel" id="agent-activity">
+        <section class="panel agent-activity-panel" id="agent-activity" data-agent-panel>
           <div class="panel-heading">
             <div>
               <span class="eyebrow">AGENT ACTIVITY</span>
               <h3>自治智能体决策链</h3>
             </div>
             <div class="agent-heading-meta">
-              <span class="planner-badge" id="agent-planner-badge"><i data-lucide="brain-circuit"></i><span>--</span></span>
-              <span class="plan-status idle" id="agent-goal-status">无活动目标</span>
+              <span class="planner-badge" id="agent-planner-badge" data-agent-slot="planner-badge"><i data-lucide="brain-circuit"></i><span>--</span></span>
+              <span class="plan-status idle" id="agent-goal-status" data-agent-slot="goal-status">无活动目标</span>
             </div>
           </div>
 
           <div class="agent-activity-grid">
             <div class="agent-block" id="agent-goal-block">
               <div class="agent-block-title"><i data-lucide="target"></i><span>Active Goal</span></div>
-              <div class="agent-block-body" id="agent-goal-body"><div class="empty-state compact"><span>说出一个目标即可启动</span></div></div>
+              <div class="agent-block-body" id="agent-goal-body" data-agent-slot="goal-body"><div class="empty-state compact"><span>说出一个目标即可启动</span></div></div>
             </div>
 
             <div class="agent-block" id="agent-candidates-block">
               <div class="agent-block-title"><i data-lucide="git-branch"></i><span>Candidate Plans &amp; Prediction</span></div>
-              <div class="agent-block-body" id="agent-candidates-body"><div class="empty-state compact"><span>等待规划</span></div></div>
+              <div class="agent-block-body" id="agent-candidates-body" data-agent-slot="candidates-body"><div class="empty-state compact"><span>等待规划</span></div></div>
             </div>
 
             <div class="agent-block" id="agent-feedback-block">
               <div class="agent-block-title"><i data-lucide="user-round-cog"></i><span>Override &amp; Preference</span></div>
-              <div class="agent-block-body" id="agent-feedback-body"><div class="empty-state compact"><span>暂无人工纠正</span></div></div>
+              <div class="agent-block-body" id="agent-feedback-body" data-agent-slot="feedback-body"><div class="empty-state compact"><span>暂无人工纠正</span></div></div>
               <div class="agent-demo-row">
                 <button class="secondary compact-button" id="agent-demo-override" title="通过 Home Assistant 真实调整主灯，触发 Override 检测">
                   <i data-lucide="hand"></i><span>模拟人工调灯 45%</span>
@@ -206,7 +206,7 @@
 
             <div class="agent-block agent-timeline-block">
               <div class="agent-block-title"><i data-lucide="history"></i><span>Event Timeline</span></div>
-              <div class="agent-timeline" id="agent-timeline"><div class="empty-state compact"><span>暂无事件</span></div></div>
+              <div class="agent-timeline" id="agent-timeline" data-agent-slot="timeline"><div class="empty-state compact"><span>暂无事件</span></div></div>
             </div>
           </div>
         </section>
@@ -760,6 +760,110 @@
             <div class="demo-reset-log" id="demo-reset-log" hidden></div>
           </section>
 
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">STEP 1 · VOICE</span>
+                <h3>语音下发</h3>
+              </div>
+              <span class="plan-status idle" id="demo-voice-pill" role="status" aria-live="polite">检测中</span>
+            </div>
+            <section class="voice-panel" id="demo-voice-panel-inner" data-phase="idle" aria-label="演示语音输入">
+              <div class="voice-toolbar">
+                <button type="button" class="secondary voice-hold" id="demo-voice-hold" aria-pressed="false" title="按住说话，松开提交；也可以长按 V">
+                  <i data-lucide="mic"></i><span>按住说话</span><kbd>V</kbd>
+                </button>
+                <span class="voice-timer" id="demo-voice-timer">00:00</span>
+                <button type="button" class="secondary compact-button" id="demo-voice-cancel" hidden>取消 <kbd>Esc</kbd></button>
+              </div>
+              <p class="voice-status" id="demo-voice-status" role="status">正在检测语音服务…</p>
+              <p class="voice-transcript" id="demo-voice-transcript" aria-live="polite" aria-atomic="true">识别文字将在这里实时出现</p>
+              <span class="voice-privacy">录音时音频发送至豆包语音服务 · 本地不保存录音 · 松开后才提交任务</span>
+            </section>
+            <form class="chat-composer" id="demo-chat-form">
+              <textarea id="demo-chat-input" maxlength="500" rows="2" placeholder="也可以直接输入，例如「我准备在客厅看电影，有点热」" autocomplete="off"></textarea>
+              <button class="primary chat-send" id="demo-chat-send" type="submit" title="发送">
+                <i data-lucide="send-horizontal"></i>
+              </button>
+            </form>
+            <div class="demo-reply" id="demo-reply" hidden></div>
+          </section>
+
+          <section class="panel demo-scenario-panel">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">STEP 2 · SCRIPT</span>
+                <h3>剧本编排</h3>
+              </div>
+              <span class="muted-hint">全部在本页执行，不切换视图</span>
+            </div>
+            <div class="demo-scenario-list" id="demo-scenario-list"></div>
+          </section>
+
+          <section class="panel agent-activity-panel demo-agent-panel" data-agent-panel>
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">STEP 3 · AGENT</span>
+                <h3>自治智能体决策链</h3>
+              </div>
+              <div class="agent-heading-meta">
+                <span class="planner-badge" data-agent-slot="planner-badge"><i data-lucide="brain-circuit"></i><span>--</span></span>
+                <span class="plan-status idle" data-agent-slot="goal-status">无活动目标</span>
+              </div>
+            </div>
+            <div class="agent-activity-grid">
+              <div class="agent-block">
+                <div class="agent-block-title"><i data-lucide="target"></i><span>Active Goal</span></div>
+                <div class="agent-block-body" data-agent-slot="goal-body"><div class="empty-state compact"><span>说出一个目标即可启动</span></div></div>
+              </div>
+              <div class="agent-block">
+                <div class="agent-block-title"><i data-lucide="git-branch"></i><span>Candidate Plans &amp; Prediction</span></div>
+                <div class="agent-block-body" data-agent-slot="candidates-body"><div class="empty-state compact"><span>等待规划</span></div></div>
+              </div>
+              <div class="agent-block">
+                <div class="agent-block-title"><i data-lucide="user-round-cog"></i><span>Override &amp; Preference</span></div>
+                <div class="agent-block-body" data-agent-slot="feedback-body"><div class="empty-state compact"><span>暂无人工纠正</span></div></div>
+                <div class="agent-demo-row">
+                  <button class="secondary compact-button" id="demo-agent-override" title="通过 Home Assistant 真实调整主灯，触发 Override 检测">
+                    <i data-lucide="hand"></i><span>模拟人工调灯 45%</span>
+                  </button>
+                  <button class="secondary compact-button" id="demo-agent-disturbance" title="通过 ESPHome 固件服务注入热量，触发自动重规划">
+                    <i data-lucide="flame"></i><span>注入热扰动 31°C</span>
+                  </button>
+                </div>
+              </div>
+              <div class="agent-block agent-timeline-block">
+                <div class="agent-block-title"><i data-lucide="history"></i><span>Event Timeline</span></div>
+                <div class="agent-timeline" data-agent-slot="timeline"><div class="empty-state compact"><span>暂无事件</span></div></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel demo-workflow-panel">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">STEP 4 · WORKFLOW</span>
+                <h3>工作流舞台</h3>
+              </div>
+              <span class="plan-status idle" id="demo-wf-status" role="status" aria-live="polite">等待预览</span>
+            </div>
+            <div class="demo-wf-bar">
+              <input id="demo-wf-prompt" type="text" maxlength="200" placeholder="用一句话描述场景，例如「我准备在客厅看电影，有点热」" autocomplete="off" />
+              <button class="secondary compact-button" id="demo-wf-preview" type="button">
+                <i data-lucide="wand-2"></i><span>预览步骤</span>
+              </button>
+              <button class="primary compact-button" id="demo-wf-run" type="button" disabled>
+                <i data-lucide="play"></i><span>逐步执行</span>
+              </button>
+            </div>
+            <div class="demo-wf-steps" id="demo-wf-steps">
+              <div class="empty-state compact"><span>预览后显示模型规划出的真实设备步骤</span></div>
+            </div>
+            <p class="demo-note">
+              步骤由规划模型生成，执行时逐个下发到 Home Assistant，每步状态以设备真实回读为准，失败会如实显示。
+            </p>
+          </section>
+
           <section class="panel demo-brand-panel">
             <div class="panel-heading">
               <h3>已接入品牌生态</h3>
@@ -814,14 +918,6 @@
               <span class="muted-hint">释放后设备仍在线，可被其他生态重新纳管</span>
             </div>
             <div class="brand-bound-list" id="brand-bound-list"></div>
-          </section>
-
-          <section class="panel demo-scenario-panel">
-            <div class="panel-heading">
-              <h3>录制脚本</h3>
-              <span class="muted-hint">点击场景会切到「AI 管家」并自动发送</span>
-            </div>
-            <div class="demo-scenario-list" id="demo-scenario-list"></div>
           </section>
         </div>
       </section>

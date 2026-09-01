@@ -18,6 +18,9 @@ const state = {
   conversation: null,
   lastMessageId: null,
   chatBusy: false,
+  pendingChatText: null,
+  chatStages: [],
+  chatProgressTimer: null,
   ruleDraftDirty: false,
   ruleDraftRevision: 0,
   sceneDraftDirty: false,
@@ -31,6 +34,8 @@ const state = {
   floorLongPressTriggered: false,
 };
 let voiceInput = null;
+let demoVoiceInput = null;
+const demoState = { busy: false, wfSteps: [], wfRunning: false };
 
 const brandState = {
   ecosystems: [],
@@ -46,6 +51,15 @@ const intentLabels = {
   proactive_service: "主动服务",
   general_chat: "普通对话",
   clarification: "需要澄清",
+};
+
+const eventTypeLabels = {
+  command_sent: "下发指令",
+  state_verified: "状态已确认",
+  state_failed: "状态未达成",
+  state_changed: "状态变化",
+  human_override: "人工干预",
+  sensor_update: "传感器上报",
 };
 
 const actionLabels = {
@@ -158,9 +172,13 @@ function renderConversation(payload) {
         </div>
       </article>`).join("")
     : `<div class="empty-state"><i data-lucide="messages-square"></i><span>新会话</span></div>`;
-  if (payload.busy) {
+  if (state.pendingChatText) {
+    renderPendingTurn(payload.progress);
+  } else if (payload.busy) {
     thread.insertAdjacentHTML("beforeend", `
-      <div class="chat-thinking"><i data-lucide="loader-circle"></i><span>正在理解意图并生成任务计划</span></div>`);
+      <div class="chat-thinking"><i data-lucide="loader-circle"></i><span>${
+        escapeHtml(payload.progress?.stage_label || "正在理解意图并生成任务计划")
+      }</span></div>`);
   }
   if (shouldScroll) {
     requestAnimationFrame(() => {
@@ -168,7 +186,7 @@ function renderConversation(payload) {
     });
   }
   state.lastMessageId = lastMessage?.message_id || null;
-  renderTaskPlan(payload.active_plan);
+  renderTaskPlan(payload.task_plan);
   refreshIcons();
 }
 
@@ -1005,12 +1023,21 @@ function renderDeviceGrid() {
   refreshIcons();
 }
 
-// 设备页的 tile 额外显示实体 id 和故障注入选项（若后端提供）。
+// 设备页的 tile 额外显示设备状态和故障注入选项（若后端提供）。
+// entity_id 只作为 title 的悬浮信息保留：它是排障用的内部标识，
+// 不该占据「设备状态」这一行。
 function renderDeviceDetailTile(device) {
   const faultOptions = device.ui?.fault_options || [];
+  const stateText = device.online
+    ? device.ui?.state_secondary || device.ui?.state_label || "状态未知"
+    : "设备离线";
   const extras = `
     <div class="ha-features">
-      <div class="ha-feature-readonly"><i data-lucide="tag"></i><span>${escapeHtml(device.entity_id)}</span></div>
+      <div class="ha-feature-readonly device-state-readout ${device.online ? "" : "offline"}"
+        title="${escapeHtml(device.entity_id)}">
+        <i data-lucide="${device.online ? "activity" : "plug-zap"}"></i>
+        <span>${escapeHtml(stateText)}</span>
+      </div>
       ${faultOptions.length && !device.readonly ? `
         <label class="fault-control">
           <span>故障模式</span>
@@ -1207,9 +1234,16 @@ async function loadEvents() {
     $("#events-body").innerHTML = events.length ? events.map((event) => `
       <tr>
         <td>${escapeHtml(new Date(event.timestamp).toLocaleTimeString("zh-CN", { hour12: false }))}</td>
-        <td><span class="event-type">${escapeHtml(event.event_type)}</span></td>
-        <td>${escapeHtml(event.device_id)}</td>
-        <td>${escapeHtml(event.payload?.command_id || event.payload?.mode || event.payload?.entity_id || "--")}</td>
+        <td><span class="event-type ${escapeHtml(event.outcome || "info")}">${
+          escapeHtml(eventTypeLabels[event.event_type] || event.event_type)
+        }</span></td>
+        <td title="${escapeHtml(event.payload?.entity_id || event.device_id || "")}">${
+          escapeHtml(event.device_name || event.device_id || "--")
+        }</td>
+        <td>
+          <span>${escapeHtml(event.summary || "--")}</span>
+          ${event.state_change ? `<span class="event-state-change">${escapeHtml(event.state_change)}</span>` : ""}
+        </td>
       </tr>`).join("") : `<tr><td colspan="4">暂无事件</td></tr>`;
   } catch (error) {
     toast(error.message, true);
@@ -1639,41 +1673,223 @@ async function runDemoReset() {
 async function runDemoScenario(id) {
   const scenario = DEMO_SCENARIOS.find((item) => item.id === id);
   if (!scenario) return;
+  // 剧本全程留在演示控制台，决策链就在同一页刷新。
   if (scenario.action === "chat") {
-    switchView("assistant");
-    await sendChat(scenario.prompt);
+    await demoSendChat(scenario.prompt);
     return;
   }
-  if (scenario.action === "override") {
-    switchView("agent");
-    await post("/api/agent/demo-override", { brightness: 45 },
-      "已通过 Home Assistant 调整主灯，等待智能体识别");
+  const button = $(`[data-demo-scenario="${id}"]`);
+  const label = button?.querySelector("span");
+  const labelText = label?.textContent || "";
+  if (button) button.disabled = true;
+  if (label) label.textContent = "执行中…";
+  try {
+    if (scenario.action === "override") {
+      await post("/api/agent/demo-override", { brightness: 45 },
+        "已通过 Home Assistant 真实调灯，智能体已完成一轮观测");
+    } else {
+      await post("/api/agent/demo-disturbance", { temperature: 31 },
+        "已停止制冷并注入热扰动，智能体已完成一轮观测");
+    }
+    await loadAgentActivity();
+  } finally {
+    if (button) button.disabled = false;
+    if (label) label.textContent = labelText;
+  }
+}
+
+function renderDemoWfSteps() {
+  const container = $("#demo-wf-steps");
+  if (!container) return;
+  if (!demoState.wfSteps.length) {
+    container.innerHTML = `<div class="empty-state compact"><span>预览后显示模型规划出的真实设备步骤</span></div>`;
     return;
   }
-  switchView("agent");
-  await post("/api/agent/demo-disturbance", { temperature: 31 },
-    "已注入热扰动，智能体将自动重规划");
+  container.innerHTML = demoState.wfSteps.map((step, index) => `
+    <div class="demo-wf-step ${escapeHtml(step.state || "pending")}">
+      <span class="demo-wf-index">${index + 1}</span>
+      <div class="demo-wf-body">
+        <strong>${escapeHtml(step.label)}</strong>
+        ${step.detail ? `<span class="demo-wf-detail">${escapeHtml(step.detail)}</span>` : ""}
+      </div>
+      <span class="demo-wf-state">${escapeHtml(step.stateLabel || "待执行")}</span>
+    </div>`).join("");
+  refreshIcons();
+}
+
+function setDemoWfStatus(label, kind = "idle") {
+  const pill = $("#demo-wf-status");
+  if (!pill) return;
+  pill.textContent = label;
+  const tone = { running: "executing", ready: "success", failed: "failure" }[kind] || "idle";
+  pill.className = `plan-status ${tone}`;
+}
+
+async function demoWfPreview() {
+  const prompt = ($("#demo-wf-prompt")?.value || "").trim();
+  if (!prompt || demoState.wfRunning) return;
+  setDemoWfStatus("规划中", "running");
+  $("#demo-wf-run").disabled = true;
+  try {
+    // 复用工作流视图的设备/动作解析，保证步骤都能真实下发。
+    const response = await api("/api/workflows/preview", {
+      method: "POST",
+      body: JSON.stringify({ text: prompt }),
+    });
+    const plan = response.plan || {};
+    const steps = [];
+    (plan.steps || []).forEach((step) => {
+      const device = wfDevice(step.device_id);
+      const action = wfAction(device, step.action);
+      if (!device || !action) return;
+      const value = action.parameter?.field === "mode"
+        ? step.mode ?? step.value ?? wfDefault(action)
+        : step.value ?? wfDefault(action);
+      steps.push({
+        deviceId: device.id,
+        action: action.id,
+        value,
+        delay: 0,
+        label: `${device.name} · ${action.label || action.id}`,
+        detail: value === null || value === undefined || value === "" ? "" : `目标值 ${value}`,
+        state: "pending",
+        stateLabel: "待执行",
+      });
+    });
+    if (!steps.length) throw new Error(plan.reply || "模型未生成可执行的真实设备步骤");
+    demoState.wfSteps = steps;
+    demoState.wfPrompt = prompt;
+    demoState.wfSummary = plan.summary || prompt;
+    renderDemoWfSteps();
+    setDemoWfStatus(`${steps.length} 步待执行`, "ready");
+    $("#demo-wf-run").disabled = false;
+  } catch (error) {
+    demoState.wfSteps = [];
+    renderDemoWfSteps();
+    setDemoWfStatus("规划失败", "failed");
+    toast(error.message, true);
+  }
+}
+
+async function demoWfRun() {
+  if (demoState.wfRunning || !demoState.wfSteps.length) return;
+  demoState.wfRunning = true;
+  $("#demo-wf-run").disabled = true;
+  $("#demo-wf-preview").disabled = true;
+  setDemoWfStatus("执行中", "running");
+  try {
+    // 演示槽固定 id，避免反复跑同一个 prompt 积攒多条。
+    const saved = await api("/api/workflows", {
+      method: "POST",
+      body: JSON.stringify({
+        workflow_id: "demo-wf-slot",
+        name: `演示 · ${demoState.wfSummary}`.slice(0, 60),
+        phrase: `演示槽 ${demoState.wfPrompt.slice(0, 40)} ${Date.now()}`,
+        run_mode: "sequence",
+        steps: demoState.wfSteps.map((step) => ({
+          device_id: step.deviceId, action: step.action, value: step.value, delay: 0,
+        })),
+      }),
+    });
+    const workflowId = saved?.workflow?.workflow_id;
+    if (!workflowId) throw new Error("工作流保存失败");
+    const result = await api("/api/workflows/run", {
+      method: "POST",
+      body: JSON.stringify({ workflow_id: workflowId }),
+    });
+    const steps = Array.isArray(result?.steps) ? result.steps : [];
+    demoState.wfSteps = demoState.wfSteps.map((step, index) => {
+      const outcome = steps[index];
+      const ok = outcome ? outcome.status === "done" : false;
+      return {
+        ...step,
+        state: ok ? "done" : "failed",
+        stateLabel: ok ? "已生效" : String(outcome?.error || "失败").slice(0, 40),
+      };
+    });
+    renderDemoWfSteps();
+    const failed = demoState.wfSteps.filter((step) => step.state === "failed").length;
+    setDemoWfStatus(failed ? `${failed} 步失败` : "全部生效", failed ? "failed" : "ready");
+    await Promise.all([loadDevices(), loadAgentActivity()]);
+  } catch (error) {
+    setDemoWfStatus("执行失败", "failed");
+    toast(error.message, true);
+  } finally {
+    demoState.wfRunning = false;
+    $("#demo-wf-preview").disabled = false;
+    $("#demo-wf-run").disabled = false;
+  }
+}
+
+function setDemoBusy(busy) {
+  demoState.busy = busy;
+  const pill = $("#demo-voice-pill");
+  $("#demo-chat-send").disabled = busy;
+  $("#demo-chat-input").disabled = busy;
+  if (pill) {
+    pill.textContent = busy ? "模型处理中" : "就绪";
+    pill.className = `plan-status ${busy ? "running" : "idle"}`;
+  }
+  const hold = $("#demo-voice-hold");
+  if (hold) hold.disabled = busy;
+}
+
+async function demoSendChat(text) {
+  const message = String(text || "").trim();
+  if (!message || demoState.busy) return;
+  const input = $("#demo-chat-input");
+  const reply = $("#demo-reply");
+  setDemoBusy(true);
+  reply.hidden = false;
+  reply.innerHTML = `<div class="demo-reply-pending"><i data-lucide="loader"></i><span>${escapeHtml(message)}</span></div>`;
+  refreshIcons();
+  try {
+    const data = await api("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: message }),
+    });
+    input.value = "";
+    const messages = Array.isArray(data?.messages) ? data.messages : [];
+    const last = [...messages].reverse().find((item) => item.role === "assistant");
+    const trace = Array.isArray(data?.graph_trace) ? data.graph_trace : [];
+    reply.innerHTML = `
+      <p class="demo-reply-you"><i data-lucide="user"></i>${escapeHtml(message)}</p>
+      <p class="demo-reply-text">${escapeHtml(last?.content || "（本次没有返回文本）")}</p>
+      ${trace.length ? `<div class="demo-trace">${trace.map((node) =>
+        `<span class="demo-trace-node">${escapeHtml(node)}</span>`).join('<i data-lucide="chevron-right"></i>')}</div>` : ""}`;
+    refreshIcons();
+    await Promise.all([loadAgentActivity(), loadDevices()]);
+  } catch (error) {
+    reply.innerHTML = `<p class="demo-reply-error"><i data-lucide="alert-triangle"></i>${escapeHtml(error.message || "请求失败")}</p>`;
+    refreshIcons();
+  } finally {
+    setDemoBusy(false);
+  }
 }
 
 async function loadAgentActivity() {
   try {
-    renderAgentActivity(await api("/api/agent"));
+    const data = await api("/api/agent");
+    // 「AI 管家」和演示控制台各挂一份决策链，同一份数据渲染到所有挂载点。
+    $$("[data-agent-panel]").forEach((panel) => renderAgentActivity(data, panel));
   } catch (error) {
     // Agent 面板失败不打断其他视图。
   }
 }
 
-function renderAgentActivity(data) {
-  const plannerBadge = $("#agent-planner-badge span");
+function renderAgentActivity(data, root = document) {
+  const badge = $('[data-agent-slot="planner-badge"]', root);
+  const plannerBadge = badge ? $("span", badge) : null;
   if (plannerBadge) {
     const llmAvailable = Boolean(data.llm_available);
     const mode = data.planner_mode === "llm" ? "LLM 规划" : `${data.planner_mode || "fallback"} 规划`;
     plannerBadge.textContent = `${mode} · ${llmAvailable ? "LLM 在线" : "LLM 离线"}`;
-    $("#agent-planner-badge")?.classList.toggle("planner-llm", data.planner_mode === "llm");
+    badge.classList.toggle("planner-llm", data.planner_mode === "llm");
   }
 
-  const statusLabel = $("#agent-goal-status");
-  const goalBody = $("#agent-goal-body");
+  const statusLabel = $('[data-agent-slot="goal-status"]', root);
+  const goalBody = $('[data-agent-slot="goal-body"]', root);
   const goal = data.active_goal;
   if (statusLabel) {
     statusLabel.textContent = goal ? `${goal.title} · ${data.goal_status}` : "无活动目标";
@@ -1713,7 +1929,7 @@ function renderAgentActivity(data) {
     }
   }
 
-  const candidatesBody = $("#agent-candidates-body");
+  const candidatesBody = $('[data-agent-slot="candidates-body"]', root);
   if (candidatesBody) {
     const outcome = data.last_outcome;
     if (!outcome || !outcome.candidates || !outcome.candidates.length) {
@@ -1754,7 +1970,7 @@ function renderAgentActivity(data) {
     }
   }
 
-  const feedbackBody = $("#agent-feedback-body");
+  const feedbackBody = $('[data-agent-slot="feedback-body"]', root);
   if (feedbackBody) {
     const preference = data.preference;
     const overrides = (data.timeline || []).filter((event) => event.kind === "human_override").slice(-2);
@@ -1771,7 +1987,7 @@ function renderAgentActivity(data) {
     }
   }
 
-  const timeline = $("#agent-timeline");
+  const timeline = $('[data-agent-slot="timeline"]', root);
   if (timeline) {
     const events = (data.timeline || []).slice(-12).reverse();
     timeline.innerHTML = events.length
@@ -1880,6 +2096,7 @@ function setDeviceBusy(deviceId, busy) {
 
 function switchView(view) {
   if (view !== "assistant" && voiceInput?.active) voiceInput.cancel();
+  if (view !== "demo" && demoVoiceInput?.active) demoVoiceInput.cancel();
   state.view = view;
   $$(".view").forEach((element) => element.classList.toggle("active", element.dataset.view === view));
   $$(".rail-button[data-view-target]").forEach((button) => {
@@ -1889,6 +2106,11 @@ function switchView(view) {
   if (view === "events") loadEvents();
   if (view === "assistant") loadConversation();
   if (view === "demo") loadBrandInventory();
+  if (view === "demo") {
+    // 决策链现在也挂在本页，进入时先拉一次，避免面板空着。
+    loadAgentActivity();
+    demoVoiceInput?.refresh();
+  }
 }
 
 function selectFloorDevice(deviceId) {
@@ -2013,32 +2235,84 @@ async function confirmDashboardRecommendation() {
   }
 }
 
+// 提问先上屏，再轮询 /api/chat 显示真实的思考阶段。POST 要等整条
+// LangGraph 链路跑完才返回，光等它前端就是一片空白。
 async function sendChat(textValue) {
   if (state.chatBusy || voiceInput?.active) return;
   const input = $("#chat-input");
   const textValueNormalized = textValue.trim();
   if (!textValueNormalized) return;
   setChatBusy(true);
-  $("#chat-thread").insertAdjacentHTML("beforeend", `
-    <div class="chat-thinking chat-pending-local">
-      <i data-lucide="loader-circle"></i><span>正在读取设备上下文</span>
-    </div>`);
-  refreshIcons();
+  input.value = "";
+  state.pendingChatText = textValueNormalized;
+  state.chatStages = [];
+  renderPendingTurn();
+  startChatProgressPolling();
   try {
     const payload = await api("/api/chat", {
       method: "POST",
       body: JSON.stringify({ text: textValueNormalized }),
     });
+    stopChatProgressPolling();
+    state.pendingChatText = null;
     renderConversation(payload);
-    input.value = "";
     await Promise.all([loadStatus(), loadDevices(), loadEvents()]);
   } catch (error) {
+    stopChatProgressPolling();
+    state.pendingChatText = null;
     $(".chat-pending-local")?.remove();
+    input.value = textValueNormalized;
     toast(error.message, true);
   } finally {
     setChatBusy(false);
     input.focus();
   }
+}
+
+// 轮询间隔要短于单个节点的耗时，否则阶段会被跳过看不见。
+function startChatProgressPolling() {
+  stopChatProgressPolling();
+  state.chatProgressTimer = setInterval(async () => {
+    try {
+      const payload = await api("/api/chat");
+      const progress = payload.progress;
+      if (!progress?.busy) return;
+      state.chatStages = progress.stages || [];
+      renderPendingTurn(progress);
+    } catch {
+      // 轮询失败不打断本次会话：POST 的结果才是权威。
+    }
+  }, 600);
+}
+
+function stopChatProgressPolling() {
+  if (state.chatProgressTimer) clearInterval(state.chatProgressTimer);
+  state.chatProgressTimer = null;
+}
+
+// 用户气泡 + 思考过程一起渲染，思考条列出已经走过的图节点。
+function renderPendingTurn(progress = null) {
+  const thread = $("#chat-thread");
+  if (!thread || !state.pendingChatText) return;
+  $(".chat-pending-local")?.remove();
+  const stages = state.chatStages || [];
+  const currentLabel = progress?.stage_label || "正在读取设备上下文";
+  thread.insertAdjacentHTML("beforeend", `
+    <div class="chat-pending-local">
+      <article class="chat-message user">
+        <div class="chat-message-bubble">${escapeHtml(state.pendingChatText)}</div>
+        <div class="chat-message-meta"><span>家庭成员</span><span>刚刚</span></div>
+      </article>
+      <div class="chat-thinking">
+        <i data-lucide="loader-circle"></i><span>${escapeHtml(currentLabel)}</span>
+      </div>
+      ${stages.length ? `<div class="chat-stage-trail">${stages.map((stage, index) => `
+        <span class="chat-stage ${index === stages.length - 1 ? "active" : "done"}">
+          ${escapeHtml(stage.label)}
+        </span>`).join("")}</div>` : ""}
+    </div>`);
+  refreshIcons();
+  thread.scrollTop = thread.scrollHeight;
 }
 
 async function chatPlanAction(path) {
@@ -2357,10 +2631,20 @@ document.addEventListener("DOMContentLoaded", () => {
   voiceInput = new window.PushToTalk({
     input: $("#chat-input"), button: $("#voice-hold"), cancelButton: $("#voice-cancel"),
     panel: $("#voice-panel"), status: $("#voice-status"), transcript: $("#voice-transcript"), timer: $("#voice-timer"),
+    // 演示控制台有自己的语音入口，V 键归当前视图，避免两套同时启动。
+    enabled: () => state.view !== "demo",
     isBusy: () => state.chatBusy || Boolean(state.conversation?.busy),
     onStart: () => switchView("assistant"),
     onActive: () => setChatBusy(state.chatBusy),
     onSubmit: sendChat,
+  });
+  demoVoiceInput = new window.PushToTalk({
+    input: $("#demo-chat-input"), button: $("#demo-voice-hold"), cancelButton: $("#demo-voice-cancel"),
+    panel: $("#demo-voice-panel-inner"), status: $("#demo-voice-status"),
+    transcript: $("#demo-voice-transcript"), timer: $("#demo-voice-timer"),
+    enabled: () => state.view === "demo",
+    isBusy: () => demoState.busy,
+    onSubmit: demoSendChat,
   });
   $("#welcome-date").textContent = new Intl.DateTimeFormat("zh-CN", {
     month: "long",
@@ -2395,6 +2679,26 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#cancel-chat-plan").addEventListener("click", () => chatPlanAction("/api/chat/cancel"));
   $("#demo-selfcheck")?.addEventListener("click", runDemoSelfCheck);
   $("#demo-reset")?.addEventListener("click", runDemoReset);
+  $("#demo-chat-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    demoSendChat($("#demo-chat-input").value);
+  });
+  $("#demo-chat-input")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      demoSendChat($("#demo-chat-input").value);
+    }
+  });
+  $("#demo-wf-preview")?.addEventListener("click", demoWfPreview);
+  $("#demo-wf-run")?.addEventListener("click", demoWfRun);
+  $("#demo-wf-prompt")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      demoWfPreview();
+    }
+  });
+  $("#demo-agent-override")?.addEventListener("click", () => runDemoScenario("override"));
+  $("#demo-agent-disturbance")?.addEventListener("click", () => runDemoScenario("disturbance"));
   $("#brand-picker")?.addEventListener("change", (event) => {
     brandState.selectedBrandId = event.target.value;
     renderBrandPairing(selectedBrand());

@@ -429,6 +429,16 @@ class CounterfactualPlanner:
             ]
             for metric, capability in route_capabilities.items()
         }
+        # 目标亮度为 0 表示关灯。set_brightness 的载荷硬编码 power=on，无法表达
+        # 关闭，因此把 turn_off 一并作为可选路由暴露给规划模型。
+        if any(
+            item.metric == "brightness" and item.upper <= 0 for item in goal.constraints
+        ):
+            control_routes["brightness"] = [
+                {"device_id": device.device_id, "capability": "turn_off"}
+                for device in registry.values()
+                if "turn_off" in device.actions and not device.readonly
+            ] or control_routes["brightness"]
         user_prompt = (
             f"用户目标：{goal.title}\n"
             f"目标约束（区间）：{[item.to_dict() for item in goal.constraints]}\n"

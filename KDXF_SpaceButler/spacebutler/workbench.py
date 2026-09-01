@@ -1167,18 +1167,35 @@ class WorkbenchController:
         if not 1 <= int(brightness) <= 100:
             raise ValueError("brightness must be between 1 and 100")
         result = self.control_device("living_room_main_light", {"power": "on", "brightness": int(brightness)})
-        return {"override_sent": {"brightness": int(brightness)}, **result}
+        # 立刻跑一轮观测，human_override 检测当场出现在决策链上，不用等轮询。
+        return {
+            "override_sent": {"brightness": int(brightness)},
+            **result,
+            "status": self._agent_runtime.observe_now(),
+        }
 
     def demo_disturbance(self, temperature: float) -> dict[str, object]:
         """Inject heat through the ESPHome firmware service (real physical-path disturbance)."""
         if not 16 <= float(temperature) <= 40:
             raise ValueError("temperature must be between 16 and 40")
+        # 空调制冷时固件每秒降温 0.20°C，注入的热量会在约 35s 内被压回目标值，
+        # 智能体来观测时偏离已经消失。先停制冷，扰动才能持续到被观测到。
+        cooling_stopped = False
+        try:
+            self.control_device("living_room_ac", {"mode": "off"})
+            cooling_stopped = True
+        except (RuntimeError, ValueError, OSError) as error:
+            self._agent_runtime.record_turn(
+                "assistant", f"扰动注入前停止制冷失败，温度可能被空调压回：{error}")
         self._ha.call_service(
             "esphome",
             os.environ.get("ESPHOME_HEAT_INJECTION_SERVICE", "living_room_ac_demo_heat_injection"),
             {"target_temperature": float(temperature)},
         )
-        return {"disturbance_sent": {"temperature": float(temperature)}, "status": self.status()}
+        return {
+            "disturbance_sent": {"temperature": float(temperature), "cooling_stopped": cooling_stopped},
+            "status": self._agent_runtime.observe_now(),
+        }
 
     def demo_reset(self) -> dict[str, object]:
         """Restore the recording start state through the real device path.
@@ -1293,6 +1310,13 @@ class WorkbenchController:
     def chat_history(self) -> dict[str, object]:
         return self._agent_runtime.history()
 
+    def chat_snapshot(self) -> dict[str, object]:
+        """Poll-friendly history: returns live stage progress mid-turn."""
+        payload = self._agent_runtime.history_snapshot()
+        if self._pending_trigger is not None:
+            return {**payload, "pending_trigger": self._pending_trigger["match"]}
+        return payload
+
     def confirm_chat(self) -> dict[str, object]:
         return self._agent_runtime.history()
 
@@ -1328,7 +1352,69 @@ class WorkbenchController:
             return self.status()
 
     def events(self, limit: int = 30) -> dict[str, object]:
-        return {"events": []}
+        """Device events from the agent timeline, newest first.
+
+        The timeline is the only place that records real device activity: the
+        commands the agent sent, the HA read-back verdicts and the state changes
+        attributed to a person. Sensor drift is included so the events view can
+        show what actually changed, not just what was commanded.
+        """
+        snapshot = self._agent_runtime.status()
+        raw_timeline = snapshot.get("timeline")
+        timeline = raw_timeline if isinstance(raw_timeline, list) else []
+        raw_actions = snapshot.get("recent_actions")
+        actions = raw_actions if isinstance(raw_actions, list) else []
+        names = self._device_names()
+        events: list[dict[str, object]] = []
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            device_id = str(action.get("device_id", ""))
+            verified = action.get("verified")
+            events.append(
+                {
+                    "timestamp": _event_timestamp(float(action.get("sent_at", 0.0) or 0.0)),
+                    "ts": float(action.get("sent_at", 0.0) or 0.0),
+                    "event_type": "command_sent" if verified is None else "state_verified" if verified else "state_failed",
+                    "device_id": device_id,
+                    "device_name": names.get(device_id, device_id),
+                    "summary": _action_event_summary(action),
+                    "state_change": _action_state_change(action),
+                    "outcome": "pending" if verified is None else "success" if verified else "failed",
+                    "payload": {"entity_id": action.get("entity_id"), "capability": action.get("capability")},
+                }
+            )
+        for event in timeline:
+            if not isinstance(event, dict) or event.get("kind") not in _EVENT_KINDS:
+                continue
+            data = event.get("data") if isinstance(event.get("data"), dict) else {}
+            device_id = str(data.get("device_id", "") or _event_device_id(event))
+            events.append(
+                {
+                    "timestamp": _event_timestamp(float(event.get("ts", 0.0) or 0.0)),
+                    "ts": float(event.get("ts", 0.0) or 0.0),
+                    "event_type": str(event.get("kind", "")),
+                    "device_id": device_id,
+                    "device_name": names.get(device_id, device_id or "全屋"),
+                    "summary": str(event.get("message", "")),
+                    "state_change": _timeline_state_change(data),
+                    "outcome": _EVENT_KINDS[str(event.get("kind", ""))],
+                    "payload": data,
+                }
+            )
+        events.sort(key=lambda item: float(item.get("ts", 0.0) or 0.0), reverse=True)
+        return {"events": events[:limit]}
+
+    def _device_names(self) -> dict[str, str]:
+        payload = self.devices()
+        devices = payload.get("devices")
+        if not isinstance(devices, list):
+            return {}
+        return {
+            str(item.get("device_id")): str(item.get("name") or item.get("device_id"))
+            for item in devices
+            if isinstance(item, dict)
+        }
 
     def _device_summary(self) -> dict[str, int]:
         payload = self.devices()
@@ -1727,6 +1813,92 @@ def _device_icon(device: dict[str, object], default: str) -> str:
 
 
 _SOURCE_LABELS = {"esphome": "ESPHome 固件"}
+
+
+# 进入「设备事件」表格的 timeline 事件种类 -> 结果语义。
+_EVENT_KINDS: dict[str, str] = {
+    "execution": "info",
+    "verification": "info",
+    "attribution": "info",
+    "human_override": "warning",
+    "goal_cancelled": "info",
+    "no_action": "info",
+    "observation_error": "failed",
+    "runtime_error": "failed",
+    "runtime_fatal": "failed",
+}
+
+_CAPABILITY_LABELS: dict[str, str] = {
+    "set_brightness": "设置亮度",
+    "set_position": "设置窗帘位置",
+    "set_temperature": "设置温度",
+    "set_hvac_mode": "设置运行模式",
+    "turn_on": "开启",
+    "turn_off": "关闭",
+}
+
+
+def _event_timestamp(ts: float) -> str:
+    """Full ISO timestamp: the events table parses this with ``new Date``."""
+    return datetime.fromtimestamp(ts, timezone.utc).astimezone().isoformat()
+
+
+def _capability_value(capability: str, value: object) -> str:
+    if value is None:
+        return ""
+    if capability in {"set_brightness", "set_position"}:
+        return f"{float(value):g}%" if isinstance(value, (int, float)) else str(value)
+    if capability == "set_temperature":
+        return f"{float(value):g}°C" if isinstance(value, (int, float)) else str(value)
+    if capability == "set_hvac_mode":
+        return {"cool": "制冷", "heat": "制热", "off": "关闭"}.get(str(value), str(value))
+    return str(value)
+
+
+def _action_event_summary(action: dict[str, object]) -> str:
+    capability = str(action.get("capability", ""))
+    label = _CAPABILITY_LABELS.get(capability, capability)
+    value = _capability_value(capability, action.get("value"))
+    return f"{label} {value}".strip()
+
+
+def _action_state_change(action: dict[str, object]) -> str:
+    """What the device state became, in words rather than raw entity payloads."""
+    expected = action.get("expected") if isinstance(action.get("expected"), dict) else {}
+    observed = action.get("observed") if isinstance(action.get("observed"), dict) else {}
+    if isinstance(observed.get("error"), str):
+        return f"未生效：{observed['error']}"
+    parts: list[str] = []
+    if "state" in expected:
+        parts.append({"on": "已开启", "off": "已关闭", "cool": "制冷", "heat": "制热"}.get(
+            str(expected["state"]), str(expected["state"])
+        ))
+    if "brightness" in expected:
+        parts.append(f"亮度 {expected['brightness']}%")
+    if "position" in expected:
+        parts.append(f"位置 {expected['position']}%")
+    if "temperature" in expected:
+        parts.append(f"设定 {float(expected['temperature']):g}°C")
+    verified = action.get("verified")
+    suffix = "" if verified is None else "（回读一致）" if verified else "（回读不一致）"
+    return f"{' · '.join(parts)}{suffix}" if parts else suffix
+
+
+def _timeline_state_change(data: dict[str, object]) -> str:
+    before, after = data.get("before"), data.get("after")
+    if before is None or after is None:
+        return ""
+    capability = str(data.get("capability", ""))
+    return f"{_capability_value(capability, before)} → {_capability_value(capability, after)}"
+
+
+def _event_device_id(event: dict[str, object]) -> str:
+    data = event.get("data")
+    if isinstance(data, dict):
+        for key in ("device_id", "entity_id"):
+            if isinstance(data.get(key), str):
+                return str(data[key])
+    return ""
 
 
 def _source_readout(device: dict[str, object], suffix: str) -> str:
@@ -2662,7 +2834,7 @@ def serve_workbench(
                 self._api(controller.night_safety)
                 return
             if path == "/api/chat":
-                self._api(controller.chat_history)
+                self._api(controller.chat_snapshot)
                 return
             if path == "/api/agent":
                 self._api(controller.agent_status)

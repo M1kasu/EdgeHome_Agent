@@ -35,6 +35,8 @@ _FAST_MODE_BETA = "fast-mode-2026-02-01"
 # Fast Mode 目前只在这两个模型上可用；其它模型必须走普通通道，否则请求会被拒绝。
 _FAST_MODE_MODELS = {"claude-opus-5", "claude-opus-4-8"}
 _VALID_EFFORT = {"low", "medium", "high", "xhigh", "max"}
+# 去掉约束解码后，只能靠提示词把输出压成纯 JSON。
+_JSON_ONLY_HINT = "只输出一个合法 JSON 对象，不要包含任何解释或代码块标记。"
 
 
 def _strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -80,6 +82,8 @@ class ClaudeClient:
         self.last_error_stage: str | None = None
         self._client: Any = None
         self._init_error: str | None = None
+        # 服务端拒绝本项目 schema 时置位，之后改用提示词约束，不再反复试探。
+        self._schema_unsupported = False
         try:
             import anthropic
         except ImportError:  # pragma: no cover - 依赖缺失时退回本地通道
@@ -145,20 +149,28 @@ class ClaudeClient:
             "messages": [{"role": "user", "content": user}],
             "output_config": {"effort": self._effort},
         }
-        if schema is not None:
+        # 一旦发现服务端不接受本项目的 schema，后续调用不再重复尝试约束解码。
+        if schema is not None and not self._schema_unsupported:
             request["output_config"]["format"] = {
                 "type": "json_schema",
                 "schema": _strict_schema(schema),
             }
-        try:
-            if self._fast:
-                response = self._client.beta.messages.create(
-                    speed="fast", betas=[_FAST_MODE_BETA], **request)
-            else:
-                response = self._client.messages.create(**request)
-        except Exception as error:  # SDK 抛型很多，任何失败都应让路由器回落本地
-            self.last_error_stage = _error_stage(self._anthropic, error)
-            print(f"[llm/cloud] call failed ({self.last_error_stage}): {str(error)[:160]}", flush=True)
+        elif schema is not None:
+            request["system"] = f"{system}\n\n{_JSON_ONLY_HINT}"
+        response = self._send(request)
+        if response is None and self.last_error_stage == "bad_request" and schema is not None:
+            # 约束解码对 schema 的要求比 llama.cpp 严格（例如要求所有属性都必填）。
+            # 与其每次都白跑一趟再回落本地，这里去掉 schema 重试一次：
+            # 提示词仍要求只输出 JSON，解析和校验由下面的多级解析兜住。
+            print("[llm/cloud] schema rejected by constrained decoding; "
+                  "retrying without format constraint", flush=True)
+            self._schema_unsupported = True
+            relaxed = dict(request)
+            relaxed["output_config"] = {"effort": self._effort}
+            relaxed["system"] = f"{system}\n\n{_JSON_ONLY_HINT}"
+            self.last_retry_count = 1
+            response = self._send(relaxed)
+        if response is None:
             return None
         # 安全分类器可能拒答；此时 content 不含可用文本，必须先看 stop_reason。
         if getattr(response, "stop_reason", None) == "refusal":
@@ -178,6 +190,29 @@ class ClaudeClient:
                       f"{json.dumps(parsed, ensure_ascii=False)[:120]}", flush=True)
                 return None
         return parsed
+
+    def _send(self, request: dict[str, Any]) -> Any | None:
+        """One HTTP round trip. Returns None and records the stage on any SDK failure.
+
+        SDK 抛型很多（超时、限流、鉴权、400），任何失败都不该往上抛：
+        调用方要么去掉 schema 重试，要么让路由器回落本地通道。
+        """
+        try:
+            if self._fast:
+                # Fast Mode 只在 beta 端点上可用，且必须同时带 beta 标记和 speed 参数。
+                response = self._client.beta.messages.create(
+                    speed="fast", betas=[_FAST_MODE_BETA], **request)
+            else:
+                response = self._client.messages.create(**request)
+        except Exception as error:
+            self.last_error_stage = _error_stage(self._anthropic, error)
+            print(f"[llm/cloud] call failed ({self.last_error_stage}): "
+                  f"{str(error)[:160]}", flush=True)
+            return None
+        # 去掉 schema 重试成功后，必须清掉上一轮的 bad_request：
+        # 路由器在成功路径上也会读这个字段记时间线，留着会把成功记成失败。
+        self.last_error_stage = None
+        return response
 
 
 def _error_stage(anthropic_module: Any, error: Exception) -> str:
