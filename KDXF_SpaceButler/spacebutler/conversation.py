@@ -107,6 +107,22 @@ class ConversationAgent:
                 "llm_available": self._llm_client is not None,
             }
 
+    def preview(self, text: str) -> dict[str, object]:
+        """Build and validate a plan without persisting it or controlling devices."""
+        normalized = text.strip()
+        if not normalized or len(normalized) > 500:
+            raise ValueError("message must contain 1 to 500 characters")
+        with self._lock:
+            context = self._planning_context()
+        inventory = self._inventory_provider()
+        devices = _inventory_devices(inventory)
+        candidate, route, model_error = self._plan_candidate(normalized, devices, context)
+        plan = self._validate_plan(normalized, candidate, devices, route, model_error)
+        return {
+            "plan": deepcopy(plan),
+            "llm_available": self._llm_client is not None,
+        }
+
     def submit(self, text: str) -> dict[str, object]:
         normalized = text.strip()
         if not normalized or len(normalized) > 500:

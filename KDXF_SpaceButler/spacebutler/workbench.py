@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .agent import SpaceButlerAgent
 from .agent.runtime import AgentRuntime
+from .conversation import ConversationAgent
 from .control_context import ControlContextRegistry, ManualControlContext
 from .edge_language import EdgeLanguageRouter
 from .esphome_registry import (
@@ -68,6 +69,12 @@ class WorkbenchController:
             memory.database_path,
         )
         self._agent_runtime.start()
+        self._workflow_planner = ConversationAgent(
+            self.devices,
+            self.control_device,
+            self.proactive,
+            language_router.client if language_router is not None else None,
+        )
 
     def status(self) -> dict[str, object]:
         with self._lock:
@@ -773,6 +780,10 @@ class WorkbenchController:
     def chat(self, text: str) -> dict[str, object]:
         return self._agent_runtime.submit_text(text)
 
+    def preview_workflow(self, text: str) -> dict[str, object]:
+        """Generate a grounded workflow plan without executing any device action."""
+        return self._workflow_planner.preview(text)
+
     def energy_history(self, hours: int = 6, samples: int = 72) -> dict[str, object]:
         """Rebuild a power curve from recorder history using the rated-power model.
 
@@ -1260,6 +1271,7 @@ def _device_ui(device: dict[str, object]) -> dict[str, object]:
     attributes = raw_attributes if isinstance(raw_attributes, dict) else {}
     online = bool(device.get("online"))
     controls: list[dict[str, object]] = []
+    workflow_actions: list[dict[str, object]] = []
     primary_action: dict[str, object] | None = None
     active = False
     warning = False
@@ -1288,6 +1300,12 @@ def _device_ui(device: dict[str, object]) -> dict[str, object]:
                 "payload": primary_action["payload"],
             }
         )
+        workflow_actions.extend(
+            [
+                {"id": "turn_on", "label": "开启", "payload": {"power": "on"}},
+                {"id": "turn_off", "label": "关闭", "payload": {"power": "off"}},
+            ]
+        )
         if device_type == "light":
             controls.append(
                 {
@@ -1300,6 +1318,22 @@ def _device_ui(device: dict[str, object]) -> dict[str, object]:
                     "step": 1,
                     "unit": "%",
                     "payload": {"power": "on"},
+                }
+            )
+            workflow_actions.append(
+                {
+                    "id": "set_brightness",
+                    "label": "设置亮度",
+                    "payload": {"power": "on"},
+                    "parameter": {
+                        "field": "brightness",
+                        "type": "number",
+                        "min": 1,
+                        "max": 100,
+                        "step": 1,
+                        "default": max(brightness, 60),
+                        "unit": "%",
+                    },
                 }
             )
     elif device_type == "curtain":
@@ -1330,6 +1364,26 @@ def _device_ui(device: dict[str, object]) -> dict[str, object]:
                     "step": 5,
                     "unit": "%",
                     "payload": {},
+                },
+            ]
+        )
+        workflow_actions.extend(
+            [
+                {"id": "turn_on", "label": "打开", "payload": {"position": 100}},
+                {"id": "turn_off", "label": "关闭", "payload": {"position": 0}},
+                {
+                    "id": "set_position",
+                    "label": "设置位置",
+                    "payload": {},
+                    "parameter": {
+                        "field": "position",
+                        "type": "number",
+                        "min": 0,
+                        "max": 100,
+                        "step": 5,
+                        "default": position,
+                        "unit": "%",
+                    },
                 },
             ]
         )
@@ -1391,6 +1445,42 @@ def _device_ui(device: dict[str, object]) -> dict[str, object]:
                 },
             ]
         )
+        mode_options = [
+            {"value": value, "label": {"cool": "制冷", "heat": "制热"}.get(value, value)}
+            for value in supported_modes
+            if value != "off"
+        ]
+        workflow_actions.append({"id": "turn_off", "label": "关闭", "payload": {"mode": "off"}})
+        if mode_options:
+            workflow_actions.append(
+                {
+                    "id": "set_hvac_mode",
+                    "label": "设置模式",
+                    "payload": {"temperature": temperature},
+                    "parameter": {
+                        "field": "mode",
+                        "type": "select",
+                        "options": mode_options,
+                        "default": turn_on_mode,
+                    },
+                }
+            )
+            workflow_actions.append(
+                {
+                    "id": "set_temperature",
+                    "label": "设置温度",
+                    "payload": {"mode": mode if active else turn_on_mode},
+                    "parameter": {
+                        "field": "temperature",
+                        "type": "number",
+                        "min": 16,
+                        "max": 30,
+                        "step": 0.5,
+                        "default": temperature,
+                        "unit": "°C",
+                    },
+                }
+            )
     elif device_type in {"presence", "contact"}:
         field = "occupied" if device_type == "presence" else "open"
         active = bool(state.get(field))
@@ -1463,6 +1553,7 @@ def _device_ui(device: dict[str, object]) -> dict[str, object]:
         "active": active,
         "warning": warning,
         "controls": controls,
+        "workflow_actions": workflow_actions,
         "primary_action": primary_action,
         "fault_options": fault_options,
         "floorplan": {
@@ -2148,6 +2239,9 @@ def serve_workbench(
                 ),
                 "/api/message": lambda body: controller.message(str(body.get("text", ""))),
                 "/api/chat": lambda body: controller.chat(str(body.get("text", ""))),
+                "/api/workflows/preview": lambda body: controller.preview_workflow(
+                    str(body.get("text", ""))
+                ),
                 "/api/chat/confirm": lambda _body: controller.confirm_chat(),
                 "/api/chat/cancel": lambda _body: controller.cancel_chat(),
                 "/api/chat/clear": lambda _body: controller.clear_chat(),

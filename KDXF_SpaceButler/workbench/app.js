@@ -933,6 +933,7 @@ function renderInventory(payload) {
   if (!grid.contains(document.activeElement)) renderDeviceGrid();
   const floorplan = $("#floorplan-stage");
   if (!floorplan?.contains(document.activeElement)) renderSpatialDashboard();
+  if (typeof wfRefreshDevices === "function") wfRefreshDevices();
 }
 
 function renderRoomTabs() {
@@ -2050,4 +2051,695 @@ document.addEventListener("DOMContentLoaded", () => {
   loadAll();
   loadEvents();
   setInterval(loadAll, 5000);
+
+  /* ---- 工作流视图入口 ---- */
+  initWorkflowView();
 });
+
+/* ================================================================
+   Workflow View — 独立 JS 模块
+   不修改已有任何函数/状态，全部通过 wf 前缀命名空间隔离
+   ================================================================ */
+
+let WF_DEVICES = [];
+
+const wfState = {
+  workflow: { name: "新的工作流", phrase: "", runMode: "sequence", steps: [] },
+  saved: [],
+  activeIndex: 0,
+  draggedIndex: null,
+  running: false,
+  wfTab: "builder",
+  aiGenBusy: false,
+  deviceSignature: null,
+};
+
+function wfClone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function wfSyncDevices() {
+  WF_DEVICES = state.devices
+    .filter((device) => Array.isArray(device.ui?.workflow_actions) && device.ui.workflow_actions.length)
+    .map((device) => ({
+      id: device.device_id,
+      name: device.name,
+      room: device.room_name,
+      type: device.ui?.type_label || device.type,
+      state: device.ui?.state_label || dashboardDeviceState(device),
+      actions: device.ui.workflow_actions,
+      online: Boolean(device.online),
+      source: device,
+    }));
+}
+
+function wfDevice(id) {
+  return WF_DEVICES.find((device) => device.id === id) || null;
+}
+
+function wfAction(device, actionId) {
+  if (!device) return null;
+  if (!actionId) return device.actions[0] || null;
+  return device.actions.find((action) => action.id === actionId) || null;
+}
+
+function wfDefault(action) {
+  return action?.parameter?.default ?? "";
+}
+
+function wfValueLabel(action, value) {
+  if (!action?.parameter) return action?.label || "--";
+  if (action.parameter.type === "select") {
+    return action.parameter.options?.find((option) => option.value === value)?.label || String(value);
+  }
+  return `${value}${action.parameter.unit || ""}`;
+}
+
+function wfPayload(step) {
+  const device = wfDevice(step.deviceId);
+  const action = wfAction(device, step.action);
+  if (!device || !action) throw new Error("工作流引用的设备或动作已不可用");
+  const payload = { ...(action.payload || {}) };
+  const parameter = action.parameter;
+  if (parameter) {
+    payload[parameter.field] = parameter.type === "number" ? Number(step.value) : step.value;
+  }
+  return payload;
+}
+
+function wfSanitizeWorkflow(candidate) {
+  if (!candidate || typeof candidate !== "object") return null;
+  const steps = (Array.isArray(candidate.steps) ? candidate.steps : []).map((step) => {
+    const device = wfDevice(String(step?.deviceId || ""));
+    const action = wfAction(device, String(step?.action || ""));
+    if (!device || !action) return null;
+    let value = step.value ?? wfDefault(action);
+    if (action.parameter?.type === "number") {
+      value = Number(value);
+      if (!Number.isFinite(value)) value = Number(wfDefault(action));
+      value = Math.min(Number(action.parameter.max), Math.max(Number(action.parameter.min), value));
+    } else if (action.parameter?.type === "select") {
+      const allowed = new Set((action.parameter.options || []).map((option) => option.value));
+      if (!allowed.has(value)) value = wfDefault(action);
+    }
+    return {
+      deviceId: device.id,
+      action: action.id,
+      value,
+      delay: Math.min(60, Math.max(0, Number(step.delay) || 0)),
+    };
+  }).filter(Boolean);
+  if (!steps.length) return null;
+  return {
+    name: String(candidate.name || "未命名工作流").slice(0, 40),
+    phrase: String(candidate.phrase || "").slice(0, 60),
+    runMode: "sequence",
+    steps,
+    ...(candidate.planning && typeof candidate.planning === "object"
+      ? { planning: wfClone(candidate.planning) }
+      : {}),
+  };
+}
+
+function wfPersistSaved() {
+  try { localStorage.setItem("spacebutler.workflows", JSON.stringify(wfState.saved)); } catch {}
+}
+
+function wfRenderDevicePicker() {
+  const picker = $("#wf-device-picker");
+  const addButton = $("#wf-add-device");
+  if (!picker) return;
+  picker.innerHTML = WF_DEVICES.length
+    ? WF_DEVICES.map((device) => `<option value="${escapeHtml(device.id)}">${escapeHtml(device.room)} · ${escapeHtml(device.name)} · ${escapeHtml(device.type)}${device.online ? "" : " · 离线"}</option>`).join("")
+    : '<option value="">没有已注册且可控制的设备</option>';
+  picker.disabled = !WF_DEVICES.length;
+  if (addButton) addButton.disabled = !WF_DEVICES.length;
+}
+
+function wfRefreshDevices() {
+  wfSyncDevices();
+  const signature = JSON.stringify(WF_DEVICES.map((device) => ({
+    id: device.id,
+    online: device.online,
+    actions: device.actions,
+  })));
+  if (signature === wfState.deviceSignature) {
+    if (!wfState.running) {
+      wfRenderStatePreview();
+      wfRenderStateList();
+    }
+    return;
+  }
+  wfState.deviceSignature = signature;
+  wfRenderDevicePicker();
+  if (wfState.running) return;
+  if (!WF_DEVICES.length) {
+    wfRenderAll();
+    return;
+  }
+  const sanitized = wfState.saved.map(wfSanitizeWorkflow).filter(Boolean);
+  const changed = JSON.stringify(sanitized) !== JSON.stringify(wfState.saved);
+  wfState.saved = sanitized;
+  if (changed) wfPersistSaved();
+  const current = wfSanitizeWorkflow(wfState.workflow);
+  if (current) {
+    wfState.workflow = current;
+  } else if (Array.isArray(wfState.workflow?.steps) && !wfState.workflow.steps.length) {
+    wfState.workflow = {
+      ...wfState.workflow,
+      name: String(wfState.workflow.name || "新的工作流").slice(0, 40),
+      phrase: String(wfState.workflow.phrase || "").slice(0, 60),
+      runMode: "sequence",
+      steps: [],
+    };
+  } else if (wfState.activeIndex >= 0 && wfState.saved[wfState.activeIndex]) {
+    wfState.workflow = wfClone(wfState.saved[wfState.activeIndex]);
+  } else {
+    wfState.workflow = { name: "新的工作流", phrase: "", runMode: "sequence", steps: [] };
+  }
+  wfRenderAll();
+}
+
+/* ---- AI 生成工作流 ---- */
+async function wfAiGenerate() {
+  if (wfState.aiGenBusy) return;
+  const prompt = ($("#wf-ai-prompt")?.value || "").trim();
+  if (!prompt) return;
+
+  wfState.aiGenBusy = true;
+  const btn = $("#wf-ai-generate");
+  if (btn) { btn.disabled = true; btn.textContent = "分析中…"; }
+
+  try {
+    const response = await api("/api/workflows/preview", {
+      method: "POST",
+      body: JSON.stringify({ text: prompt }),
+    });
+    const plan = response.plan || {};
+    const steps = [];
+    (plan.steps || []).forEach((step) => {
+      const device = wfDevice(step.device_id);
+      const action = wfAction(device, step.action);
+      if (!device || !action) return;
+      if (step.action === "set_temperature" && step.mode) {
+        const modeAction = wfAction(device, "set_hvac_mode");
+        const supported = modeAction?.parameter?.options?.some((option) => option.value === step.mode);
+        if (modeAction && supported) {
+          steps.push({ deviceId: device.id, action: modeAction.id, value: step.mode, delay: 0 });
+        }
+      }
+      const value = action.parameter?.field === "mode"
+        ? step.mode ?? step.value ?? wfDefault(action)
+        : step.value ?? wfDefault(action);
+      steps.push({ deviceId: device.id, action: action.id, value, delay: 0 });
+    });
+    if (!steps.length) throw new Error(plan.reply || "Agent 未生成可执行的真实设备步骤");
+    wfState.workflow = {
+      name: plan.summary || `Agent 工作流 ${new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`,
+      phrase: prompt,
+      runMode: "sequence",
+      steps,
+      planning: {
+        route: plan.route || "deterministic_fallback",
+        reasoning: plan.reasoning || "",
+        generatedAt: Date.now(),
+      },
+    };
+    wfRenderBuilder();
+    wfRenderStatePreview();
+    toast(`已基于 ${steps.length} 个真实设备动作生成工作流`);
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="wand-2"></i><span>生成</span>'; }
+    wfState.aiGenBusy = false;
+    refreshIcons();
+  }
+}
+
+/* ---- 渲染 ---- */
+function wfParameterEditor(action, step, index) {
+  const parameter = action?.parameter;
+  if (!parameter) return `<input value="无需参数" disabled>`;
+  if (parameter.type === "select") {
+    return `<select data-wf-field="value" data-wf-idx="${index}">
+      ${(parameter.options || []).map((option) => `
+        <option value="${escapeHtml(option.value)}" ${option.value === step.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+    </select>`;
+  }
+  return `<input data-wf-field="value" data-wf-idx="${index}" type="number"
+    min="${Number(parameter.min)}" max="${Number(parameter.max)}" step="${Number(parameter.step)}"
+    value="${Number(step.value)}">`;
+}
+
+function wfRenderBuilder() {
+  const wf = wfState.workflow;
+  if ($("#wf-name")) $("#wf-name").value = wf.name;
+  if ($("#wf-phrase")) $("#wf-phrase").value = wf.phrase;
+  if ($("#wf-run-mode")) $("#wf-run-mode").value = wf.runMode || "sequence";
+
+  const container = $("#wf-steps");
+  if (!container) return;
+  if (!wf.steps.length) {
+    container.innerHTML = `<div class="empty-workflow">暂未添加步骤 — 使用上方 Agent 规划或手动添加设备</div>`;
+    return;
+  }
+  container.innerHTML = wf.steps.map((step, index) => {
+    const device = wfDevice(step.deviceId);
+    const action = wfAction(device, step.action);
+    if (!device || !action) {
+      return `<article class="workflow-step-card"><div class="step-drag-handle">!</div><div>
+        <strong>设备或动作已不可用</strong>
+        <button class="step-remove-btn" type="button" data-wf-remove="${index}">删除</button>
+      </div></article>`;
+    }
+    return `
+      <article class="workflow-step-card" draggable="true" data-wf-step="${index}">
+        <div class="step-drag-handle" title="拖拽排序">::</div>
+        <div>
+          <div class="step-head-row">
+            <div class="step-device-title">
+              <span class="step-index-badge">${index + 1}</span>
+              <span>${escapeHtml(device.name)}</span>
+            </div>
+            <button class="step-remove-btn" type="button" data-wf-remove="${index}">删除</button>
+          </div>
+          <div class="step-fields-row">
+            <label><span>设备</span>
+              <select data-wf-field="deviceId" data-wf-idx="${index}">
+                ${WF_DEVICES.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === step.deviceId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+              </select>
+            </label>
+            <label><span>动作</span>
+              <select data-wf-field="action" data-wf-idx="${index}">
+                ${device.actions.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === step.action ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}
+              </select>
+            </label>
+            <label><span>参数</span>
+              ${wfParameterEditor(action, step, index)}
+            </label>
+            <label><span>延迟(分)</span>
+              <input data-wf-field="delay" data-wf-idx="${index}" type="number" min="0" max="60" value="${step.delay}">
+            </label>
+          </div>
+        </div>
+      </article>`;
+  }).join("");
+  wfBindStepEvents();
+  lucide.createIcons();
+}
+
+function wfBindStepEvents() {
+  $$("[data-wf-field]").forEach((input) => {
+    input.addEventListener("change", () => {
+      const idx = Number(input.dataset.wfIdx);
+      const field = input.dataset.wfField;
+      wfState.workflow.steps[idx][field] = field === "delay" ? Number(input.value) : input.value;
+      if (field === "deviceId") {
+        const dev = wfDevice(input.value);
+        const firstAction = dev?.actions[0];
+        if (!firstAction) return;
+        wfState.workflow.steps[idx].action = firstAction.id;
+        wfState.workflow.steps[idx].value = wfDefault(firstAction);
+      }
+      if (field === "action") {
+        const dev = wfDevice(wfState.workflow.steps[idx].deviceId);
+        const action = wfAction(dev, input.value);
+        wfState.workflow.steps[idx].value = wfDefault(action);
+      }
+      wfRenderAll();
+    });
+  });
+  $$("[data-wf-remove]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      wfState.workflow.steps.splice(Number(btn.dataset.wfRemove), 1);
+      wfRenderAll();
+    });
+  });
+  $$(".workflow-step-card").forEach((card) => {
+    card.addEventListener("dragstart", () => {
+      wfState.draggedIndex = Number(card.dataset.wfStep);
+      card.classList.add("dragging");
+    });
+    card.addEventListener("dragend", () => card.classList.remove("dragging"));
+    card.addEventListener("dragover", (event) => event.preventDefault());
+    card.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const target = Number(card.dataset.wfStep);
+      if (wfState.draggedIndex === null || wfState.draggedIndex === target) return;
+      const [step] = wfState.workflow.steps.splice(wfState.draggedIndex, 1);
+      wfState.workflow.steps.splice(target, 0, step);
+      wfRenderAll();
+    });
+  });
+}
+
+function wfRenderStatePreview(activeDeviceId = null, statusClass = null) {
+  const container = $("#wf-state-preview");
+  if (!container) return;
+  container.innerHTML = WF_DEVICES.map((device) => `
+    <div class="state-item-row ${device.id === activeDeviceId ? statusClass || "" : ""}">
+      <div><strong>${escapeHtml(device.name)}</strong><span>${escapeHtml(device.room)} · ${escapeHtml(device.type)}</span></div>
+      <div class="state-val">${escapeHtml(device.state)}</div>
+    </div>
+  `).join("");
+}
+
+function wfRenderRunner() {
+  const wf = wfState.workflow;
+  const saved = wfState.saved[wfState.activeIndex] || wf;
+  if ($("#wf-runner-title")) $("#wf-runner-title").textContent = saved.name;
+  if ($("#wf-active-phrase")) $("#wf-active-phrase").textContent = saved.phrase;
+  if ($("#wf-runner-subtitle")) $("#wf-runner-subtitle").textContent = "请确认当前场景、启动口令和设备状态无误后执行。";
+  if ($("#wf-voice-cmd") && !$("#wf-voice-cmd").value.trim()) $("#wf-voice-cmd").value = saved.phrase;
+  wfUpdateCommandMatch();
+  wfRenderTimeline(-1, -1);
+  wfRenderStateList();
+}
+
+function wfUpdateCommandMatch() {
+  const cmd = ($("#wf-voice-cmd")?.value || "").trim();
+  const matchIdx = wfState.saved.findIndex((item) => item.phrase === cmd);
+  if (matchIdx >= 0) {
+    if ($("#wf-command-match")) {
+      $("#wf-command-match").textContent = `已匹配：${wfState.saved[matchIdx].name}`;
+      $("#wf-command-match").style.color = "var(--green)";
+    }
+  } else {
+    if ($("#wf-command-match")) {
+      $("#wf-command-match").textContent = "未匹配任何工作流";
+      $("#wf-command-match").style.color = "var(--amber)";
+    }
+  }
+  return matchIdx;
+}
+
+function wfRenderTimeline(runningIdx, doneIdx) {
+  const wf = wfState.workflow;
+  const container = $("#wf-timeline");
+  if (!container) return;
+  container.innerHTML = wf.steps.map((step, index) => {
+    const device = wfDevice(step.deviceId);
+    const action = wfAction(device, step.action);
+    const status = step.runtimeStatus || (index <= doneIdx ? "done" : index === runningIdx ? "running" : "pending");
+    const label = { done: "完成", running: "执行中", waiting: "延迟中", failed: "失败", pending: "等待" }[status] || "等待";
+    return `
+      <article class="timeline-entry ${status}">
+        <div class="timeline-idx">${index + 1}</div>
+        <div>
+          <strong>${escapeHtml(device?.name || step.deviceId)}</strong>
+          <span>${step.delay ? `延迟 ${escapeHtml(step.delay)} 分钟后 · ` : ""}${escapeHtml(action?.label || step.action)}${action?.parameter ? ` · ${escapeHtml(wfValueLabel(action, step.value))}` : ""}</span>
+        </div>
+        <div class="timeline-status-label">${label}</div>
+      </article>`;
+  }).join("");
+}
+
+function wfRenderStateList(activeDeviceId = null, statusClass = null) {
+  const container = $("#wf-state-list");
+  if (!container) return;
+  container.innerHTML = WF_DEVICES.map((device) => `
+    <div class="state-item-row ${device.id === activeDeviceId ? statusClass || "" : ""}">
+      <div><strong>${escapeHtml(device.name)}</strong><span>${escapeHtml(device.room)} · ${escapeHtml(device.type)}</span></div>
+      <div class="state-val">${escapeHtml(device.state)}</div>
+    </div>
+  `).join("");
+}
+
+/* ---- Agent 推理链路 ---- */
+const WF_REASONING_CHAIN = [
+  { key: "slot", label: "槽位提取", icon: "scan-search" },
+  { key: "intent", label: "意图识别", icon: "brain-circuit" },
+  { key: "env", label: "环境感知", icon: "thermometer" },
+  { key: "plan", label: "计划生成", icon: "git-branch" },
+  { key: "validate", label: "安全校验", icon: "shield-check" },
+  { key: "execute", label: "工具执行", icon: "play" },
+  { key: "verify", label: "结果验证", icon: "circle-check-big" },
+  { key: "reflect", label: "反思评估", icon: "lightbulb" },
+];
+
+function wfRenderReasoning(activeIndex) {
+  const container = $("#wf-reasoning-steps");
+  if (!container) return;
+  container.innerHTML = WF_REASONING_CHAIN.map((item, index) => `
+    <span class="reasoning-step ${index < activeIndex ? "done" : index === activeIndex ? "active" : ""}">
+      ${item.label}
+    </span>
+  `).join("");
+}
+
+async function wfRunWorkflow() {
+  if (wfState.running) return;
+  const matchIdx = wfUpdateCommandMatch();
+  if (matchIdx < 0) {
+    if ($("#wf-command-match")) {
+      $("#wf-command-match").textContent = "未匹配 — 请检查口令或先保存工作流";
+      $("#wf-command-match").style.color = "var(--red)";
+    }
+    return;
+  }
+  wfState.activeIndex = matchIdx;
+  const active = wfClone(wfState.saved[matchIdx]);
+  const validSteps = active.steps.filter((step) => wfAction(wfDevice(step.deviceId), step.action));
+  if (!validSteps.length || validSteps.length !== active.steps.length) {
+    toast("工作流中有设备或动作已不可用，请先编辑后再执行", true);
+    return;
+  }
+  wfState.running = true;
+  wfState.workflow = active;
+  if ($("#wf-run-btn")) $("#wf-run-btn").disabled = true;
+  if ($("#wf-exec-status")) $("#wf-exec-status").textContent = "执行中";
+  wfRenderStateList();
+  wfRenderReasoning(active.planning ? 4 : 3);
+  const failures = [];
+  let completed = 0;
+  try {
+    for (let i = 0; i < active.steps.length; i += 1) {
+      const step = active.steps[i];
+      if (Number(step.delay) > 0) {
+        step.runtimeStatus = "waiting";
+        wfRenderTimeline(i, completed - 1);
+        await wfWait(Number(step.delay) * 60_000);
+      }
+      step.runtimeStatus = "running";
+      wfRenderTimeline(i, completed - 1);
+      wfRenderReasoning(5);
+      wfRenderStateList(step.deviceId, "executing");
+      try {
+        const device = state.devices.find((item) => item.device_id === step.deviceId);
+        if (!device?.online) throw new Error(`${wfDevice(step.deviceId)?.name || step.deviceId}当前离线`);
+        const response = await controlDevice(device, wfPayload(step), `${device.name}工作流步骤已执行`);
+        if (!response) throw new Error("设备控制未返回成功结果");
+        step.runtimeStatus = "done";
+        completed += 1;
+        wfSyncDevices();
+        wfRenderReasoning(7);
+        wfRenderStateList(step.deviceId, "done");
+      } catch (error) {
+        step.runtimeStatus = "failed";
+        failures.push({ step, message: error.message });
+      }
+      wfRenderTimeline(-1, -1);
+    }
+    wfRenderReasoning(8);
+    if ($("#wf-exec-status")) $("#wf-exec-status").textContent = failures.length ? "部分失败" : "已完成";
+    const reflection = $("#wf-reflection");
+    const reflectionText = $("#wf-reflection-text");
+    if (reflection && reflectionText) {
+      reflection.hidden = false;
+      reflectionText.textContent = failures.length
+        ? `已向 Home Assistant 执行 ${active.steps.length} 个真实步骤，${completed} 个通过状态回读，${failures.length} 个失败：${failures.map((item) => item.message).join("；")}`
+        : `已通过 Home Assistant 完成 ${completed} 个真实设备步骤，每个步骤均以设备状态回读为准。`;
+    }
+  } finally {
+    wfState.running = false;
+    if ($("#wf-run-btn")) $("#wf-run-btn").disabled = false;
+  }
+}
+
+function wfWait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/* ---- 工作流保存与加载 ---- */
+function wfSaveWorkflow() {
+  wfSyncMeta();
+  const wf = wfSanitizeWorkflow(wfState.workflow);
+  if (!wf) {
+    toast("请至少添加一个当前在线且可控制的真实设备步骤", true);
+    return;
+  }
+  if (!wf.phrase) {
+    toast("请填写唯一的启动口令", true);
+    return;
+  }
+  wfState.workflow = wf;
+  const existing = wfState.saved.findIndex((item) => item.name === wf.name);
+  if (existing >= 0) {
+    wfState.activeIndex = existing;
+    wfState.saved[existing] = wfClone(wf);
+  } else {
+    wfState.saved.unshift(wfClone(wf));
+    wfState.activeIndex = 0;
+  }
+  wfPersistSaved();
+  wfRenderAll();
+}
+
+function wfSyncMeta() {
+  wfState.workflow.name = ($("#wf-name")?.value || "").trim() || "未命名工作流";
+  wfState.workflow.phrase = ($("#wf-phrase")?.value || "").trim();
+  wfState.workflow.runMode = "sequence";
+}
+
+function wfNewWorkflow() {
+  wfState.workflow = {
+    name: "新的工作流", phrase: "", runMode: "sequence", steps: [],
+  };
+  wfState.activeIndex = -1;
+  wfState.wfTab = "builder";
+  wfSwitchPane("builder");
+  wfRenderAll();
+}
+
+function wfSwitchPane(pane) {
+  wfState.wfTab = pane;
+  $$(".workflow-pane").forEach((el) => el.classList.toggle("active", el.dataset.workflowPane === pane));
+  $$(".workflow-heading-tabs button").forEach((btn) => btn.classList.toggle("active", btn.dataset.workflowTab === pane));
+}
+
+function wfRenderAll() {
+  wfRenderBuilder();
+  wfRenderStatePreview();
+  wfRenderRunner();
+  wfRenderStateList();
+  wfRenderReasoning(0);
+  wfRenderSavedList();
+}
+
+function wfRenderSavedList() {
+  const container = $("#wf-saved-list");
+  if (!container) return;
+  const countEl = $("#wf-saved-count");
+  if (countEl) countEl.textContent = wfState.saved.length;
+
+  if (!wfState.saved.length) {
+    container.innerHTML = `<div class="empty-workflow">暂无保存的工作流</div>`;
+    return;
+  }
+  container.innerHTML = wfState.saved.map((item, index) => `
+    <article class="saved-item ${index === wfState.activeIndex ? "active" : ""}" data-wf-open="${index}">
+      <strong>${escapeHtml(item.name)}</strong>
+      <span class="saved-meta">口令：${escapeHtml(item.phrase)} · ${item.steps.length} 个步骤</span>
+      <div class="saved-actions">
+        <button class="edit-btn" type="button" data-wf-edit="${index}">编辑</button>
+      </div>
+    </article>
+  `).join("");
+
+  // 绑定点击事件
+  $$("[data-wf-open]").forEach((card) => {
+    card.addEventListener("click", () => {
+      const idx = Number(card.dataset.wfOpen);
+      wfState.activeIndex = idx;
+      wfState.workflow = wfClone(wfState.saved[idx]);
+      if ($("#wf-name")) $("#wf-name").value = wfState.workflow.name;
+      if ($("#wf-phrase")) $("#wf-phrase").value = wfState.workflow.phrase;
+      if ($("#wf-run-mode")) $("#wf-run-mode").value = wfState.workflow.runMode || "sequence";
+      wfSwitchPane("runner");
+      wfRenderAll();
+    });
+  });
+  $$("[data-wf-edit]").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const idx = Number(btn.dataset.wfEdit);
+      wfState.activeIndex = idx;
+      wfState.workflow = wfClone(wfState.saved[idx]);
+      if ($("#wf-name")) $("#wf-name").value = wfState.workflow.name;
+      if ($("#wf-phrase")) $("#wf-phrase").value = wfState.workflow.phrase;
+      if ($("#wf-run-mode")) $("#wf-run-mode").value = wfState.workflow.runMode || "sequence";
+      wfSwitchPane("builder");
+      wfRenderAll();
+    });
+  });
+}
+
+function wfLoadSaved() {
+  try {
+    const cached = JSON.parse(localStorage.getItem("spacebutler.workflows") || "null");
+    wfState.saved = Array.isArray(cached) ? cached : [];
+  } catch {
+    wfState.saved = [];
+  }
+  wfState.activeIndex = wfState.saved.length ? 0 : -1;
+  wfState.workflow = wfState.saved.length
+    ? wfClone(wfState.saved[0])
+    : { name: "新的工作流", phrase: "", runMode: "sequence", steps: [] };
+}
+
+/* ---- 初始化入口 ---- */
+function initWorkflowView() {
+  wfLoadSaved();
+  wfRefreshDevices();
+
+  // 导航按钮：点击切换到工作流视图
+  $$("[data-view-target=\"workflow\"]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      switchView("workflow");
+      wfRenderAll();
+    });
+  });
+
+  // 工作流编排/执行 子视图切换
+  $$(".workflow-heading-tabs button[data-workflow-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      wfSwitchPane(btn.dataset.workflowTab);
+      wfRenderAll();
+    });
+  });
+
+  // 按钮事件绑定
+  $("#wf-save")?.addEventListener("click", wfSaveWorkflow);
+  $("#wf-new")?.addEventListener("click", wfNewWorkflow);
+  $("#wf-ai-generate")?.addEventListener("click", wfAiGenerate);
+  $("#wf-ai-prompt")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); wfAiGenerate(); }
+  });
+  $("#wf-run-btn")?.addEventListener("click", wfRunWorkflow);
+  $("#wf-voice-cmd")?.addEventListener("input", wfUpdateCommandMatch);
+  $("#wf-name")?.addEventListener("input", wfSyncMeta);
+  $("#wf-phrase")?.addEventListener("input", wfSyncMeta);
+  $("#wf-run-mode")?.addEventListener("change", wfSyncMeta);
+
+  // 添加设备按钮
+  $("#wf-add-device")?.addEventListener("click", () => {
+    const select = $("#wf-device-picker");
+    if (!select) return;
+    const device = wfDevice(select.value);
+    const action = device?.actions[0];
+    if (!device || !action) return;
+    wfState.workflow.steps.push({
+      deviceId: device.id, action: action.id,
+      value: wfDefault(action), delay: 0,
+    });
+    wfRenderAll();
+  });
+
+  // 折叠侧边栏
+  $("#wf-toggle-saved")?.addEventListener("click", () => {
+    const sidebar = $("#wf-saved-sidebar");
+    if (sidebar) {
+      sidebar.classList.toggle("collapsed");
+      const iconEl = document.querySelector("#wf-saved-sidebar .icon-button i");
+      if (sidebar.classList.contains("collapsed")) {
+        if (iconEl) iconEl.setAttribute("data-lucide", "panel-left-open");
+      } else {
+        if (iconEl) iconEl.setAttribute("data-lucide", "panel-left-close");
+      }
+      lucide.createIcons();
+    }
+  });
+
+  wfRenderAll();
+}

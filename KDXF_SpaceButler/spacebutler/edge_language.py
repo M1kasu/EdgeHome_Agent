@@ -118,6 +118,11 @@ class EdgeLanguageRouter:
     def __init__(self, client: EdgeLlmClient) -> None:
         self._client = client
 
+    @property
+    def client(self) -> EdgeLlmClient:
+        """Expose the validated planning client to other read-only planning surfaces."""
+        return self._client
+
     def apply_energy_feedback(self, memory: HouseholdMemory, member_id: str, text: str) -> LanguageRouteResult:
         deterministic = memory.apply_energy_feedback(member_id, text)
         if deterministic != "no_structured_energy_feedback":

@@ -83,6 +83,29 @@ class DashboardProjectionTests(unittest.TestCase):
         self.assertEqual(ui["primary_action"]["payload"], {"mode": "off", "temperature": 25.0})
         self.assertNotIn("heat", {option["value"] for option in mode_control["options"]})
 
+        workflow_modes = next(
+            action for action in ui["workflow_actions"] if action["id"] == "set_hvac_mode"
+        )
+        self.assertEqual(
+            workflow_modes["parameter"]["options"],
+            [{"value": "cool", "label": "制冷"}],
+        )
+        self.assertEqual(
+            {action["id"] for action in ui["workflow_actions"]},
+            {"turn_off", "set_hvac_mode", "set_temperature"},
+        )
+
+    def test_read_only_sensor_exposes_no_workflow_controls(self) -> None:
+        sensor = _device(
+            "loft_temperature",
+            "temperature",
+            "loft",
+            {"temperature": 24.5},
+            ["read_state"],
+        )
+
+        self.assertEqual(sensor["ui"]["workflow_actions"], [])
+
     def test_semantic_device_icons_are_decided_by_backend_descriptor(self) -> None:
         television = _device("living_tv", "switch", "living_room", {"power": "OFF"}, ["turn_on", "turn_off"])
         reading_light = _device(
@@ -120,6 +143,12 @@ class DashboardProjectionTests(unittest.TestCase):
             "if (state.floorSelectedId && !state.devices.some",
             frontend,
         )
+        self.assertNotIn("WF_PRESETS", frontend)
+        self.assertNotIn("light_living", frontend)
+        self.assertNotIn("curtain_living", frontend)
+        self.assertIn('api("/api/workflows/preview"', frontend)
+        self.assertIn("device.ui.workflow_actions", frontend)
+        self.assertIn("controlDevice(device, wfPayload(step)", frontend)
 
 
 if __name__ == "__main__":

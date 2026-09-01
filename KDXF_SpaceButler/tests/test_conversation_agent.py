@@ -122,6 +122,35 @@ class FakeHome:
 
 
 class ConversationAgentTest(unittest.TestCase):
+    def test_preview_validates_real_devices_without_history_or_control_side_effects(self) -> None:
+        home = FakeHome()
+        planner = FakePlanner(
+            {
+                "intent": "device_control",
+                "summary": "准备客厅观影",
+                "steps": [
+                    {"device_id": "living_room_tv", "action": "turn_on", "value": None},
+                    {
+                        "device_id": "living_room_main_light",
+                        "action": "set_brightness",
+                        "value": 35,
+                    },
+                ],
+            }
+        )
+        agent = ConversationAgent(home.inventory, home.execute, home.proactive, planner)
+        before = agent.history()
+
+        result = agent.preview("打开客厅电视，把客厅主灯调到35%")
+
+        self.assertEqual(result["plan"]["route"], "edge_llm")
+        self.assertEqual(
+            [step["device_id"] for step in result["plan"]["steps"]],
+            ["living_room_tv", "living_room_main_light"],
+        )
+        self.assertEqual(home.calls, [])
+        self.assertEqual(agent.history(), before)
+
     def test_cancel_is_rejected_while_another_request_is_being_planned(self) -> None:
         home = FakeHome()
         planner = BlockingPlanner(
