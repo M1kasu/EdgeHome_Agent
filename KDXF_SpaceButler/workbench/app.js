@@ -844,7 +844,7 @@ function renderEnergyHistory(payload) {
       <g stroke="#eceff4" stroke-width="1">
         ${[top, top + (bottom - top) / 3, top + (bottom - top) * 2 / 3, bottom].map((y) => `<line x1="${left}" y1="${y}" x2="${right}" y2="${y}"/>`).join("")}
       </g>
-      <g fill="#727272" font-size="10">
+      <g fill="#6b7280" font-size="11">
         <text x="2" y="${top + 4}">${formatPowerLabel(maximum)}</text>
         <text x="2" y="${top + (bottom - top) / 3 + 4}">${formatPowerLabel(maximum * 2 / 3)}</text>
         <text x="2" y="${top + (bottom - top) * 2 / 3 + 4}">${formatPowerLabel(maximum / 3)}</text>
@@ -1087,7 +1087,13 @@ function haTileIconClass(device) {
 }
 
 function haSourceLabel(device) {
-  return { esphome: "ESPHome", mqtt: "MQTT" }[device.source] || "";
+  // 全部设备都经 ESPHome 接入，来源徽标已无信息量；改为展示品牌生态。
+  return device.brand?.name || "";
+}
+
+function brandAccent(device) {
+  const accent = device.brand?.accent;
+  return /^#[0-9a-f]{6}$/i.test(accent || "") ? accent : "";
 }
 
 function renderHaTile(device, { showBadge = true } = {}) {
@@ -1104,7 +1110,7 @@ function renderHaTile(device, { showBadge = true } = {}) {
           <strong>${escapeHtml(device.ui?.name || device.name)}</strong>
           <span>${escapeHtml(device.online ? device.ui?.state_label || "状态未知" : "不可用")}</span>
         </span>
-        ${badge ? `<span class="ha-tile-badge">${escapeHtml(badge)}</span>` : ""}
+        ${badge ? `<span class="ha-tile-badge is-brand"${brandAccent(device) ? ` style="--brand-accent:${brandAccent(device)}"` : ""}>${escapeHtml(badge)}</span>` : ""}
       </button>
       ${renderHaFeatures(device)}
     </article>`;
@@ -1206,6 +1212,163 @@ async function loadConversation() {
   } catch (error) {
     toast(error.message, true);
   }
+}
+
+// --- 演示控制台 ---------------------------------------------------------
+// 录制脚本集中在这里：每个场景有确定的提问、预期现象和旁白，避免临场回忆。
+const DEMO_SCENARIOS = [
+  {
+    id: "planning",
+    title: "AI 动态规划",
+    prompt: "我准备在客厅看会电影，有点热，灯别太亮。",
+    expect: "按当前状态生成「关窗帘 + 调灯 + 开空调」，逐项 HA 回读验证",
+    narration: "一句自然语言，模型先把它编译成环境约束，再生成候选计划并预测未来状态评分选优。执行后每一步都回读真实设备状态。",
+    action: "chat",
+  },
+  {
+    id: "satisfied",
+    title: "已满足则不动",
+    prompt: "现在适合看电影了吗？",
+    expect: "判定目标已满足，零设备命令",
+    narration: "同样的目标再问一次，它重新观察状态后输出零动作。这是 Agent 和 Chatbot 的分界：不会因为你又说了一遍就重复执行。",
+    action: "chat",
+  },
+  {
+    id: "override",
+    title: "人工纠正学习",
+    prompt: "",
+    expect: "时间线出现 Human Override，偏好置信度上升",
+    narration: "我手动把灯调到 45%。系统把它识别为人工纠正，而不是自己的动作或环境漂移，写入偏好观测。重复几次之后，以后的规划会自动偏向这个亮度。",
+    action: "override",
+  },
+  {
+    id: "disturbance",
+    title: "扰动自治重规划",
+    prompt: "",
+    expect: "目标偏离 → 自动重规划 → 重新执行验证",
+    narration: "现在我通过 ESPHome 固件服务注入热量，制造真实的物理扰动。接下来我不说话——它自己感知到目标偏离，重新规划并执行。",
+    action: "disturbance",
+  },
+];
+
+function renderDemoScenarios() {
+  const container = $("#demo-scenario-list");
+  if (!container) return;
+  container.innerHTML = DEMO_SCENARIOS.map((scenario, index) => `
+    <article class="demo-scenario">
+      <div class="demo-scenario-head">
+        <span class="demo-scenario-index">${index + 1}</span>
+        <strong>${escapeHtml(scenario.title)}</strong>
+        <button class="secondary compact-button" data-demo-scenario="${escapeHtml(scenario.id)}">
+          <i data-lucide="play"></i><span>${scenario.action === "chat" ? "发送提问" : "触发"}</span>
+        </button>
+      </div>
+      ${scenario.prompt ? `<p class="demo-scenario-prompt">「${escapeHtml(scenario.prompt)}」</p>` : ""}
+      <p class="demo-scenario-expect"><i data-lucide="target"></i>${escapeHtml(scenario.expect)}</p>
+      <p class="demo-scenario-narration">${escapeHtml(scenario.narration)}</p>
+    </article>`).join("");
+  refreshIcons();
+}
+
+function renderDemoBrands(brands) {
+  const container = $("#demo-brand-list");
+  if (!container) return;
+  if (!Array.isArray(brands) || !brands.length) {
+    container.innerHTML = `<div class="empty-state compact"><span>读取设备后显示</span></div>`;
+    return;
+  }
+  container.innerHTML = brands.map((brand) => {
+    const accent = /^#[0-9a-f]{6}$/i.test(brand.accent || "") ? brand.accent : "";
+    return `
+      <div class="demo-brand-row"${accent ? ` style="--brand-accent:${accent}"` : ""}>
+        <span class="demo-brand-dot"></span>
+        <strong>${escapeHtml(brand.name || "")}</strong>
+        <span class="demo-brand-proto">${escapeHtml(brand.protocol || "")}</span>
+        <span class="demo-brand-count">${Number(brand.device_count) || 0} 台</span>
+      </div>`;
+  }).join("");
+}
+
+function renderDemoReadiness(payload) {
+  const pill = $("#demo-ready-pill");
+  const list = $("#demo-check-list");
+  if (!pill || !list) return;
+  const ready = Boolean(payload?.ready);
+  pill.textContent = ready ? "可以开拍" : "尚未就绪";
+  pill.className = `demo-ready-pill ${ready ? "is-ready" : "is-blocked"}`;
+  const checks = Array.isArray(payload?.checks) ? payload.checks : [];
+  list.innerHTML = checks.map((check) => `
+    <li class="demo-check ${check.ok ? "is-ok" : "is-bad"}">
+      <i data-lucide="${check.ok ? "circle-check" : "circle-alert"}"></i>
+      <span>${escapeHtml(check.name || "")}</span>
+      ${check.detail ? `<em>${escapeHtml(check.detail)}</em>` : ""}
+    </li>`).join("");
+  renderDemoBrands(payload?.brands);
+  refreshIcons();
+}
+
+async function runDemoSelfCheck() {
+  const button = $("#demo-selfcheck");
+  if (button) button.disabled = true;
+  try {
+    renderDemoReadiness(await api("/api/demo/readiness"));
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function runDemoReset() {
+  const button = $("#demo-reset");
+  const log = $("#demo-reset-log");
+  if (button) button.disabled = true;
+  if (log) {
+    log.hidden = false;
+    log.innerHTML = `<div class="demo-reset-line is-busy"><i data-lucide="loader-circle"></i><span>正在通过真实设备链路复位，窗帘全行程约十几秒…</span></div>`;
+    refreshIcons();
+  }
+  try {
+    const payload = await api("/api/demo/reset", { method: "POST", body: "{}" });
+    if (payload.devices) renderInventory(payload);
+    if (log) {
+      const steps = Array.isArray(payload.reset) ? payload.reset : [];
+      log.innerHTML = steps.map((step) => `
+        <div class="demo-reset-line ${step.ok ? "is-ok" : "is-bad"}">
+          <i data-lucide="${step.ok ? "check" : "x"}"></i>
+          <span>${escapeHtml(step.step || "")}</span>
+          ${step.error ? `<em>${escapeHtml(step.error)}</em>` : ""}
+        </div>`).join("");
+      refreshIcons();
+    }
+    toast(payload.ok ? "已复位到开拍状态" : "复位有步骤失败，请查看明细", !payload.ok);
+    await Promise.all([loadConversation(), runDemoSelfCheck()]);
+  } catch (error) {
+    toast(error.message, true);
+    if (log) log.innerHTML = `<div class="demo-reset-line is-bad"><i data-lucide="x"></i><span>${escapeHtml(error.message)}</span></div>`;
+    refreshIcons();
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function runDemoScenario(id) {
+  const scenario = DEMO_SCENARIOS.find((item) => item.id === id);
+  if (!scenario) return;
+  if (scenario.action === "chat") {
+    switchView("assistant");
+    await sendChat(scenario.prompt);
+    return;
+  }
+  if (scenario.action === "override") {
+    switchView("agent");
+    await post("/api/agent/demo-override", { brightness: 45 },
+      "已通过 Home Assistant 调整主灯，等待智能体识别");
+    return;
+  }
+  switchView("agent");
+  await post("/api/agent/demo-disturbance", { temperature: 31 },
+    "已注入热扰动，智能体将自动重规划");
 }
 
 async function loadAgentActivity() {
@@ -1945,6 +2108,13 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("#confirm-chat-plan").addEventListener("click", () => chatPlanAction("/api/chat/confirm"));
   $("#cancel-chat-plan").addEventListener("click", () => chatPlanAction("/api/chat/cancel"));
+  $("#demo-selfcheck")?.addEventListener("click", runDemoSelfCheck);
+  $("#demo-reset")?.addEventListener("click", runDemoReset);
+  $("#demo-scenario-list")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-demo-scenario]");
+    if (button) runDemoScenario(button.dataset.demoScenario);
+  });
+  renderDemoScenarios();
   $("#agent-demo-override")?.addEventListener("click", async () => {
     await post("/api/agent/demo-override", { brightness: 45 }, "已通过 Home Assistant 调整主灯，等待智能体识别");
     await loadAgentActivity();

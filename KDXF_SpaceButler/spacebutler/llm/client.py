@@ -97,6 +97,24 @@ class LlmClient:
         except (OSError, HTTPError, URLError):
             return False
 
+    def context_window(self) -> int | None:
+        """Per-slot context size, or None when the server does not report it.
+
+        `/health` 和 `/v1/models` 通过不代表能跑规划：llama.cpp 会把 `-c` 均分给各
+        slot，槽位上下文装不下带设备清单的 prompt 时结构化调用直接 500，规划会静默
+        退回确定性回退。就绪自检需要能提前发现这种情况。
+        """
+        try:
+            with urlopen(f"{self._base_url}/props", timeout=3) as response:
+                if response.status != 200:
+                    return None
+                payload = json.loads(response.read().decode("utf-8"))
+        except (OSError, HTTPError, URLError, ValueError):
+            return None
+        settings = payload.get("default_generation_settings")
+        value = settings.get("n_ctx") if isinstance(settings, dict) else None
+        return int(value) if isinstance(value, (int, float)) and value > 0 else None
+
     # ---- structured output -------------------------------------------
     def chat_json(
         self,

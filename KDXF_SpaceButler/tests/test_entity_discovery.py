@@ -38,7 +38,8 @@ def test_wrong_domains_and_arbitrary_suffixes_never_become_targets():
     bindings, diagnostics = discover_entities(states)
     assert bindings == {}
     assert diagnostics["ha_entity_count"] == 4
-    assert len(diagnostics["missing_devices"]) == 5
+    # 没有任何实体可绑定时，注册表里每台设备都必须被报告为缺失。
+    assert len(diagnostics["missing_devices"]) == len(ESPHOME_DEVICE_RECORDS)
 
 
 def test_duplicate_entities_require_explicit_binding_even_if_one_is_unavailable(monkeypatch):

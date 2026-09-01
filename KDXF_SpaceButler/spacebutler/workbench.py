@@ -18,17 +18,24 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .agent import SpaceButlerAgent
 from .agent.runtime import AgentRuntime
+from .brands import (
+    BrandBindingStore,
+    brand_ecosystems,
+    brand_for_device,
+    brand_record,
+    brand_summary,
+    translate_command,
+)
 from .conversation import ConversationAgent
 from .control_context import ControlContextRegistry, ManualControlContext
 from .edge_language import EdgeLanguageRouter
 from .esphome_registry import (
     DEFAULT_ESPHOME_HOST,
-    ESPHOME_ALIAS_REGISTRY,
+    NODE_ROLE_BY_DEVICE,
     device_record,
     discover_entities,
     esphome_nodes,
 )
-from .mqtt_registry import MQTT_ALIAS_REGISTRY, device_record as mqtt_device_record
 from .home_assistant import EnergyEntityMap, HomeAssistantClient, HomeAssistantRuntime, HomeAssistantSpaceAdapter
 from .interaction import InteractionResponse, SpaceButlerSession
 from .memory import HouseholdMemory
@@ -36,6 +43,7 @@ from .models import DeviceState, EnvironmentState, HouseholdMember, MemberRole, 
 from .proactive import ENERGY_RULE_ID, NIGHT_SAFETY_RULE_ID, ProactiveRuleStore
 from .runtime import execute_and_verify
 from .voice import CHUNK_BYTES, VoiceError, VoiceService
+from .workflows import WorkflowStore, match_trigger
 
 
 class WorkbenchController:
@@ -50,6 +58,8 @@ class WorkbenchController:
         self._memory = memory
         self._agent = SpaceButlerAgent(memory)
         self._language_router = language_router
+        # 语义兜底触发复用规划模型；离线时三级匹配自动退化为前两级确定性匹配。
+        self._agent_llm_client = agent_llm_client
         self._session = self._new_session()
         self._last_response: object | None = None
         self._last_night_response: dict[str, object] | None = None
@@ -60,6 +70,10 @@ class WorkbenchController:
         self._night_monitor_thread: threading.Thread | None = None
         self._unoccupied_minutes = 23
         self._rule_store = ProactiveRuleStore(memory.database_path)
+        # 品牌归属和工作流都要跨重启保留，并且必须在服务端——对话框触发要看得到它们。
+        self._brand_bindings = BrandBindingStore(memory.database_path)
+        self._workflows = WorkflowStore(memory.database_path)
+        self._pending_trigger: dict[str, object] | None = None
         self._lock = threading.RLock()
         # 自治智能体运行时：反事实规划 + 偏好学习 + 物理反馈重规划。
         self._agent_runtime = AgentRuntime(
@@ -210,7 +224,7 @@ class WorkbenchController:
                 "unoccupied_minutes": unoccupied_minutes,
                 "threshold_minutes": threshold_minutes,
                 "power_w": power_w,
-                "data_source": "device_registry + Home Assistant REST + MQTT",
+                "data_source": "device_registry + Home Assistant REST + ESPHome",
             }
 
     def night_safety(self) -> dict[str, object]:
@@ -308,7 +322,7 @@ class WorkbenchController:
                     "last_occupied": self._night_presence_state,
                     "error": self._night_monitor_error,
                 },
-                "data_source": "presence + illuminance entities / Home Assistant REST + MQTT",
+                "data_source": "presence + illuminance entities / Home Assistant REST + ESPHome",
             }
 
     def start_night_monitor(self, interval_seconds: float = 1.0) -> None:
@@ -349,7 +363,7 @@ class WorkbenchController:
         while not self._night_monitor_stop.wait(interval_seconds):
             try:
                 self.poll_night_safety()
-            except Exception as error:  # keep monitoring through transient HA/MQTT outages
+            except Exception as error:  # keep monitoring through transient HA/ESPHome outages
                 with self._lock:
                     self._night_monitor_error = str(error)
 
@@ -567,7 +581,8 @@ class WorkbenchController:
                 if isinstance(item.get("entity_id"), str)
             }
             resolved, diagnostics = discover_entities(list(ha_states.values()))
-            devices = self._projected_devices(ha_states, resolved)
+            bindings = self._brand_bindings.bindings()
+            devices = self._projected_devices(ha_states, resolved, bindings)
             rooms = _room_summaries(devices)
             dashboard = _dashboard_projection(devices, rooms)
             favorite_ids = set(dashboard["favorite_device_ids"])
@@ -575,7 +590,17 @@ class WorkbenchController:
                 ui = device.get("ui")
                 if isinstance(ui, dict):
                     ui["favorite"] = str(device.get("device_id", "")) in favorite_ids
+            unbound = [
+                {"device_id": device["device_id"], "name": device["name"],
+                 "room_name": device["room_name"], "type": device["type"],
+                 "capabilities": device["capabilities"]}
+                for device in devices
+                if device.get("brand") is None
+            ]
             return {"devices": devices, "rooms": rooms, "dashboard": dashboard,
+                    "brands": brand_summary(bindings),
+                    "unbound_devices": unbound,
+                    "ecosystems": brand_ecosystems(),
                     "diagnostics": {key: value for key, value in diagnostics.items() if key != "ha_entities"}}
 
     def device_diagnostics(self) -> dict[str, object]:
@@ -592,26 +617,21 @@ class WorkbenchController:
         cls,
         ha_states: dict[str, dict[str, object]],
         resolved_entities: dict[str, str] | None = None,
+        brand_bindings: dict[str, str] | None = None,
     ) -> list[dict[str, object]]:
-        """Project every deployed ESPHome and MQTT entity that HA already exposes."""
+        """Project every deployed ESPHome entity that HA already exposes."""
         if resolved_entities is None:
             resolved_entities, _ = discover_entities([
                 {**state, "entity_id": entity_id}
                 for entity_id, state in ha_states.items()
             ])
-        # ESPHome 先扫：同 device_id 时 ESPHome 固件记录优先于 MQTT 容器。
-        esphome = cls._resolved_esphome_devices(ha_states, resolved_entities)
-        mqtt = cls._registry_devices(
-            ha_states,
-            _mqtt_match,
-            excluded_device_ids={str(item["device_id"]) for item in esphome},
-        )
-        return esphome + mqtt
+        return cls._resolved_esphome_devices(ha_states, resolved_entities, brand_bindings)
 
     @staticmethod
     def _resolved_esphome_devices(
         ha_states: dict[str, dict[str, object]],
         resolved_entities: dict[str, str],
+        brand_bindings: dict[str, str] | None = None,
     ) -> list[dict[str, object]]:
         """Project ESPHome devices from the unique mapping used by control and diagnostics."""
         devices: list[dict[str, object]] = []
@@ -638,57 +658,137 @@ class WorkbenchController:
                 "feedback": None,
                 "discovered": True,
                 "capabilities": list(record.get("capabilities", [])),
-            }
-            device["ui"] = _device_ui(device)
-            devices.append(device)
-        return devices
-
-    @staticmethod
-    def _registry_devices(
-        ha_states: dict[str, dict[str, object]],
-        matcher: Any,
-        excluded_device_ids: set[str] | None = None,
-    ) -> list[dict[str, object]]:
-        """Synthesize inventory records for entities matching one registry."""
-        devices: list[dict[str, object]] = []
-        seen: set[str] = set()
-        blocked = excluded_device_ids or set()
-        for entity_id, ha_state in sorted(ha_states.items()):
-            record = matcher(entity_id, ha_state)
-            if record is None:
-                continue
-            device_id = str(record["device_id"])
-            if device_id in blocked or device_id in seen:
-                continue
-            seen.add(device_id)
-            device_type = str(record["type"])
-            value = str(ha_state.get("state", "unavailable"))
-            room = str(record["room"])
-            device: dict[str, object] = {
-                "device_id": device_id,
-                "entity_id": entity_id,
-                "type": device_type,
-                "name": record["name"],
-                "room": room,
-                "room_name": _ESPHOME_ROOM_NAMES.get(room, room),
-                "source": str(record.get("source", "esphome")),
-                "online": value not in {"unknown", "unavailable"},
-                "readonly": device_type in _ESPHOME_READONLY_TYPES,
-                "state": _projected_device_state(device_type, ha_state, record, ha_states),
-                "ha_state": ha_state,
-                "feedback": None,
-                "discovered": True,
-                "capabilities": list(record.get("capabilities", [])),
+                "brand": brand_for_device(device_id, brand_bindings),
+                "node_role": NODE_ROLE_BY_DEVICE.get(device_id),
             }
             device["ui"] = _device_ui(device)
             devices.append(device)
         return devices
 
     def add_device(self, payload: dict[str, object]) -> dict[str, object]:
-        raise ValueError("工作台不创建设备；请在 ESPHome 节点或 MQTT 设备容器中注册真实设备")
+        raise ValueError("工作台不创建设备；请在 ESPHome 节点固件中注册真实设备")
 
     def remove_device(self, device_id: str) -> dict[str, object]:
         raise ValueError("设备由节点固件和设备容器定义，不能从工作台删除")
+
+    def brand_inventory(self) -> dict[str, object]:
+        """Ecosystems the adapter layer supports, plus current binding state."""
+        with self._lock:
+            bindings = self._brand_bindings.bindings()
+            devices = self._projected_devices(self._ha_state_index(), None, bindings)
+            by_brand: dict[str, list[dict[str, object]]] = {}
+            unbound: list[dict[str, object]] = []
+            for device in devices:
+                entry = {
+                    "device_id": device["device_id"],
+                    "name": device["name"],
+                    "room_name": device["room_name"],
+                    "type": device["type"],
+                    "capabilities": device["capabilities"],
+                    "online": device["online"],
+                }
+                brand = device.get("brand")
+                if isinstance(brand, dict):
+                    by_brand.setdefault(str(brand["brand_id"]), []).append(entry)
+                else:
+                    unbound.append(entry)
+            return {
+                "ecosystems": [
+                    {**record, "devices": by_brand.get(str(record["brand_id"]), [])}
+                    for record in brand_ecosystems()
+                ],
+                "unbound_devices": unbound,
+                "bound_total": len(devices) - len(unbound),
+                "device_total": len(devices),
+            }
+
+    def discover_brand_devices(self, brand_id: str) -> dict[str, object]:
+        """Report which real devices this ecosystem could adopt right now.
+
+        Discovery reads Home Assistant only. It reports capabilities the ESPHome
+        entity actually exposes and how this brand would address them; it does not
+        contact any vendor gateway or cloud, and it changes no binding.
+        """
+        with self._lock:
+            brand = brand_record(brand_id)
+            if brand is None:
+                raise ValueError(f"未知品牌生态：{brand_id}")
+            bindings = self._brand_bindings.bindings()
+            devices = self._projected_devices(self._ha_state_index(), None, bindings)
+            candidates: list[dict[str, object]] = []
+            for device in devices:
+                device_id = str(device["device_id"])
+                owner = device.get("brand")
+                candidates.append({
+                    "device_id": device_id,
+                    "name": device["name"],
+                    "room_name": device["room_name"],
+                    "type": device["type"],
+                    "capabilities": device["capabilities"],
+                    "online": device["online"],
+                    "entity_id": device["entity_id"],
+                    "adoptable": owner is None,
+                    "current_brand": owner,
+                    # 纳管后同一个意图会被翻译成什么，配对前就能看到。
+                    "sample_translation": translate_command(
+                        device_id,
+                        _sample_payload(str(device["type"])),
+                        {device_id: brand_id},
+                    ),
+                })
+            return {
+                "brand": {**brand, "pairing_steps": list(brand.get("pairing_steps", ()))},
+                "candidates": candidates,
+                "adoptable_count": sum(1 for item in candidates if item["adoptable"]),
+            }
+
+    def adopt_brand_devices(self, brand_id: str, device_ids: list[str]) -> dict[str, object]:
+        """Bind real devices to one ecosystem and report the translated commands."""
+        with self._lock:
+            brand = brand_record(brand_id)
+            if brand is None:
+                raise ValueError(f"未知品牌生态：{brand_id}")
+            if not device_ids:
+                raise ValueError("请至少选择一台设备")
+            known = {str(record["device_id"]) for record in self._projected_devices(
+                self._ha_state_index(), None, self._brand_bindings.bindings(),
+            )}
+            adopted: list[dict[str, object]] = []
+            for device_id in device_ids:
+                if device_id not in known:
+                    raise ValueError(f"未在 Home Assistant 中发现该真实设备：{device_id}")
+                self._brand_bindings.adopt(device_id, brand_id)
+                record = device_record(device_id) or {}
+                adopted.append({
+                    "device_id": device_id,
+                    "name": record.get("name", device_id),
+                    "translation": translate_command(
+                        device_id,
+                        _sample_payload(str(record.get("type", ""))),
+                        self._brand_bindings.bindings(),
+                    ),
+                })
+            return {"ok": True, "brand": brand, "adopted": adopted, **self.devices()}
+
+    def release_brand_device(self, device_id: str) -> dict[str, object]:
+        """Unbind one device. The ESPHome entity keeps working and stays controllable."""
+        with self._lock:
+            if not self._brand_bindings.release(device_id):
+                raise ValueError(f"该设备当前未绑定任何品牌生态：{device_id}")
+            return {"ok": True, "released": device_id, **self.devices()}
+
+    def reset_brand_bindings(self) -> dict[str, object]:
+        """Restore factory brand mapping so the onboarding demo is repeatable."""
+        with self._lock:
+            self._brand_bindings.reset()
+            return {"ok": True, **self.devices()}
+
+    def _ha_state_index(self) -> dict[str, dict[str, object]]:
+        return {
+            str(item.get("entity_id")): item
+            for item in self._ha.states()
+            if isinstance(item.get("entity_id"), str)
+        }
 
     def control_device(self, device_id: str, payload: dict[str, object]) -> dict[str, object]:
         with self._lock:
@@ -778,7 +878,132 @@ class WorkbenchController:
             return {"response": to_jsonable(self._last_response), "status": self.status()}
 
     def chat(self, text: str) -> dict[str, object]:
-        return self._agent_runtime.submit_text(text)
+        """Route one utterance: saved workflow trigger first, else Agent planning.
+
+        Fixed actions the user already fixed into a workflow should not be
+        re-planned — that costs seconds and can produce a different plan. So the
+        deterministic tiers run first. A semantic match asks for confirmation
+        instead of moving devices on a probabilistic decision.
+        """
+        normalized = text.strip()
+        if not normalized:
+            raise ValueError("message must contain 1 to 500 characters")
+        match = match_trigger(self._workflows, normalized, self._agent_llm_client)
+        if match is None:
+            self._pending_trigger = None
+            return self._agent_runtime.submit_text(normalized)
+        if match.needs_confirmation:
+            self._pending_trigger = {"text": normalized, "match": match.to_json()}
+            self._agent_runtime.record_turn("user", normalized)
+            self._agent_runtime.record_turn(
+                "assistant",
+                f"这听起来像「{match.workflow.name}」（{match.reason}）。"
+                f"确认后我按 {len(match.workflow.steps)} 个固定动作执行。",
+            )
+            return {**self.chat_history(), "pending_trigger": match.to_json()}
+        return self._run_matched_workflow(normalized, match)
+
+    def confirm_trigger(self) -> dict[str, object]:
+        """Execute the workflow a semantic match proposed."""
+        pending = self._pending_trigger
+        if pending is None:
+            raise ValueError("当前没有待确认的工作流触发")
+        raw_match = pending["match"]
+        workflow_id = str(raw_match["workflow"]["workflow_id"])  # type: ignore[index]
+        workflow = self._workflows.get(workflow_id)
+        if workflow is None:
+            self._pending_trigger = None
+            raise ValueError("该工作流已被删除")
+        self._pending_trigger = None
+        run = self.run_workflow(workflow_id)
+        self._agent_runtime.record_turn("assistant", _workflow_run_summary(workflow.name, run))
+        return {**self.chat_history(), "workflow_run": run, "trigger": raw_match}
+
+    def dismiss_trigger(self) -> dict[str, object]:
+        """Drop the proposal without touching any device."""
+        if self._pending_trigger is None:
+            raise ValueError("当前没有待确认的工作流触发")
+        self._pending_trigger = None
+        self._agent_runtime.record_turn("assistant", "已取消，没有执行任何动作。")
+        return self.chat_history()
+
+    def _run_matched_workflow(self, text: str, match: object) -> dict[str, object]:
+        workflow = match.workflow  # type: ignore[attr-defined]
+        self._agent_runtime.record_turn("user", text)
+        run = self.run_workflow(workflow.workflow_id)
+        self._agent_runtime.record_turn("assistant", _workflow_run_summary(workflow.name, run))
+        return {
+            **self.chat_history(),
+            "workflow_run": run,
+            "trigger": match.to_json(),  # type: ignore[attr-defined]
+        }
+
+    def workflows(self) -> dict[str, object]:
+        """Saved workflows, with the trigger texts the chat box will honour."""
+        with self._lock:
+            return {
+                "workflows": [item.to_json() for item in self._workflows.all()],
+                "pending_trigger": (
+                    self._pending_trigger["match"] if self._pending_trigger else None
+                ),
+            }
+
+    def save_workflow(self, payload: dict[str, object]) -> dict[str, object]:
+        with self._lock:
+            workflow = self._workflows.save(payload)
+            return {"ok": True, "workflow": workflow.to_json(), **self.workflows()}
+
+    def delete_workflow(self, workflow_id: str) -> dict[str, object]:
+        with self._lock:
+            if not self._workflows.delete(workflow_id):
+                raise ValueError(f"工作流不存在：{workflow_id}")
+            return {"ok": True, **self.workflows()}
+
+    def run_workflow(self, workflow_id: str) -> dict[str, object]:
+        """Execute one saved workflow step by step through the real control path.
+
+        Steps run sequentially and每步 verifies real Home Assistant state, exactly
+        like a manual control. A failed step is recorded and execution continues,
+        so one offline device does not silently swallow the rest of the scene.
+        Step delays are honoured only up to a demo-safe cap; longer waits belong
+        to the proactive rules, not a blocking HTTP request.
+        """
+        workflow = self._workflows.get(workflow_id)
+        if workflow is None:
+            raise ValueError(f"工作流不存在：{workflow_id}")
+        started = time.monotonic()
+        results: list[dict[str, object]] = []
+        for index, step in enumerate(workflow.steps):
+            entry: dict[str, object] = {
+                "index": index,
+                "device_id": step.device_id,
+                "action": step.action,
+                "delay_minutes": step.delay_minutes,
+            }
+            payload = _workflow_step_payload(step)
+            if payload is None:
+                entry.update({"status": "failed", "error": f"不支持的动作：{step.action}"})
+                results.append(entry)
+                continue
+            try:
+                response = self.control_device(step.device_id, payload)
+                entry.update({
+                    "status": "done",
+                    "expected": response.get("expected"),
+                    "brand_translation": response.get("brand_translation"),
+                })
+            except (ValueError, RuntimeError, OSError) as error:
+                entry.update({"status": "failed", "error": str(error)})
+            results.append(entry)
+        done = sum(1 for item in results if item["status"] == "done")
+        return {
+            "workflow_id": workflow.workflow_id,
+            "name": workflow.name,
+            "steps": results,
+            "done_count": done,
+            "failed_count": len(results) - done,
+            "elapsed_seconds": round(time.monotonic() - started, 2),
+        }
 
     def preview_workflow(self, text: str) -> dict[str, object]:
         """Generate a grounded workflow plan without executing any device action."""
@@ -844,14 +1069,10 @@ class WorkbenchController:
                 if isinstance(item.get("entity_id"), str)
             }
             devices = self._projected_devices(ha_states)
-            by_source: dict[str, list[dict[str, object]]] = {"esphome": [], "mqtt": []}
-            for device in devices:
-                source = str(device.get("source", ""))
-                if source in by_source:
-                    by_source[source].append(device)
+            online_devices = [device for device in devices if device.get("online")]
             resolved_roles = {
-                _ESPHOME_NODE_ROLE_BY_TYPE.get(str(device["type"]), "")
-                for device in by_source["esphome"]
+                NODE_ROLE_BY_DEVICE.get(str(device["device_id"]), "")
+                for device in online_devices
             }
             return {
                 "host_hint": DEFAULT_ESPHOME_HOST,
@@ -865,10 +1086,7 @@ class WorkbenchController:
                     }
                     for role, host, port in esphome_nodes()
                 ],
-                "projected": {
-                    "esphome": len(by_source["esphome"]),
-                    "mqtt": len(by_source["mqtt"]),
-                },
+                "projected": {"esphome": len(devices), "online": len(online_devices)},
             }
 
     def agent_status(self) -> dict[str, object]:
@@ -907,13 +1125,22 @@ class WorkbenchController:
             "status": agent_status,
             "mode": "llm" if llm_available else "unavailable",
         }
+        planning_client = getattr(self, "_agent_llm_client", None)
         return {
             "workbench": workbench,
             "home_assistant": home_assistant,
             "llm": llm,
+            "llm_channels": self._llm_channels(),
+            "llm_last_channel": getattr(planning_client, "last_channel", None),
+            "llm_last_latency_seconds": getattr(planning_client, "last_latency_seconds", None),
             "esphome_devices": devices,
             "agent": agent,
         }
+
+    def _llm_channels(self) -> list[dict[str, object]]:
+        """Describe the configured planning channels; empty when single-channel."""
+        channels = getattr(getattr(self, "_agent_llm_client", None), "channels", None)
+        return list(channels) if isinstance(channels, list) else []
 
     def demo_override(self, brightness: int) -> dict[str, object]:
         """Simulate a human override by REALLY changing the light through HA."""
@@ -932,6 +1159,116 @@ class WorkbenchController:
             {"target_temperature": float(temperature)},
         )
         return {"disturbance_sent": {"temperature": float(temperature)}, "status": self.status()}
+
+    def demo_reset(self) -> dict[str, object]:
+        """Restore the recording start state through the real device path.
+
+        每一步都是真实的 HA 服务调用，不是界面上的假状态。窗帘全行程 10s，
+        因此本调用可能耗时十几秒；前端需要给出进行中提示。
+        """
+        steps: list[dict[str, object]] = []
+
+        def run(label: str, action: Any) -> None:
+            try:
+                action()
+                steps.append({"step": label, "ok": True})
+            except (RuntimeError, ValueError, OSError) as error:
+                steps.append({"step": label, "ok": False, "error": str(error)})
+
+        # 环境温度先回到 30.2°C，观影场景才有"有点热"的真实前提。
+        run("环境温度 30.2°C", lambda: self._ha.call_service(
+            "esphome",
+            os.environ.get("ESPHOME_HEAT_INJECTION_SERVICE", "living_room_ac_demo_heat_injection"),
+            {"target_temperature": 30.2},
+        ))
+        run("客厅主灯 80%", lambda: self.control_device(
+            "living_room_main_light", {"power": "on", "brightness": 80}))
+        run("客厅窗帘全开", lambda: self.control_device(
+            "living_room_curtain", {"position": 100}))
+        run("客厅空调关闭", lambda: self.control_device(
+            "living_room_ac", {"mode": "off"}))
+        run("客厅电视开启", lambda: self.control_device(
+            "living_room_tv", {"power": "on"}))
+        run("客厅窗户打开", lambda: self._ha.call_service(
+            "esphome", "living_room_aux_demo_set_window", {"opened": True}))
+        run("卧室阅读灯关闭", lambda: self.control_device(
+            "bedroom_reading_light", {"power": "off"}))
+        run("卧室起身传感器复位", lambda: self._ha.call_service(
+            "esphome", "bedroom_demo_set_presence", {"occupied": False}))
+        run("卧室照度 8 lx", lambda: self._ha.call_service(
+            "esphome", "bedroom_demo_set_illuminance", {"lux": 8.0}))
+        # 清空会话与学习到的偏好，让每次录制从同一起点开始。
+        run("清空对话", self.clear_chat)
+        run("清空家庭偏好", self.clear_preferences)
+        return {"reset": steps, "ok": all(bool(item["ok"]) for item in steps), **self.devices()}
+
+    def demo_presence(self, occupied: bool) -> dict[str, object]:
+        """Drive a real presence edge on the bedroom node for the night-safety demo."""
+        self._ha.call_service(
+            "esphome", "bedroom_demo_set_presence", {"occupied": bool(occupied)})
+        return {"presence_sent": {"occupied": bool(occupied)}}
+
+    def demo_illuminance(self, lux: float) -> dict[str, object]:
+        """Set the bedroom illuminance reading through the firmware service."""
+        if not 0 <= float(lux) <= 2000:
+            raise ValueError("lux must be between 0 and 2000")
+        self._ha.call_service(
+            "esphome", "bedroom_demo_set_illuminance", {"lux": float(lux)})
+        return {"illuminance_sent": {"lux": float(lux)}}
+
+    def demo_readiness(self) -> dict[str, object]:
+        """One aggregated go/no-go check so recording never starts on a broken stack."""
+        health = self.health()
+        agent = health.get("agent") if isinstance(health.get("agent"), dict) else {}
+        payload = self.devices()
+        devices = payload["devices"] if isinstance(payload["devices"], list) else []
+        online = [item for item in devices if item.get("online")]
+        missing = payload["diagnostics"]["missing_devices"]  # type: ignore[index]
+        context_window = self._planner_context_window()
+        # 槽位上下文装不下带设备清单的规划 prompt 时，结构化调用会 500 并静默退回
+        # 确定性规划——录出来就是"AI 没参与"。自检必须在开拍前拦住这种情况。
+        context_ok = context_window is None or context_window >= _MIN_PLANNER_CONTEXT
+        checks = [
+            {"name": "工作台", "ok": health.get("workbench") == "ok"},
+            {"name": "Home Assistant", "ok": health.get("home_assistant") == "ok"},
+            {"name": "规划模型", "ok": health.get("llm") == "ok",
+             "detail": _channel_detail(health)},
+            {"name": "模型上下文容量", "ok": context_ok,
+             "detail": (f"每槽 {context_window} tokens"
+                        if context_window is not None else "服务端未上报，跳过检查")
+             + (f"，规划需要 ≥ {_MIN_PLANNER_CONTEXT}" if not context_ok else "")},
+            {"name": "Agent 运行时", "ok": _agent_runtime_ready(agent),
+             "detail": _agent_runtime_detail(agent)},
+            {"name": "设备全部在线", "ok": len(devices) > 0 and len(online) == len(devices),
+             "detail": f"{len(online)}/{len(devices)} 在线"},
+            {"name": "实体绑定无缺失", "ok": not missing},
+        ]
+        return {
+            "ready": all(bool(item["ok"]) for item in checks),
+            "checks": checks,
+            "device_total": len(devices),
+            "device_online": len(online),
+            "brands": brand_summary(self._brand_bindings.bindings()),
+            "planner_context_window": context_window,
+        }
+
+    def _planner_context_window(self) -> int | None:
+        """Per-slot context of the channel that actually plans, or None when unknown.
+
+        规划走 ``_agent_llm_client``（双通道时是路由器）。云端通道没有槽位上限，
+        路由器会返回 None，自检据此跳过这项检查——那是为 llama.cpp 设计的。
+        """
+        getter = getattr(getattr(self, "_agent_llm_client", None), "context_window", None)
+        if not callable(getter):
+            # 兼容旧的单通道注入：语言路由器包着 client。
+            router = getattr(self, "_language_router", None)
+            getter = getattr(getattr(router, "client", None), "context_window", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter()
+        except (RuntimeError, OSError):
+            return None
 
     def chat_history(self) -> dict[str, object]:
         return self._agent_runtime.history()
@@ -987,7 +1324,7 @@ class WorkbenchController:
     def _esphome_entity_id(self, device_id: str) -> str | None:
         # devices() 使用可重入锁，运行时解析实际 entity_id（可能带 _2 后缀）。
         for item in self.devices()["devices"]:
-            if str(item.get("device_id")) == device_id and item.get("source") in {"esphome", "mqtt"}:
+            if str(item.get("device_id")) == device_id and item.get("source") == "esphome":
                 return str(item["entity_id"])
         return None
 
@@ -1016,6 +1353,11 @@ class WorkbenchController:
         return {
             "controlled": device_id,
             "expected": expected,
+            # 适配器翻译结果：同一个规范化指令在该设备所属生态里的原生报文。
+            # 描述性字段，执行仍然走上面的 Home Assistant 服务调用。
+            "brand_translation": translate_command(
+                device_id, payload, self._brand_bindings.bindings()
+            ),
             "night_response": None,
             **self.devices(),
         }
@@ -1105,54 +1447,161 @@ class WorkbenchController:
 
 
 # ESPHome 实体按 friendly_name 别名 + domain 匹配；entity_id 始终运行时解析。
-# 注册表来自真实 Ubuntu 四节点，不再与 MQTT 模拟设备合并。
-_ESPHOME_DEVICE_REGISTRY = ESPHOME_ALIAS_REGISTRY
-_MQTT_DEVICE_REGISTRY = MQTT_ALIAS_REGISTRY
+# 全部设备统一由 ESPHome 节点提供，不再有 MQTT 来源。
 _ESPHOME_NODE_LABELS = {
     "light": "客厅主灯节点",
     "curtain": "客厅窗帘节点",
     "ac": "客厅空调节点",
     "presence": "客厅人体存在节点",
+    "bedroom": "卧室节点",
+    "living_room_aux": "客厅电视与窗户节点",
 }
-# 节点角色与设备类型的对应关系，用于判断某节点是否已被 HA 解析。
-_ESPHOME_NODE_ROLE_BY_TYPE = {
-    "light": "light",
-    "curtain": "curtain",
-    "climate": "ac",
-    "presence": "presence",
-}
+# 规划 prompt 含全部设备清单与实时状态；低于这个槽位上下文，结构化调用会 500。
+# llama.cpp 把 `-c` 均分给 slot，所以 2048/4=512 是不够的。
+_MIN_PLANNER_CONTEXT = 4096
+# 一次本地规划要 75–145 秒，期间后台 tick 必然滞后，runtime_health 会转 degraded。
+# 那只说明它在忙，不是坏了；超过这个秒数才当作真的卡死。
+_AGENT_STALL_SECONDS = 420.0
+
+
+def _channel_detail(health: dict[str, object]) -> str:
+    """Say which planning channels exist and which one served last."""
+    channels = health.get("llm_channels")
+    if not isinstance(channels, list) or not channels:
+        return "单通道；模型不可用时 Agent 会安全拒绝执行，不会退回固定脚本"
+    parts = []
+    for channel in channels:
+        mark = "可用" if channel.get("ready") else "不可用"
+        parts.append(f"{channel.get('label')}（{mark}）")
+    served = health.get("llm_last_channel")
+    latency = health.get("llm_last_latency_seconds")
+    tail = ""
+    if served:
+        label = "云端" if served == "cloud" else "本地"
+        tail = f"；上次走{label}"
+        if isinstance(latency, (int, float)):
+            tail += f" {latency:.1f}s"
+    return " + ".join(parts) + tail
+
+
+def _agent_runtime_ready(agent: dict[str, object]) -> bool:
+    """Busy planning is not a failure; a dead thread or fatal error is.
+
+    录完一个场景马上点自检时 tick 正好滞后，不能因此告诉用户"不能开拍"。
+    """
+    if not agent.get("thread_alive") or agent.get("fatal_error"):
+        return False
+    if str(agent.get("mode")) != "llm":
+        return False
+    age = agent.get("last_tick_age_seconds")
+    return not isinstance(age, (int, float)) or age <= _AGENT_STALL_SECONDS
+
+
+def _agent_runtime_detail(agent: dict[str, object]) -> str:
+    age = agent.get("last_tick_age_seconds")
+    if agent.get("fatal_error"):
+        return f"致命错误：{agent['fatal_error']}"
+    if not agent.get("thread_alive"):
+        return "后台线程未存活"
+    if str(agent.get("mode")) != "llm":
+        return f"mode={agent.get('mode')}，模型未参与规划"
+    if isinstance(age, (int, float)) and age > _AGENT_STALL_SECONDS:
+        return f"tick 已滞后 {age:.0f}s，可能卡死"
+    if isinstance(age, (int, float)) and age > 10:
+        return f"正在规划中（tick 滞后 {age:.0f}s）"
+    return "空闲待命"
 _ESPHOME_ROOM_NAMES = {"living_room": "客厅", "bedroom": "卧室", "home": "全屋"}
 _ESPHOME_READONLY_TYPES = {"presence", "contact", "illuminance", "temperature"}
 
+# 配对预览用的代表性指令：让用户在纳管前就看清该品牌的报文长什么样。
+_SAMPLE_PAYLOADS: dict[str, dict[str, object]] = {
+    "light": {"power": "on", "brightness": 45},
+    "switch": {"power": "on"},
+    "curtain": {"position": 30},
+    "climate": {"mode": "cool", "temperature": 25.0},
+}
+
+
+def _sample_payload(device_type: str) -> dict[str, object]:
+    """A representative normalized command for this device type."""
+    return dict(_SAMPLE_PAYLOADS.get(device_type, {"power": "on"}))
+
+
+def _workflow_step_payload(step: object) -> dict[str, object] | None:
+    """Translate one saved workflow step into a device control payload.
+
+    Action ids mirror the ``ui.workflow_actions`` the device projection publishes.
+    Returns ``None`` when the action does not exist for this device type, so the
+    run records an explicit failure instead of sending something unintended.
+    """
+    record = device_record(str(step.device_id))  # type: ignore[attr-defined]
+    if record is None:
+        return None
+    device_type = str(record["type"])
+    action = str(step.action)  # type: ignore[attr-defined]
+    value = step.value  # type: ignore[attr-defined]
+    if device_type in {"light", "switch"}:
+        if action == "turn_on":
+            return {"power": "on"}
+        if action == "turn_off":
+            return {"power": "off"}
+        if action == "set_brightness" and device_type == "light":
+            brightness = _coerce_int(value)
+            return None if brightness is None else {"power": "on", "brightness": brightness}
+        return None
+    if device_type == "curtain":
+        if action == "turn_on":
+            return {"position": 100}
+        if action == "turn_off":
+            return {"position": 0}
+        if action == "set_position":
+            position = _coerce_int(value)
+            return None if position is None else {"position": position}
+        return None
+    if device_type == "climate":
+        if action == "turn_off":
+            return {"mode": "off"}
+        if action == "set_hvac_mode":
+            mode = str(value or "").strip().lower()
+            return {"mode": mode} if mode in {"cool", "heat"} else None
+        if action == "set_temperature":
+            temperature = _coerce_float(value)
+            return None if temperature is None else {"mode": "cool", "temperature": temperature}
+        return None
+    return None
+
+
+def _coerce_int(value: object) -> int | None:
+    try:
+        return int(float(str(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(value: object) -> float | None:
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _workflow_run_summary(name: str, run: dict[str, object]) -> str:
+    """Describe a workflow run honestly: failures are named, not smoothed over."""
+    done = int(run.get("done_count", 0))
+    failed = int(run.get("failed_count", 0))
+    if failed == 0:
+        return f"已执行工作流「{name}」，{done} 个动作全部完成并回读验证。"
+    reasons = "；".join(
+        str(step.get("error", "未知原因"))
+        for step in run.get("steps", [])  # type: ignore[union-attr]
+        if isinstance(step, dict) and step.get("status") == "failed"
+    )
+    return f"工作流「{name}」完成 {done} 个动作，{failed} 个失败：{reasons}"
+
 
 def _esphome_record(device_id: str) -> dict[str, object] | None:
-    """Return the registry record for a projected device id, ESPHome first."""
-    return device_record(device_id) or mqtt_device_record(device_id)
-
-
-def _esphome_match(entity_id: str, ha_state: dict[str, object]) -> dict[str, object] | None:
-    """Match one HA entity to the ESPHome registry by friendly name and domain."""
-    return _registry_match(entity_id, ha_state, _ESPHOME_DEVICE_REGISTRY, "esphome")
-
-
-def _mqtt_match(entity_id: str, ha_state: dict[str, object]) -> dict[str, object] | None:
-    """Match one HA entity to the deployed MQTT registry by friendly name and domain."""
-    return _registry_match(entity_id, ha_state, _MQTT_DEVICE_REGISTRY, "mqtt")
-
-
-def _registry_match(
-    entity_id: str,
-    ha_state: dict[str, object],
-    registry: dict[str, dict[str, object]],
-    source: str,
-) -> dict[str, object] | None:
-    """Resolve one HA entity against a friendly-name registry, tagging its source."""
-    attributes = ha_state.get("attributes")
-    friendly = str(attributes.get("friendly_name", "")) if isinstance(attributes, dict) else ""
-    record = registry.get(friendly)
-    if record is None or not entity_id.startswith(f"{record['domain']}."):
-        return None
-    return {**record, "entity_id": entity_id, "source": source}
+    """Return the ESPHome registry record for a projected device id."""
+    return device_record(device_id)
 
 
 def _projected_device_state(
@@ -1163,12 +1612,23 @@ def _projected_device_state(
 ) -> dict[str, object]:
     """Project one entity state, folding in a companion power meter when configured."""
     state = _esphome_device_state(device_type, ha_state)
-    power_entity_id = record.get("power_entity_id")
-    if isinstance(power_entity_id, str):
+    power_entity_id = _resolved_power_entity(record)
+    if power_entity_id is not None:
         measured = _numeric_entity_state(ha_states.get(power_entity_id))
         if measured is not None:
             state["power_w"] = measured
     return state
+
+
+def _resolved_power_entity(record: dict[str, object]) -> str | None:
+    """Resolve a companion power meter, letting .env override a suffixed entity_id."""
+    override_env = record.get("power_entity_env")
+    if isinstance(override_env, str):
+        override = os.environ.get(override_env, "").strip()
+        if override:
+            return override
+    default = record.get("power_entity_id")
+    return default if isinstance(default, str) else None
 
 
 def _numeric_entity_state(ha_state: dict[str, object] | None) -> float | None:
@@ -1246,7 +1706,7 @@ def _device_icon(device: dict[str, object], default: str) -> str:
     return default
 
 
-_SOURCE_LABELS = {"esphome": "ESPHome 固件", "mqtt": "MQTT 设备"}
+_SOURCE_LABELS = {"esphome": "ESPHome 固件"}
 
 
 def _source_readout(device: dict[str, object], suffix: str) -> str:
@@ -2201,6 +2661,15 @@ def serve_workbench(
             if path == "/api/esphome-nodes":
                 self._api(controller.esphome_nodes)
                 return
+            if path == "/api/demo/readiness":
+                self._api(controller.demo_readiness)
+                return
+            if path == "/api/brands":
+                self._api(controller.brand_inventory)
+                return
+            if path == "/api/workflows":
+                self._api(controller.workflows)
+                return
             self._static()
 
         def do_POST(self) -> None:  # noqa: N802
@@ -2242,11 +2711,36 @@ def serve_workbench(
                 "/api/workflows/preview": lambda body: controller.preview_workflow(
                     str(body.get("text", ""))
                 ),
+                "/api/workflows": controller.save_workflow,
+                "/api/workflows/run": lambda body: controller.run_workflow(
+                    str(body.get("workflow_id", ""))
+                ),
+                "/api/chat/trigger/confirm": lambda _body: controller.confirm_trigger(),
+                "/api/chat/trigger/dismiss": lambda _body: controller.dismiss_trigger(),
+                "/api/brands/discover": lambda body: controller.discover_brand_devices(
+                    str(body.get("brand_id", ""))
+                ),
+                "/api/brands/adopt": lambda body: controller.adopt_brand_devices(
+                    str(body.get("brand_id", "")),
+                    [str(item) for item in body.get("device_ids", [])]
+                    if isinstance(body.get("device_ids"), list) else [],
+                ),
+                "/api/brands/release": lambda body: controller.release_brand_device(
+                    str(body.get("device_id", ""))
+                ),
+                "/api/brands/reset": lambda _body: controller.reset_brand_bindings(),
                 "/api/chat/confirm": lambda _body: controller.confirm_chat(),
                 "/api/chat/cancel": lambda _body: controller.cancel_chat(),
                 "/api/chat/clear": lambda _body: controller.clear_chat(),
                 "/api/agent/demo-override": lambda body: controller.demo_override(int(body.get("brightness", 45))),
                 "/api/agent/demo-disturbance": lambda body: controller.demo_disturbance(float(body.get("temperature", 31))),
+                "/api/demo/reset": lambda _body: controller.demo_reset(),
+                "/api/demo/presence": lambda body: controller.demo_presence(
+                    _body_bool(body.get("occupied", True))
+                ),
+                "/api/demo/illuminance": lambda body: controller.demo_illuminance(
+                    float(body.get("lux", 8))
+                ),
                 "/api/fault": lambda body: controller.set_fault(
                     str(body.get("mode", "none")),
                     int(body.get("delay_ms", 0)),
@@ -2265,6 +2759,9 @@ def serve_workbench(
                 self._voice("DELETE", path)
                 return
             parts = path.strip("/").split("/")
+            if len(parts) == 3 and parts[:2] == ["api", "workflows"]:
+                self._api(lambda: controller.delete_workflow(unquote(parts[2])))
+                return
             if len(parts) != 3 or parts[:2] != ["api", "devices"]:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
                 return

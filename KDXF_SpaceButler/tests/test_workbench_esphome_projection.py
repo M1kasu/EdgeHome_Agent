@@ -5,6 +5,7 @@ import threading
 import unittest
 from unittest.mock import Mock
 
+from spacebutler.brands import BrandBindingStore
 from spacebutler.workbench import (
     WorkbenchController,
     _power_timeline,
@@ -18,9 +19,9 @@ def _named(value: str, friendly: str, extra: dict[str, object] | None = None) ->
 
 
 def _mixed_states() -> dict[str, dict[str, object]]:
-    """One entity per deployed node, covering both transports."""
+    """One entity per deployed ESPHome node; MQTT 设备已全部迁入固件节点。"""
     return {
-        # ESPHome 节点
+        # 客厅四节点
         "light.spacebutler_living_room_main_2": _named("on", "Living Room Light", {"brightness": 128}),
         "climate.spacebutler_living_room_ac_2": _named(
             "cool", "Living Room AC", {"temperature": 25.5, "current_temperature": 26.0}
@@ -28,13 +29,14 @@ def _mixed_states() -> dict[str, dict[str, object]]:
         "cover.spacebutler_living_room_curtain_2": _named("closed", "Living Room Curtain", {"current_position": 0}),
         "binary_sensor.spacebutler_living_room_presence": _named("on", "Living Room Presence"),
         "sensor.spacebutler_living_room_temperature": _named("25.4", "Living Room Temperature"),
-        # MQTT 容器
-        "light.spacebutler_bedroom_reading_light": _named("on", "卧室阅读灯", {"brightness": 128}),
-        "switch.spacebutler_living_room_tv": _named("off", "客厅电视"),
-        "sensor.spacebutler_living_room_tv_power": _named("1.5", "客厅电视 功耗"),
-        "binary_sensor.spacebutler_living_room_window_sensor": _named("on", "客厅窗户传感器"),
-        "binary_sensor.spacebutler_bedroom_presence_sensor": _named("on", "卧室起身传感器"),
-        "sensor.spacebutler_bedroom_illuminance_sensor": _named("8", "卧室照度传感器"),
+        # 卧室节点
+        "light.bedroom_reading_light": _named("on", "Bedroom Reading Light", {"brightness": 128}),
+        "binary_sensor.bedroom_presence": _named("on", "Bedroom Presence"),
+        "sensor.bedroom_illuminance": _named("8", "Bedroom Illuminance"),
+        # 客厅辅助节点
+        "switch.living_room_tv": _named("off", "Living Room TV"),
+        "sensor.living_room_tv_power": _named("1.5", "Living Room TV Power"),
+        "binary_sensor.living_room_window": _named("on", "Living Room Window"),
     }
 
 
@@ -42,22 +44,40 @@ def _controller(ha_states: dict[str, dict[str, object]]) -> WorkbenchController:
     controller = object.__new__(WorkbenchController)
     controller._lock = threading.RLock()
     controller._ha = Mock()
+    # 出厂品牌映射，不落盘；投影要读它填充设备卡的品牌徽标。
+    controller._brand_bindings = BrandBindingStore()
     controller._ha.states = Mock(
         return_value=[{"entity_id": key, **value} for key, value in ha_states.items()]
     )
     return controller
 
 
-class MqttProjectionTests(unittest.TestCase):
-    def test_both_transports_are_projected_with_their_real_source(self) -> None:
+class EsphomeProjectionTests(unittest.TestCase):
+    def test_every_device_is_projected_from_the_single_esphome_transport(self) -> None:
         devices = WorkbenchController._projected_devices(_mixed_states())
 
         by_id = {str(item["device_id"]): item for item in devices}
-        self.assertEqual(by_id["living_room_main_light"]["source"], "esphome")
-        self.assertEqual(by_id["bedroom_reading_light"]["source"], "mqtt")
-        self.assertEqual(by_id["living_room_window_sensor"]["source"], "mqtt")
+        # 迁移后不再有第二种来源；任何 mqtt 标记都是回归。
+        self.assertEqual({str(item["source"]) for item in devices}, {"esphome"})
+        self.assertIn("bedroom_reading_light", by_id)
+        self.assertIn("living_room_window_sensor", by_id)
         # 两个空间都应出现，仪表盘才能分组展示。
         self.assertEqual({str(item["room"]) for item in devices}, {"living_room", "bedroom"})
+
+    def test_each_device_carries_its_brand_for_cross_vendor_display(self) -> None:
+        devices = WorkbenchController._projected_devices(_mixed_states())
+
+        brands = {
+            str(item["device_id"]): (item["brand"] or {}).get("brand_id")
+            for item in devices
+        }
+        self.assertEqual(brands["living_room_main_light"], "mijia")
+        self.assertEqual(brands["living_room_curtain"], "aqara")
+        self.assertEqual(brands["living_room_ac"], "midea")
+        self.assertEqual(brands["living_room_tv"], "harmony")
+        self.assertEqual(brands["bedroom_reading_light"], "hue")
+        # 每台投影出来的设备都必须能说出品牌，否则前端会出现空徽标。
+        self.assertTrue(all(value for value in brands.values()))
 
     def test_window_contact_resolves_to_its_real_open_state(self) -> None:
         """主动规则依赖门窗传感器；投影缺失会让界面显示假的“关闭”。"""
@@ -108,14 +128,11 @@ class MqttProjectionTests(unittest.TestCase):
     def test_source_readout_names_the_real_transport(self) -> None:
         devices = WorkbenchController._projected_devices(_mixed_states())
 
-        esphome_sensor = next(
-            item for item in devices if item["device_id"] == "living_room_temperature_sensor"
-        )
-        mqtt_sensor = next(
-            item for item in devices if item["device_id"] == "bedroom_presence_sensor"
-        )
-        self.assertIn("ESPHome", str(esphome_sensor["ui"]["state_secondary"]))
-        self.assertIn("MQTT", str(mqtt_sensor["ui"]["state_secondary"]))
+        for device_id in ("living_room_temperature_sensor", "bedroom_presence_sensor"):
+            sensor = next(item for item in devices if item["device_id"] == device_id)
+            readout = str(sensor["ui"]["state_secondary"])
+            self.assertIn("ESPHome", readout)
+            self.assertNotIn("MQTT", readout)
 
 
 class EsphomeNodeStatusTests(unittest.TestCase):
@@ -124,8 +141,11 @@ class EsphomeNodeStatusTests(unittest.TestCase):
 
         report = controller.esphome_nodes()
 
-        self.assertEqual(report["projected"], {"esphome": 5, "mqtt": 5})
-        self.assertEqual({node["role"] for node in report["nodes"]}, {"light", "curtain", "ac", "presence"})
+        self.assertEqual(report["projected"], {"esphome": 10, "online": 10})
+        self.assertEqual(
+            {node["role"] for node in report["nodes"]},
+            {"light", "curtain", "ac", "presence", "bedroom", "living_room_aux"},
+        )
         self.assertTrue(all(node["connected"] for node in report["nodes"]))
 
     def test_missing_node_is_reported_as_unresolved(self) -> None:
@@ -137,7 +157,7 @@ class EsphomeNodeStatusTests(unittest.TestCase):
 
         curtain = next(node for node in report["nodes"] if node["role"] == "curtain")
         self.assertFalse(curtain["connected"])
-        self.assertEqual(report["projected"]["esphome"], 4)
+        self.assertEqual(report["projected"]["esphome"], 9)
 
 
 class PowerHistoryTests(unittest.TestCase):

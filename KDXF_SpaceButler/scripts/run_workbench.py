@@ -20,7 +20,7 @@ from ha_bootstrap import (  # noqa: E402
     wait_until_ready,
 )
 from spacebutler import EdgeLanguageRouter, EdgeLlmClient, HomeAssistantClient, HouseholdMemory  # noqa: E402
-from spacebutler.llm import LlmClient  # noqa: E402
+from spacebutler.llm import ClaudeClient, LlmClient, build_router  # noqa: E402
 from spacebutler.configuration import load_project_environment  # noqa: E402
 from spacebutler.workbench import WorkbenchController, serve_workbench  # noqa: E402
 
@@ -62,6 +62,14 @@ def main() -> int:
                 language_router = EdgeLanguageRouter(edge_llm_client)
     except OSError:
         pass
+    # 双通道：云端优先（快），本地边缘兜底（断网/限流/未配 Key 时仍可规划）。
+    cloud_client = ClaudeClient.from_env()
+    planning_client = build_router(cloud_client, LlmClient.from_env())
+    for channel in getattr(planning_client, "channels", []):
+        print(f"LLM channel: {channel['label']} model={channel['model'] or '-'} "
+              f"ready={channel['ready']}", flush=True)
+    if cloud_client is not None and cloud_client.init_error:
+        print(f"LLM cloud channel unavailable: {cloud_client.init_error}", flush=True)
     controller = WorkbenchController(
         HomeAssistantClient(
             ha_url,
@@ -70,7 +78,7 @@ def main() -> int:
         ),
         HouseholdMemory(ROOT / "deployment" / "runtime" / "agent" / "household_memory.db"),
         language_router,
-        LlmClient.from_env(),
+        planning_client,
     )
     server = serve_workbench(controller, ROOT / "workbench", args.host, args.port)
     controller.start_night_monitor()

@@ -35,6 +35,9 @@
       <button class="rail-button" data-view-target="workflow" title="工作流">
         <i data-lucide="workflow"></i><span>工作流</span>
       </button>
+      <button class="rail-button" data-view-target="demo" title="演示控制台">
+        <i data-lucide="clapperboard"></i><span>演示控制台</span>
+      </button>
       <button class="rail-button rail-refresh" id="refresh-all" title="刷新">
         <i data-lucide="refresh-cw"></i><span>刷新状态</span>
       </button>
@@ -92,6 +95,25 @@
             </div>
             <div class="chat-thread" id="chat-thread">
               <div class="loading-state"><i data-lucide="loader-circle"></i><span>读取会话</span></div>
+            </div>
+            <div class="trigger-confirm" id="trigger-confirm" hidden>
+              <div class="trigger-confirm-head">
+                <i data-lucide="workflow"></i>
+                <div>
+                  <strong id="trigger-confirm-name">工作流</strong>
+                  <span id="trigger-confirm-reason"></span>
+                </div>
+                <span class="trigger-confidence" id="trigger-confirm-confidence"></span>
+              </div>
+              <div class="trigger-confirm-steps" id="trigger-confirm-steps"></div>
+              <div class="trigger-confirm-actions">
+                <button class="secondary compact-button" id="trigger-dismiss">
+                  <i data-lucide="x"></i><span>不是这个</span>
+                </button>
+                <button class="confirm-button compact-button" id="trigger-confirm-run">
+                  <i data-lucide="play"></i><span>确认执行</span>
+                </button>
+              </div>
             </div>
             <div class="prompt-strip" aria-label="快捷任务">
               <button data-chat-prompt="打开卧室阅读灯到55%，关闭客厅电视，把客厅窗帘调到30%，空调设为25度制冷">
@@ -602,7 +624,16 @@
                       <option value="sequence">按顺序执行</option>
                     </select>
                   </label>
+                  <label class="span-2">
+                    <span>别名（可选，逗号分隔）</span>
+                    <input id="wf-aliases" placeholder="例如：晚安，我要睡了" maxlength="200">
+                  </label>
                 </div>
+                <p class="trigger-hint">
+                  <i data-lucide="message-square-quote"></i>
+                  保存后可直接在「AI 管家」对话框或语音里说出口令触发。换个说法时由本地模型语义匹配，
+                  命中后先确认再执行。
+                </p>
 
                 <div class="ai-generate-bar">
                   <div class="ai-generate-copy">
@@ -700,6 +731,100 @@
           </div>
         </div>
       </section>
+
+      <section class="view" data-view="demo">
+        <div class="page-heading">
+          <div>
+            <span class="eyebrow">RECORDING CONSOLE</span>
+            <h2>演示控制台</h2>
+          </div>
+          <div class="demo-heading-actions">
+            <button class="secondary compact-button" id="demo-selfcheck">
+              <i data-lucide="stethoscope"></i><span>就绪自检</span>
+            </button>
+            <button class="primary compact-button" id="demo-reset">
+              <i data-lucide="rotate-ccw"></i><span>一键重置</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="demo-grid">
+          <section class="panel demo-readiness-panel">
+            <div class="panel-heading">
+              <h3>开拍前就绪</h3>
+              <span class="demo-ready-pill" id="demo-ready-pill">未自检</span>
+            </div>
+            <ul class="demo-check-list" id="demo-check-list">
+              <li class="empty-state compact"><span>点击「就绪自检」检查工作台、HA、模型、Agent 和设备</span></li>
+            </ul>
+            <div class="demo-reset-log" id="demo-reset-log" hidden></div>
+          </section>
+
+          <section class="panel demo-brand-panel">
+            <div class="panel-heading">
+              <h3>已接入品牌生态</h3>
+              <button class="secondary compact-button" id="brand-reset">
+                <i data-lucide="rotate-ccw"></i><span>恢复出厂映射</span>
+              </button>
+            </div>
+            <div class="demo-brand-list" id="demo-brand-list">
+              <div class="empty-state compact"><span>读取设备后显示</span></div>
+            </div>
+            <p class="demo-note">
+              各品牌报文由适配器层翻译；当前执行底座是 ESPHome 虚拟节点经 Home Assistant 下发，
+              不代表已调用厂商云。
+            </p>
+          </section>
+
+          <section class="panel brand-onboard-panel">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">DEVICE ONBOARDING</span>
+                <h3>接入品牌设备</h3>
+              </div>
+              <span class="plan-status idle" id="brand-onboard-status">选择生态开始</span>
+            </div>
+            <div class="brand-onboard-bar">
+              <label>
+                <span>目标生态</span>
+                <select id="brand-picker"></select>
+              </label>
+              <button class="primary compact-button" id="brand-discover">
+                <i data-lucide="radar"></i><span>扫描设备</span>
+              </button>
+            </div>
+            <div class="brand-pairing-steps" id="brand-pairing-steps"></div>
+            <div class="brand-candidate-list" id="brand-candidate-list">
+              <div class="empty-state compact"><span>扫描后显示可纳管设备</span></div>
+            </div>
+            <div class="brand-onboard-actions">
+              <button class="primary" id="brand-adopt" disabled>
+                <i data-lucide="link"></i><span>纳管所选设备</span>
+              </button>
+            </div>
+            <p class="demo-note">
+              扫描只读取 Home Assistant 的真实实体与能力，不联系厂商网关或云。纳管改变的是
+              <strong>归属与报文翻译</strong>；下发仍走 Home Assistant，并回读真实状态。
+            </p>
+          </section>
+
+          <section class="panel brand-bound-panel">
+            <div class="panel-heading">
+              <h3>当前归属</h3>
+              <span class="muted-hint">释放后设备仍在线，可被其他生态重新纳管</span>
+            </div>
+            <div class="brand-bound-list" id="brand-bound-list"></div>
+          </section>
+
+          <section class="panel demo-scenario-panel">
+            <div class="panel-heading">
+              <h3>录制脚本</h3>
+              <span class="muted-hint">点击场景会切到「AI 管家」并自动发送</span>
+            </div>
+            <div class="demo-scenario-list" id="demo-scenario-list"></div>
+          </section>
+        </div>
+      </section>
     </section>
   </main>
 
@@ -717,7 +842,7 @@
       </div>
       <div class="dialog-note">
         <i data-lucide="radio-tower"></i>
-        <span id="esphome-node-note">设备由 ESPHome 节点固件和 MQTT 容器定义，新增设备需在节点侧注册后由 Home Assistant 自动发现。</span>
+        <span id="esphome-node-note">设备由 ESPHome 节点固件定义，新增设备需在节点侧注册后由 Home Assistant 自动发现。</span>
       </div>
     </div>
   </dialog>

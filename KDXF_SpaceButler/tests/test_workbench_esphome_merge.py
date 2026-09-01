@@ -4,6 +4,7 @@ import threading
 import unittest
 from unittest.mock import Mock
 
+from spacebutler.brands import BrandBindingStore
 from spacebutler.workbench import WorkbenchController, _esphome_record
 
 
@@ -31,6 +32,8 @@ def _esphome_ha_states() -> dict[str, dict[str, object]]:
 def _controller(ha_states: dict[str, dict[str, object]]) -> WorkbenchController:
     controller = object.__new__(WorkbenchController)
     controller._lock = threading.RLock()
+    # 出厂品牌映射，不落盘；投影要读它填充设备卡的品牌徽标。
+    controller._brand_bindings = BrandBindingStore()
     fleet_devices = [
         {
             "device_id": "bedroom_reading_light",
@@ -164,7 +167,9 @@ class EsphomeInventoryMergeTests(unittest.TestCase):
         controller = _controller(states)
         payload = controller.devices()
         self.assertEqual(len(payload["devices"]), 5)
-        self.assertEqual(payload["diagnostics"]["missing_devices"], [])
+        # 该夹具只提供客厅五台设备的实体；卧室与客厅辅助节点缺失属于预期。
+        missing = {item["device_id"] for item in payload["diagnostics"]["missing_devices"]}
+        self.assertEqual(missing & {str(device["device_id"]) for device in payload["devices"]}, set())
         controller.control_device("living_room_main_light", {"power": "on", "brightness": 30})
         self.assertEqual(controller._ha.call_service.call_args[0][2]["entity_id"],
                          "light.living_room_light_living_room_light")

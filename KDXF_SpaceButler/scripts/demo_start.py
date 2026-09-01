@@ -16,7 +16,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ha_bootstrap import obtain_token  # noqa: E402
+from spacebutler.configuration import load_project_environment  # noqa: E402
 from spacebutler.esphome_registry import resolve_entity_id  # noqa: E402
+
+# 实体消歧依赖 .env 的 SPACEBUTLER_ENTITY_*；不加载就会把已配置好的演示误报为未就绪。
+load_project_environment()
 
 RESULTS: list[tuple[str, str, str]] = []
 
@@ -92,6 +96,11 @@ def main() -> int:
                 "climate": "living_room_ac",
                 "temperature": "living_room_temperature_sensor",
                 "presence": "living_room_presence_sensor",
+                "bedroom light": "bedroom_reading_light",
+                "bedroom presence": "bedroom_presence_sensor",
+                "bedroom illuminance": "bedroom_illuminance_sensor",
+                "tv": "living_room_tv",
+                "window": "living_room_window_sensor",
             }
             all_ok = True
             by_entity = {str(item.get("entity_id", "")): item for item in states if isinstance(item, dict)}

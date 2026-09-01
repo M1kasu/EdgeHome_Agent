@@ -593,6 +593,16 @@ class AgentRuntime:
         with self._lock:
             self._messages.append({"role": role, "content": content, "ts": now()})
 
+    def record_turn(self, role: str, content: str) -> None:
+        """Record a turn that bypassed planning, such as a workflow trigger.
+
+        Deterministic workflow execution does not go through the graph, but the
+        conversation still has to show what the user said and what ran.
+        """
+        if role not in {"user", "assistant"}:
+            raise ValueError("role must be user or assistant")
+        self._append(role, content)
+
     def status(self) -> dict[str, object]:
         snapshot = self._world.snapshot()
         goal, status = self._world.active_goal()

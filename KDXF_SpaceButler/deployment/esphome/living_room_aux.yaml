@@ -1,0 +1,70 @@
+# 客厅辅助节点：电视（含功耗）、窗户传感器。
+# 这两台设备原先由 MQTT 设备容器提供，现统一到 ESPHome Native API。
+esphome:
+  name: living-room-aux
+  friendly_name: Living Room
+
+host:
+  mac_address: "02:00:00:01:00:16"
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_key
+  # 演示通道：节能场景需要"窗户开着"这一真实条件。
+  # 对应 HA 服务 esphome.living_room_aux_demo_set_window。
+  actions:
+    - action: demo_set_window
+      variables:
+        opened: bool
+      then:
+        - lambda: |-
+            id(window_open) = opened;
+            ESP_LOGI("aux_sim", "Window -> %s", opened ? "OPEN" : "CLOSED");
+
+globals:
+  - id: tv_on
+    type: bool
+    restore_value: no
+    initial_value: "true"
+  - id: window_open
+    type: bool
+    restore_value: no
+    initial_value: "true"
+
+switch:
+  - platform: template
+    id: living_room_tv
+    name: TV
+    lambda: |-
+      return id(tv_on);
+    turn_on_action:
+      - lambda: |-
+          id(tv_on) = true;
+          ESP_LOGI("aux_sim", "TV -> ON");
+    turn_off_action:
+      - lambda: |-
+          id(tv_on) = false;
+          ESP_LOGI("aux_sim", "TV -> OFF");
+
+sensor:
+  # 电视功耗是独立实体，节能分析按它统计客厅负载。
+  - platform: template
+    id: living_room_tv_power
+    name: TV Power
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 1s
+    lambda: |-
+      return id(tv_on) ? 95.0f : 0.5f;
+
+binary_sensor:
+  - platform: template
+    id: living_room_window
+    name: Window
+    device_class: window
+    lambda: |-
+      return id(window_open);

@@ -333,6 +333,48 @@ services:
     networks:
       - spacebutler
 
+  # 卧室节点：阅读灯 + 起身传感器 + 照度传感器（原 MQTT 设备容器迁入）。
+  spacebutler-esphome-bedroom:
+    image: ghcr.io/esphome/esphome:2026.8.1
+    profiles: ["local-esphome"]
+    init: true
+    command: ["run", "/config/bedroom.yaml"]
+    volumes:
+      - ../deployment/esphome:/config
+      - esphome-cache:/cache
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6053'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 240s
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6057:6053"
+    networks:
+      - spacebutler
+
+  # 客厅辅助节点：电视（含功耗）+ 窗户传感器（原 MQTT 设备容器迁入）。
+  spacebutler-esphome-living-room-aux:
+    image: ghcr.io/esphome/esphome:2026.8.1
+    profiles: ["local-esphome"]
+    init: true
+    command: ["run", "/config/living_room_aux.yaml"]
+    volumes:
+      - ../deployment/esphome:/config
+      - esphome-cache:/cache
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6053'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 240s
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6058:6053"
+    networks:
+      - spacebutler
+
   spacebutler-edge-llm:
     image: ghcr.io/ggml-org/llama.cpp:server
     profiles: ["edge-llm"]
@@ -341,8 +383,12 @@ services:
     command:
       - -m
       - ${SPACEBUTLER_MODEL_PATH:-/models/Home-Llama-3.2-3B.q4_k_m.gguf}
+      # n_ctx 会被 slot 数均分。规划 prompt 含全部设备清单与实时状态，
+      # 2048/4=512 会让结构化调用直接 500 并静默退回确定性规划。
       - -c
-      - ${SPACEBUTLER_MODEL_CONTEXT_SIZE:-2048}
+      - ${SPACEBUTLER_MODEL_CONTEXT_SIZE:-16384}
+      - --parallel
+      - ${SPACEBUTLER_MODEL_SLOTS:-1}
       - --host
       - 0.0.0.0
       - --port

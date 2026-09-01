@@ -21,6 +21,8 @@ ESPHOME_NODE_PORTS: Final[tuple[tuple[str, int], ...]] = (
     ("curtain", 6054),
     ("ac", 6055),
     ("presence", 6056),
+    ("bedroom", 6057),
+    ("living_room_aux", 6058),
 )
 
 
@@ -28,6 +30,22 @@ def esphome_nodes(host: str | None = None) -> tuple[tuple[str, str, int], ...]:
     """Return configured ESPHome endpoints, defaulting to the Ubuntu VM."""
     resolved_host = host or os.environ.get("ESPHOME_HOST") or DEFAULT_ESPHOME_HOST
     return tuple((role, resolved_host, port) for role, port in ESPHOME_NODE_PORTS)
+
+
+# 哪台设备由哪个节点提供。一个节点可以承载多台设备（卧室节点有灯和两个传感器），
+# 所以不能按设备类型反推节点角色。
+NODE_ROLE_BY_DEVICE: Final[dict[str, str]] = {
+    "living_room_main_light": "light",
+    "living_room_curtain": "curtain",
+    "living_room_ac": "ac",
+    "living_room_temperature_sensor": "ac",
+    "living_room_presence_sensor": "presence",
+    "bedroom_reading_light": "bedroom",
+    "bedroom_presence_sensor": "bedroom",
+    "bedroom_illuminance_sensor": "bedroom",
+    "living_room_tv": "living_room_aux",
+    "living_room_window_sensor": "living_room_aux",
+}
 
 
 ESPHOME_DEVICE_RECORDS: Final[tuple[dict[str, object], ...]] = (
@@ -104,6 +122,64 @@ ESPHOME_DEVICE_RECORDS: Final[tuple[dict[str, object], ...]] = (
         "device_id": "living_room_temperature_sensor",
         "type": "temperature",
         "name": "客厅温度传感器",
+        "room": "living_room",
+        "capabilities": (),
+    },
+    {
+        "aliases": ("Bedroom Reading Light",),
+        "domain": "light",
+        "entity_env": "SPACEBUTLER_ENTITY_BEDROOM_LIGHT",
+        "node_names": ("bedroom",),
+        "device_id": "bedroom_reading_light",
+        "type": "light",
+        "name": "卧室阅读灯",
+        "room": "bedroom",
+        "capabilities": ("power", "brightness"),
+    },
+    {
+        "aliases": ("Bedroom Presence",),
+        "domain": "binary_sensor",
+        "entity_env": "SPACEBUTLER_ENTITY_BEDROOM_PRESENCE",
+        "node_names": ("bedroom",),
+        "device_id": "bedroom_presence_sensor",
+        "type": "presence",
+        "name": "卧室起身传感器",
+        "room": "bedroom",
+        "capabilities": (),
+    },
+    {
+        "aliases": ("Bedroom Illuminance",),
+        "domain": "sensor",
+        "entity_env": "SPACEBUTLER_ENTITY_BEDROOM_ILLUMINANCE",
+        "node_names": ("bedroom",),
+        "device_id": "bedroom_illuminance_sensor",
+        "type": "illuminance",
+        "name": "卧室照度传感器",
+        "room": "bedroom",
+        "capabilities": (),
+    },
+    {
+        "aliases": ("Living Room TV",),
+        "domain": "switch",
+        "entity_env": "SPACEBUTLER_ENTITY_TV",
+        "node_names": ("living_room_aux",),
+        "device_id": "living_room_tv",
+        "type": "switch",
+        "name": "客厅电视",
+        "room": "living_room",
+        "capabilities": ("power",),
+        # 功耗是同节点的独立 sensor 实体，投影时读它填充 power_w。
+        "power_entity_id": "sensor.living_room_tv_power",
+        "power_entity_env": "SPACEBUTLER_ENTITY_TV_POWER",
+    },
+    {
+        "aliases": ("Living Room Window",),
+        "domain": "binary_sensor",
+        "entity_env": "SPACEBUTLER_ENTITY_WINDOW",
+        "node_names": ("living_room_aux",),
+        "device_id": "living_room_window_sensor",
+        "type": "contact",
+        "name": "客厅窗户传感器",
         "room": "living_room",
         "capabilities": (),
     },

@@ -1,0 +1,80 @@
+# 卧室节点：阅读灯、起身传感器、照度传感器。
+# 这三台设备原先由 MQTT 设备容器提供，现统一到 ESPHome Native API。
+esphome:
+  name: bedroom
+  friendly_name: Bedroom
+  on_boot:
+    priority: -100
+    then:
+      - light.turn_off: bedroom_reading_light
+
+host:
+  mac_address: "02:00:00:01:00:15"
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_key
+  # 演示通道：夜间起身场景需要制造真实的 off -> on 上升沿和昏暗照度。
+  # 对应 HA 服务 esphome.bedroom_demo_set_presence / esphome.bedroom_demo_set_illuminance。
+  actions:
+    - action: demo_set_presence
+      variables:
+        occupied: bool
+      then:
+        - lambda: |-
+            id(bedroom_occupied) = occupied;
+            ESP_LOGI("bedroom_sim", "Presence -> %s", occupied ? "ON" : "OFF");
+    - action: demo_set_illuminance
+      variables:
+        lux: float
+      then:
+        - lambda: |-
+            id(bedroom_lux) = lux;
+            ESP_LOGI("bedroom_sim", "Illuminance -> %.0f lx", lux);
+
+globals:
+  - id: bedroom_occupied
+    type: bool
+    restore_value: no
+    initial_value: "false"
+  - id: bedroom_lux
+    type: float
+    restore_value: no
+    initial_value: "8.0"
+
+output:
+  - platform: template
+    id: reading_light_output
+    type: float
+    write_action:
+      - lambda: |-
+          ESP_LOGI("bedroom_sim", "Reading light brightness: %.0f%%", state * 100.0f);
+
+light:
+  - platform: monochromatic
+    id: bedroom_reading_light
+    name: Reading Light
+    output: reading_light_output
+    default_transition_length: 1s
+
+binary_sensor:
+  - platform: template
+    id: bedroom_presence
+    name: Presence
+    device_class: presence
+    lambda: |-
+      return id(bedroom_occupied);
+
+sensor:
+  - platform: template
+    id: bedroom_illuminance
+    name: Illuminance
+    unit_of_measurement: "lx"
+    device_class: illuminance
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 1s
+    lambda: |-
+      return id(bedroom_lux);

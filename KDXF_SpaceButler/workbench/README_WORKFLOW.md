@@ -1,6 +1,6 @@
 # 工作流视图
 
-工作流视图已适配当前 SpaceButler 运行时。界面不再内置模拟设备、固定场景或假执行结果；设备、动作和状态全部来自当前 Home Assistant / ESPHome / MQTT 投影。
+工作流视图已适配当前 SpaceButler 运行时。界面不再内置模拟设备、固定场景或假执行结果；设备、动作和状态全部来自当前 Home Assistant / ESPHome 投影。
 
 ## 数据与执行链路
 

@@ -107,10 +107,11 @@ node --check workbench/voice-capture.js
 - 家庭记忆 `HouseholdMemory`：显式反馈写入偏好，按成员和场景召回。
 - SQLite 持久化记忆：Agent 重建后仍能召回用户授权和节能等待阈值。
 - 主动服务引擎 `ProactiveServiceEngine`：返家舒适、夜间老人安全、舒适节能平衡、多成员冲突调和。
-- 老人夜间起身安全路径：监听 HA 人体存在实体的上升沿，从 MQTT 照度实体取值，按成员偏好顺序点亮柔光；人工接管有显式来源和自动过期，并逐项完成 HA/MQTT 状态回读。
+- 老人夜间起身安全路径：监听 HA 人体存在实体的上升沿，从 ESPHome 照度实体取值，按成员偏好顺序点亮柔光；人工接管有显式来源和自动过期，并逐项完成 HA/ESPHome 状态回读。
 - 计划编排 `SpaceButlerAgent`：输入空间快照，输出可解释 `ServicePlan`。
 - 主动节能闭环：任意已绑定空间连续无人、窗户打开、空调运行且功率偏高时，首次建议确认，执行后四路回读；用户授权后同类场景自动执行。
-- 真实执行底座：Home Assistant REST → ESPHome Native API → Ubuntu 上已运行的四个虚拟节点；正式运行路径不再创建硬编码 MQTT 模拟设备。
+- 真实执行底座：Home Assistant REST → ESPHome Native API → 六个虚拟节点共 10 台设备；MQTT 链路已整体移除。
+- 品牌适配器层：10 台设备分属小米米家 / Aqara / 美的 / 鸿蒙智联 / Philips Hue 五个生态，同一意图按品牌翻译成 MIoT siid/piid、Zigbee 簇命令、Hue 0-254 亮度等原生报文（见 `spacebutler/brands.py`）。
 - LangGraph 编排：`observe → understand → plan → execute → verify → respond`，将状态观察、语义目标、任务拆解、真实执行和回读验证显式分离。
 - 实体注册表：稳定实体 ID 与 `Living Room Light`、`Living Room Curtain`、`Living Room AC`、`Living Room Presence` 等名称别名统一解析。
 - 动态主动规则：选择空间及三路设备来源，绑定持久化；实时展示设备实体、上报时间和每项触发条件。
@@ -124,7 +125,7 @@ node --check workbench/voice-capture.js
 语音 Key 配置、权限排查和测试步骤见 [语音输入说明](docs/VOICE_INPUT.md)。
 HA 已连接但工作台显示 0 台时，见 [设备匹配与只读诊断](docs/DEVICE_DISCOVERY.md)。
 
-Ubuntu 上的四个 ESPHome 节点必须已经运行，并把其现有 Noise PSK 填入本目录 `.env` 的 `ESPHOME_NOISE_PSK`；程序不会生成或覆盖密钥。HA 已部署在虚拟机时，复用该实例，不需要再启动 Windows 本地 HA。
+ESPHome 的六个节点必须已经运行，并把其现有 Noise PSK 填入本目录 `.env` 的 `ESPHOME_NOISE_PSK`；程序不会生成或覆盖密钥。HA 已部署在虚拟机时，复用该实例，不需要再启动 Windows 本地 HA。
 
 例如 HA 和 ESPHome 同在 Ubuntu、HA 使用 Docker host 网络时：
 
@@ -150,10 +151,12 @@ EDGE_LLM_URL=http://127.0.0.1:12881
 | --- | --- |
 | 工作台 | `http://127.0.0.1:8765` |
 | Home Assistant | `http://127.0.0.1:12900` |
-| Light | `192.168.111.134:6053` |
-| Curtain | `192.168.111.134:6054` |
-| AC | `192.168.111.134:6055` |
-| Presence | `192.168.111.134:6056` |
+| Light 节点（客厅主灯） | `192.168.111.134:6053` |
+| Curtain 节点（客厅窗帘） | `192.168.111.134:6054` |
+| AC 节点（客厅空调 + 温度） | `192.168.111.134:6055` |
+| Presence 节点（客厅人体存在） | `192.168.111.134:6056` |
+| Bedroom 节点（阅读灯 + 起身 + 照度） | `192.168.111.134:6057` |
+| Living Room Aux 节点（电视 + 功耗 + 窗户） | `192.168.111.134:6058` |
 | 可选 llama.cpp | `http://127.0.0.1:12881` |
 
 自然语言入口必须连接 OpenAI-compatible 本地模型；模型不可用时会明确拒绝执行，绝不退回“观影模式→固定脚本”。推荐 `Qwen2.5-7B-Instruct-Q4_K_M.gguf`，该规模足以完成当前结构化语义解析和任务规划。完整配置见 [安装指南](docs/SETUP.md)。
@@ -173,16 +176,20 @@ EDGE_LLM_URL=http://127.0.0.1:12881
 ```powershell
 # 复用已配置的 HA、ESPHome 和模型，不重复创建设备。
 & $python scripts\run_workbench.py --port 8765
-# 以下操作需要另开终端，并会改变设备状态。
-& $python scripts\demo_reset.py                  # 灯 80%、窗帘全开、空调关
 ```
+
+打开工作台的 **「演示控制台」** 视图，全部操作在页面内完成，不需要另开终端：
+先点「就绪自检」确认 7 项全绿，再点「一键重置」（约 12 秒，窗帘是真实行程），
+然后逐个点场景卡片。每张卡片带预期现象和可直接照读的旁白。
 
 | Demo | 操作 | 预期现象 |
 |---|---|---|
-| 1. AI 动态规划 | 输入 `我准备在客厅看会电影，有点热，灯别太亮。` | 根据当前状态生成 `关窗帘 + 调灯 + 开空调`，执行并逐项 HA 回读验证 |
-| 2. 已满足则不动 | 立即再问 `现在适合看电影了吗？` | 判定目标已满足，零设备命令，回复"无需重复调整" |
-| 3. 人工纠正学习 | 工作台手动调灯（或 `python scripts\demo_override.py --brightness 45`）×3 | 时间线出现 Human Override；偏好观测置信度上升；再说"我要看电影，别太暗"时选中偏好匹配候选（≈45%） |
-| 4. 扰动自治重规划 | `python scripts\demo_disturbance.py --temperature 31`，之后不要说话 | 固件注入热量 → 目标偏离 → 自动重规划 → 新计划执行验证（区分 Agent 与 Chatbot 的关键） |
+| 1. AI 动态规划 | 场景卡片 ①，或输入 `我准备在客厅看会电影，有点热，灯别太亮。` | 模型按当前状态动态生成计划（通常是调灯 + 开空调，是否关窗帘取决于实时光照与温度），执行并逐项 HA 回读验证 |
+| 2. 已满足则不动 | 场景卡片 ②，或再问 `现在适合看电影了吗？` | 判定目标已满足，零设备命令，回复"无需重复调整" |
+| 3. 人工纠正学习 | 场景卡片 ③ ×3（等价于 `scripts\demo_override.py --brightness 45`） | 时间线出现 Human Override；偏好观测置信度上升；再说"我要看电影，别太暗"时选中偏好匹配候选（≈45%） |
+| 4. 扰动自治重规划 | 场景卡片 ④，之后不要说话 | 固件注入热量 → 目标偏离 → 自动重规划 → 新计划执行验证（区分 Agent 与 Chatbot 的关键） |
+
+完整录制流程、旁白逐句和边界声明见 [演示视频录制手册](docs/VIDEO_DEMO_SCRIPT.md)。
 
 最关键的验收是同一场景连续两次：第一次产生 3 个动作；第二次提问或重复同一请求时，Graph 会重新观察状态并输出零动作，明确说明窗帘、灯光和空调已经满足目标。测试见 `tests/test_langgraph_movie_replanning.py`。
 
@@ -195,7 +202,7 @@ node --check workbench\app.js
 python scripts\run_iteration.py
 ```
 
-首页可直接添加设备并按类型控制；“主动服务”可绑定节能规则来源，也可配置老人夜间起身的有序灯光路径、照度门槛和人工接管灯。新增设备通过 MQTT Discovery 自动进入 Home Assistant。工作台使用项目内置前端资源，不依赖公网 CDN；Home Assistant Token 仅保留在服务端。
+首页可直接添加设备并按类型控制；“主动服务”可绑定节能规则来源，也可配置老人夜间起身的有序灯光路径、照度门槛和人工接管灯。新增设备在 ESPHome 节点侧注册后由 Home Assistant 自动发现。工作台使用项目内置前端资源，不依赖公网 CDN；Home Assistant Token 仅保留在服务端。
 
 同类开源项目调研、差距分析与场景选择见 `docs/OPEN_SOURCE_PROJECT_COMPARISON.md`；小米 IoT、阿里云生活物联网平台对比及一设备一容器设计见 `docs/DEVICE_CONTAINER_ARCHITECTURE.md`。
 
