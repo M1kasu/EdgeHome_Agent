@@ -8,6 +8,7 @@ from spacebutler.brands import (
     BRAND_RECORDS,
     DEFAULT_DEVICE_BRANDS,
     brand_for_device,
+    brand_supports_device_type,
     brand_summary,
     translate_command,
 )
@@ -23,6 +24,22 @@ def test_every_registered_device_has_a_brand() -> None:
 def test_every_mapped_brand_is_defined() -> None:
     defined = {str(record["brand_id"]) for record in BRAND_RECORDS}
     assert set(DEFAULT_DEVICE_BRANDS.values()) <= defined
+
+
+def test_factory_bindings_only_use_compatible_device_types() -> None:
+    device_types = {
+        str(record["device_id"]): str(record["type"])
+        for record in ESPHOME_DEVICE_RECORDS
+    }
+
+    for device_id, brand_id in DEFAULT_DEVICE_BRANDS.items():
+        assert brand_supports_device_type(brand_id, device_types[device_id])
+
+
+def test_hue_does_not_claim_climate_or_sensor_devices() -> None:
+    assert brand_supports_device_type("hue", "light")
+    assert not brand_supports_device_type("hue", "climate")
+    assert not brand_supports_device_type("hue", "temperature")
 
 
 def test_mijia_light_uses_miot_service_and_property_ids() -> None:

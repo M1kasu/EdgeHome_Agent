@@ -763,7 +763,7 @@
           <section class="panel demo-brand-panel">
             <div class="panel-heading">
               <h3>已接入品牌生态</h3>
-              <button class="secondary compact-button" id="brand-reset">
+              <button class="secondary compact-button" id="brand-reset" type="button">
                 <i data-lucide="rotate-ccw"></i><span>恢复出厂映射</span>
               </button>
             </div>
@@ -782,23 +782,23 @@
                 <span class="eyebrow">DEVICE ONBOARDING</span>
                 <h3>接入品牌设备</h3>
               </div>
-              <span class="plan-status idle" id="brand-onboard-status">选择生态开始</span>
+              <span class="plan-status idle" id="brand-onboard-status" role="status" aria-live="polite">选择生态开始</span>
             </div>
             <div class="brand-onboard-bar">
               <label>
                 <span>目标生态</span>
                 <select id="brand-picker"></select>
               </label>
-              <button class="primary compact-button" id="brand-discover">
+              <button class="primary compact-button" id="brand-discover" type="button">
                 <i data-lucide="radar"></i><span>扫描设备</span>
               </button>
             </div>
             <div class="brand-pairing-steps" id="brand-pairing-steps"></div>
-            <div class="brand-candidate-list" id="brand-candidate-list">
+            <div class="brand-candidate-list" id="brand-candidate-list" aria-live="polite">
               <div class="empty-state compact"><span>扫描后显示可纳管设备</span></div>
             </div>
             <div class="brand-onboard-actions">
-              <button class="primary" id="brand-adopt" disabled>
+              <button class="primary" id="brand-adopt" type="button" disabled>
                 <i data-lucide="link"></i><span>纳管所选设备</span>
               </button>
             </div>

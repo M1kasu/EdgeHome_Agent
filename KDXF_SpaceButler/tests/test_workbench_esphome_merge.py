@@ -196,5 +196,49 @@ class EsphomeInventoryMergeTests(unittest.TestCase):
         self.assertEqual(health["agent"]["status"], "ready")
 
 
+class BrandOnboardingTests(unittest.TestCase):
+    def test_discovery_only_marks_compatible_unbound_devices_as_adoptable(self) -> None:
+        controller = _controller(_esphome_ha_states())
+        controller._brand_bindings.release("living_room_main_light")
+
+        payload = controller.discover_brand_devices("hue")
+        candidates = {str(item["device_id"]): item for item in payload["candidates"]}
+
+        light = candidates["living_room_main_light"]
+        self.assertTrue(light["compatible"])
+        self.assertTrue(light["adoptable"])
+        self.assertEqual(light["sample_translation"]["native_command"]["bri"], 114)
+        climate = candidates["living_room_ac"]
+        self.assertFalse(climate["compatible"])
+        self.assertFalse(climate["adoptable"])
+        self.assertIsNone(climate["sample_translation"])
+
+    def test_adopt_requires_release_instead_of_silently_stealing_a_device(self) -> None:
+        controller = _controller(_esphome_ha_states())
+
+        with self.assertRaisesRegex(ValueError, "请先释放"):
+            controller.adopt_brand_devices("hue", ["living_room_main_light"])
+
+    def test_incompatible_brand_adoption_is_rejected(self) -> None:
+        controller = _controller(_esphome_ha_states())
+        controller._brand_bindings.release("living_room_ac")
+
+        with self.assertRaisesRegex(ValueError, "不支持 climate"):
+            controller.adopt_brand_devices("hue", ["living_room_ac"])
+
+    def test_released_compatible_device_can_be_adopted(self) -> None:
+        controller = _controller(_esphome_ha_states())
+        controller._brand_bindings.release("living_room_main_light")
+
+        payload = controller.adopt_brand_devices("hue", ["living_room_main_light"])
+
+        adopted = payload["adopted"][0]
+        self.assertEqual(adopted["device_id"], "living_room_main_light")
+        self.assertEqual(adopted["translation"]["brand_id"], "hue")
+        self.assertEqual(
+            controller._brand_bindings.bindings()["living_room_main_light"], "hue"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

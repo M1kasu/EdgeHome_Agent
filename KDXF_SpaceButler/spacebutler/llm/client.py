@@ -6,7 +6,7 @@
 否则退回严格 prompt + 多级解析 + 单次 repair retry。
 
 配置（全部可选）：
-    SPACEBUTLER_LLM_BASE_URL  默认探测本机 llama.cpp
+    SPACEBUTLER_LLM_BASE_URL  本地 llama.cpp 或 OpenAI 兼容 API 地址
     SPACEBUTLER_LLM_MODEL
     SPACEBUTLER_LLM_API_KEY
     SPACEBUTLER_LLM_TEMPERATURE  默认 0.1（结构化输出低温优先，benchmark 实测选择）
@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 _DEFAULT_TEMPERATURE = 0.1
@@ -77,6 +78,34 @@ class LlmClient:
     def base_url(self) -> str:
         return self._base_url
 
+    @property
+    def model(self) -> str:
+        return self._model or ""
+
+    @property
+    def provider_label(self) -> str:
+        host = (urlparse(self._base_url).hostname or "").lower()
+        if host == "api.deepseek.com":
+            return "DeepSeek"
+        if host in {"127.0.0.1", "localhost", "::1"}:
+            return "本地边缘模型"
+        return host or "OpenAI 兼容 API"
+
+    @property
+    def is_remote(self) -> bool:
+        host = (urlparse(self._base_url).hostname or "").lower()
+        return bool(host and host not in {"127.0.0.1", "localhost", "::1"})
+
+    @property
+    def channels(self) -> list[dict[str, object]]:
+        """单通道也暴露同一份可观测信息，避免页面把云 API 标成本地模型。"""
+        return [{
+            "channel": "cloud" if self.is_remote else "local",
+            "label": self.provider_label,
+            "model": self.model,
+            "ready": self.available(),
+        }]
+
     def available(self, force_refresh: bool = False) -> bool:
         if not force_refresh and time.monotonic() < self._available_until:
             return self._available
@@ -86,16 +115,19 @@ class LlmClient:
 
     def _probe(self) -> bool:
         try:
-            with urlopen(f"{self._base_url}/health", timeout=3) as response:
+            with urlopen(Request(f"{self._base_url}/health", headers=self._headers()), timeout=3) as response:
                 if response.status == 200:
                     return True
         except (OSError, HTTPError, URLError):
             pass
-        try:
-            with urlopen(f"{self._base_url}/v1/models", timeout=3) as response:
-                return response.status == 200
-        except (OSError, HTTPError, URLError):
-            return False
+        for endpoint in _candidate_endpoints(self._base_url, "models"):
+            try:
+                with urlopen(Request(endpoint, headers=self._headers()), timeout=3) as response:
+                    if response.status == 200:
+                        return True
+            except (OSError, HTTPError, URLError):
+                continue
+        return False
 
     def context_window(self) -> int | None:
         """Per-slot context size, or None when the server does not report it.
@@ -105,7 +137,7 @@ class LlmClient:
         退回确定性回退。就绪自检需要能提前发现这种情况。
         """
         try:
-            with urlopen(f"{self._base_url}/props", timeout=3) as response:
+            with urlopen(Request(f"{self._base_url}/props", headers=self._headers()), timeout=3) as response:
                 if response.status != 200:
                     return None
                 payload = json.loads(response.read().decode("utf-8"))
@@ -146,7 +178,13 @@ class LlmClient:
             except JsonParseError as error:
                 last_error = error
                 self.last_error_stage = error.stage
-            except (OSError, HTTPError, URLError, KeyError, TypeError, ValueError) as error:
+            except HTTPError as error:
+                stage = "auth_error" if error.code in {401, 403} else (
+                    "model_not_found" if error.code == 404 else "http_error"
+                )
+                last_error = JsonParseError(stage, f"HTTP {error.code}")
+                self.last_error_stage = last_error.stage
+            except (OSError, URLError, KeyError, TypeError, ValueError) as error:
                 last_error = JsonParseError("http_error", str(error)[:120])
                 self.last_error_stage = last_error.stage
         if last_error is not None:
@@ -175,23 +213,33 @@ class LlmClient:
         }
         if self._model:
             payload["model"] = self._model
+        if self.provider_label == "DeepSeek":
+            # V4 Flash 默认启用深度思考；家居控制是低延迟结构化任务，显式关闭。
+            payload["thinking"] = {"type": "disabled"}
         if schema is not None:
-            payload["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {"name": "spacebutler_structured", "schema": schema},
-            }
-        headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+            if self.provider_label == "DeepSeek":
+                # DeepSeek 支持 JSON Output；业务 schema 仍由本地校验。
+                payload["response_format"] = {"type": "json_object"}
+            else:
+                payload["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {"name": "spacebutler_structured", "schema": schema},
+                }
         request = Request(
-            f"{self._base_url}/v1/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
+            _preferred_endpoint(self._base_url, "chat/completions"),
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers=self._headers(),
             method="POST",
         )
         with urlopen(request, timeout=self._timeout) as response:
             body = json.loads(response.read().decode("utf-8"))
         return str(body["choices"][0]["message"]["content"])
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
 
 
 def _validate_schema(data: dict[str, Any], schema: dict[str, Any]) -> str | None:
@@ -276,3 +324,24 @@ def _default_local_url() -> str | None:
         except (OSError, HTTPError, URLError):
             continue
     return None
+
+
+def _preferred_endpoint(base_url: str, resource: str) -> str:
+    """Build an endpoint for local llama.cpp and official DeepSeek URLs.
+
+    llama.cpp commonly exposes ``/v1/*`` while DeepSeek's documented base URL
+    exposes ``/chat/completions`` and ``/models`` directly. A base URL already
+    ending in ``/v1`` is also accepted for any OpenAI-compatible provider.
+    """
+    base = base_url.rstrip("/")
+    host = (urlparse(base).hostname or "").lower()
+    if base.endswith("/v1") or host == "api.deepseek.com":
+        return f"{base}/{resource}"
+    return f"{base}/v1/{resource}"
+
+
+def _candidate_endpoints(base_url: str, resource: str) -> tuple[str, ...]:
+    preferred = _preferred_endpoint(base_url, resource)
+    base = base_url.rstrip("/")
+    alternatives = (preferred, f"{base}/v1/{resource}", f"{base}/{resource}")
+    return tuple(dict.fromkeys(alternatives))

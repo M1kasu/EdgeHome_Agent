@@ -24,6 +24,7 @@ from .brands import (
     brand_for_device,
     brand_record,
     brand_summary,
+    brand_supports_device_type,
     translate_command,
 )
 from .conversation import ConversationAgent
@@ -718,22 +719,31 @@ class WorkbenchController:
             candidates: list[dict[str, object]] = []
             for device in devices:
                 device_id = str(device["device_id"])
+                device_type = str(device["type"])
                 owner = device.get("brand")
+                compatible = brand_supports_device_type(brand_id, device_type)
+                sample_translation = None
+                if compatible and device.get("capabilities"):
+                    sample_translation = translate_command(
+                        device_id,
+                        _sample_payload(device_type),
+                        {device_id: brand_id},
+                    )
                 candidates.append({
                     "device_id": device_id,
                     "name": device["name"],
                     "room_name": device["room_name"],
-                    "type": device["type"],
+                    "type": device_type,
                     "capabilities": device["capabilities"],
                     "online": device["online"],
                     "entity_id": device["entity_id"],
-                    "adoptable": owner is None,
+                    "compatible": compatible,
+                    "adoptable": owner is None and compatible,
                     "current_brand": owner,
                     # 纳管后同一个意图会被翻译成什么，配对前就能看到。
-                    "sample_translation": translate_command(
-                        device_id,
-                        _sample_payload(str(device["type"])),
-                        {device_id: brand_id},
+                    "sample_translation": sample_translation,
+                    "incompatibility_reason": (
+                        None if compatible else f"{brand['name']} 不支持 {device_type} 类型"
                     ),
                 })
             return {
@@ -750,15 +760,25 @@ class WorkbenchController:
                 raise ValueError(f"未知品牌生态：{brand_id}")
             if not device_ids:
                 raise ValueError("请至少选择一台设备")
+            bindings = self._brand_bindings.bindings()
             known = {str(record["device_id"]) for record in self._projected_devices(
-                self._ha_state_index(), None, self._brand_bindings.bindings(),
+                self._ha_state_index(), None, bindings,
             )}
             adopted: list[dict[str, object]] = []
             for device_id in device_ids:
                 if device_id not in known:
                     raise ValueError(f"未在 Home Assistant 中发现该真实设备：{device_id}")
-                self._brand_bindings.adopt(device_id, brand_id)
+                current_brand_id = bindings.get(device_id)
+                if current_brand_id:
+                    current = brand_record(current_brand_id) or {"name": current_brand_id}
+                    raise ValueError(
+                        f"{device_id} 已归属 {current['name']}，请先释放后再纳管"
+                    )
                 record = device_record(device_id) or {}
+                device_type = str(record.get("type", ""))
+                if not brand_supports_device_type(brand_id, device_type):
+                    raise ValueError(f"{brand['name']} 不支持 {device_type or '未知'} 类型设备：{device_id}")
+                self._brand_bindings.adopt(device_id, brand_id)
                 adopted.append({
                     "device_id": device_id,
                     "name": record.get("name", device_id),

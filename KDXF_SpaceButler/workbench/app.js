@@ -32,6 +32,14 @@ const state = {
 };
 let voiceInput = null;
 
+const brandState = {
+  ecosystems: [],
+  unboundDevices: [],
+  selectedBrandId: "",
+  candidates: [],
+  busy: false,
+};
+
 const intentLabels = {
   device_control: "设备控制",
   query_state: "状态查询",
@@ -127,7 +135,9 @@ function renderConversation(payload) {
   state.conversation = payload;
   const modelBadge = $("#agent-model-badge");
   modelBadge.classList.toggle("fallback", !payload.llm_available);
-  $("span", modelBadge).textContent = payload.llm_available ? "Edge LLM 在线" : "确定性降级";
+  const provider = payload.llm_provider || "LLM";
+  const model = payload.llm_model ? ` · ${payload.llm_model}` : "";
+  $("span", modelBadge).textContent = payload.llm_available ? `${provider}${model} 在线` : "模型服务不可用";
   const conversationState = $("#conversation-state");
   const busy = Boolean(payload.busy || state.chatBusy);
   conversationState.className = `conversation-state${busy ? " busy" : ""}`;
@@ -1289,6 +1299,280 @@ function renderDemoBrands(brands) {
   }).join("");
 }
 
+function brandDeviceTypeLabel(deviceType) {
+  return {
+    light: "灯光",
+    switch: "智能开关",
+    curtain: "窗帘",
+    climate: "空调",
+    presence: "存在传感器",
+    contact: "门窗传感器",
+    illuminance: "照度传感器",
+    temperature: "温度传感器",
+  }[deviceType] || deviceType || "设备";
+}
+
+function selectedBrand() {
+  return brandState.ecosystems.find((brand) => brand.brand_id === brandState.selectedBrandId) || null;
+}
+
+function setBrandOnboardStatus(message, tone = "idle") {
+  const node = $("#brand-onboard-status");
+  if (!node) return;
+  node.textContent = message;
+  node.className = `plan-status ${tone}`;
+}
+
+function renderBrandPairing(brand) {
+  const container = $("#brand-pairing-steps");
+  if (!container) return;
+  if (!brand) {
+    container.innerHTML = "";
+    return;
+  }
+  const accent = /^#[0-9a-f]{6}$/i.test(brand.accent || "") ? brand.accent : "var(--cyan-ink)";
+  const supported = (brand.device_types || []).map(brandDeviceTypeLabel).join("、") || "未声明";
+  container.innerHTML = `
+    <div class="brand-pairing-meta" style="--brand-accent:${accent}">
+      <span class="demo-brand-dot"></span>
+      <div><strong>${escapeHtml(brand.name)}</strong><span>${escapeHtml(brand.protocol)} · ${escapeHtml(brand.transport)}</span></div>
+      <em>支持：${escapeHtml(supported)}</em>
+    </div>
+    <ol>${(brand.pairing_steps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol>
+    <div class="brand-command-shape"><span>原生报文示例</span><code>${escapeHtml(brand.command_shape || "--")}</code></div>`;
+}
+
+function renderBrandPicker() {
+  const picker = $("#brand-picker");
+  const discover = $("#brand-discover");
+  if (!picker) return;
+  if (!brandState.ecosystems.length) {
+    picker.innerHTML = '<option value="">暂无可用品牌适配器</option>';
+    picker.disabled = true;
+    if (discover) discover.disabled = true;
+    renderBrandPairing(null);
+    return;
+  }
+  if (!brandState.ecosystems.some((brand) => brand.brand_id === brandState.selectedBrandId)) {
+    brandState.selectedBrandId = String(brandState.ecosystems[0].brand_id || "");
+  }
+  picker.innerHTML = brandState.ecosystems.map((brand) => `
+    <option value="${escapeHtml(brand.brand_id)}" ${brand.brand_id === brandState.selectedBrandId ? "selected" : ""}>
+      ${escapeHtml(brand.name)} · ${escapeHtml(brand.protocol)}
+    </option>`).join("");
+  picker.disabled = brandState.busy;
+  if (discover) discover.disabled = brandState.busy;
+  renderBrandPairing(selectedBrand());
+}
+
+function renderBrandBindings() {
+  const container = $("#brand-bound-list");
+  if (!container) return;
+  const rows = brandState.ecosystems.flatMap((brand) => (brand.devices || []).map((device) => ({ brand, device })));
+  if (!rows.length) {
+    container.innerHTML = '<div class="empty-state compact"><span>暂无已纳管设备</span></div>';
+    return;
+  }
+  container.innerHTML = rows.map(({ brand, device }) => {
+    const accent = /^#[0-9a-f]{6}$/i.test(brand.accent || "") ? brand.accent : "var(--muted)";
+    return `
+      <article class="brand-bound-item" style="--brand-accent:${accent}">
+        <span class="demo-brand-dot"></span>
+        <div class="brand-bound-copy">
+          <strong>${escapeHtml(device.name)}</strong>
+          <span>${escapeHtml(device.room_name)} · ${escapeHtml(brandDeviceTypeLabel(device.type))} · ${device.online ? "在线" : "离线"}</span>
+        </div>
+        <div class="brand-bound-owner"><strong>${escapeHtml(brand.name)}</strong><span>${escapeHtml(brand.protocol)}</span></div>
+        <button class="secondary compact-button danger-ghost" type="button" data-brand-release="${escapeHtml(device.device_id)}" ${brandState.busy ? "disabled" : ""}>
+          <i data-lucide="unlink"></i><span>释放</span>
+        </button>
+      </article>`;
+  }).join("");
+  refreshIcons();
+}
+
+function renderBrandCandidates(payload) {
+  const container = $("#brand-candidate-list");
+  const adoptButton = $("#brand-adopt");
+  if (!container) return;
+  const candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
+  brandState.candidates = candidates;
+  const compatible = candidates.filter((candidate) => candidate.compatible !== false);
+  const adoptable = compatible.filter((candidate) => candidate.adoptable);
+  if (adoptButton) adoptButton.disabled = true;
+  if (!compatible.length) {
+    container.innerHTML = '<div class="empty-state compact"><span>当前 Home Assistant 中没有该生态支持的设备类型</span></div>';
+    return;
+  }
+  const guidance = adoptable.length
+    ? `<div class="brand-candidate-guidance success"><i data-lucide="radar"></i><span>发现 ${adoptable.length} 台可纳管设备，请勾选后确认</span></div>`
+    : '<div class="brand-candidate-guidance"><i data-lucide="info"></i><span>兼容设备都已有归属。请先在“当前归属”释放设备，再重新扫描。</span></div>';
+  container.innerHTML = `${guidance}${compatible.map((candidate) => {
+    const owner = candidate.current_brand;
+    const ownedByTarget = owner?.brand_id === payload?.brand?.brand_id;
+    const stateLabel = candidate.adoptable
+      ? "待接入"
+      : ownedByTarget ? "已由本生态纳管" : `已归属 ${owner?.name || "其他生态"}`;
+    const translation = candidate.sample_translation;
+    return `
+      <label class="brand-candidate ${candidate.adoptable ? "is-adoptable" : "is-owned"}">
+        <input type="checkbox" data-brand-candidate value="${escapeHtml(candidate.device_id)}" ${candidate.adoptable ? "" : "disabled"}>
+        <span class="brand-candidate-main">
+          <strong>${escapeHtml(candidate.name)}</strong>
+          <span>${escapeHtml(candidate.room_name)} · ${escapeHtml(brandDeviceTypeLabel(candidate.type))} · ${candidate.online ? "在线" : "离线"}</span>
+          <em>${escapeHtml(stateLabel)}</em>
+        </span>
+        ${translation ? `<span class="brand-native-preview">
+          <span>标准指令 <code>${escapeHtml(JSON.stringify(translation.normalized_command || {}))}</code></span>
+          <span>${escapeHtml(translation.brand_name)} <code>${escapeHtml(JSON.stringify(translation.native_command || {}))}</code></span>
+        </span>` : '<span class="brand-native-preview readonly"><span>只读设备，无下行控制报文</span></span>'}
+      </label>`;
+  }).join("")}`;
+  refreshIcons();
+}
+
+function clearBrandDiscovery(message = "扫描后显示可纳管设备") {
+  brandState.candidates = [];
+  const container = $("#brand-candidate-list");
+  if (container) container.innerHTML = `<div class="empty-state compact"><span>${escapeHtml(message)}</span></div>`;
+  const adoptButton = $("#brand-adopt");
+  if (adoptButton) adoptButton.disabled = true;
+}
+
+function renderBrandInventory(payload) {
+  brandState.ecosystems = Array.isArray(payload?.ecosystems) ? payload.ecosystems : [];
+  brandState.unboundDevices = Array.isArray(payload?.unbound_devices) ? payload.unbound_devices : [];
+  renderDemoBrands(brandState.ecosystems.map((brand) => ({
+    ...brand,
+    device_count: Array.isArray(brand.devices) ? brand.devices.length : 0,
+  })));
+  renderBrandPicker();
+  renderBrandBindings();
+}
+
+async function loadBrandInventory({ preserveDiscovery = false } = {}) {
+  try {
+    const payload = await api("/api/brands");
+    renderBrandInventory(payload);
+    if (!preserveDiscovery) clearBrandDiscovery();
+    const bound = Number(payload.bound_total) || 0;
+    const total = Number(payload.device_total) || 0;
+    setBrandOnboardStatus(`${bound}/${total} 台已有品牌归属`, bound === total && total > 0 ? "success" : "idle");
+    return payload;
+  } catch (error) {
+    setBrandOnboardStatus("品牌接入服务不可用", "failure");
+    clearBrandDiscovery(error.message);
+    return null;
+  }
+}
+
+async function discoverBrandDevices({ quiet = false } = {}) {
+  if (brandState.busy || !brandState.selectedBrandId) return null;
+  brandState.busy = true;
+  renderBrandPicker();
+  setBrandOnboardStatus("正在扫描 Home Assistant 实体…", "pending");
+  try {
+    const payload = await api("/api/brands/discover", {
+      method: "POST",
+      body: JSON.stringify({ brand_id: brandState.selectedBrandId }),
+    });
+    renderBrandPairing(payload.brand);
+    renderBrandCandidates(payload);
+    const count = Number(payload.adoptable_count) || 0;
+    if (!quiet) {
+      setBrandOnboardStatus(count ? `发现 ${count} 台可纳管设备` : "没有待接入的兼容设备", count ? "success" : "idle");
+    }
+    return payload;
+  } catch (error) {
+    setBrandOnboardStatus("扫描失败", "failure");
+    clearBrandDiscovery(error.message);
+    toast(error.message, true);
+    return null;
+  } finally {
+    brandState.busy = false;
+    renderBrandPicker();
+    renderBrandBindings();
+  }
+}
+
+async function adoptSelectedBrandDevices() {
+  if (brandState.busy) return;
+  const deviceIds = $$('[data-brand-candidate]:checked').map((input) => input.value);
+  if (!deviceIds.length) {
+    toast("请先勾选至少一台待接入设备", true);
+    return;
+  }
+  brandState.busy = true;
+  renderBrandPicker();
+  setBrandOnboardStatus("正在纳管并刷新设备状态…", "executing");
+  try {
+    const payload = await api("/api/brands/adopt", {
+      method: "POST",
+      body: JSON.stringify({ brand_id: brandState.selectedBrandId, device_ids: deviceIds }),
+    });
+    if (payload.devices) renderInventory(payload);
+    await loadBrandInventory();
+    setBrandOnboardStatus(`已纳管 ${deviceIds.length} 台设备`, "success");
+    toast("品牌设备已纳管，设备徽标和报文翻译已更新");
+  } catch (error) {
+    setBrandOnboardStatus("纳管失败", "failure");
+    toast(error.message, true);
+  } finally {
+    brandState.busy = false;
+    renderBrandPicker();
+    renderBrandBindings();
+  }
+}
+
+async function releaseBrandDevice(deviceId) {
+  if (brandState.busy || !deviceId) return;
+  const device = brandState.ecosystems.flatMap((brand) => brand.devices || [])
+    .find((item) => item.device_id === deviceId);
+  brandState.busy = true;
+  renderBrandPicker();
+  renderBrandBindings();
+  setBrandOnboardStatus("正在释放品牌归属…", "executing");
+  try {
+    const payload = await api("/api/brands/release", {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId }),
+    });
+    if (payload.devices) renderInventory(payload);
+    await loadBrandInventory();
+    setBrandOnboardStatus(`${device?.name || "设备"}已释放，可重新纳管`, "success");
+    toast("已释放品牌归属，Home Assistant 实体仍保持在线");
+  } catch (error) {
+    setBrandOnboardStatus("释放失败", "failure");
+    toast(error.message, true);
+  } finally {
+    brandState.busy = false;
+    renderBrandPicker();
+    renderBrandBindings();
+  }
+}
+
+async function resetBrandBindings() {
+  if (brandState.busy) return;
+  brandState.busy = true;
+  renderBrandPicker();
+  renderBrandBindings();
+  setBrandOnboardStatus("正在恢复出厂品牌映射…", "executing");
+  try {
+    const payload = await api("/api/brands/reset", { method: "POST", body: "{}" });
+    if (payload.devices) renderInventory(payload);
+    await loadBrandInventory();
+    setBrandOnboardStatus("已恢复出厂品牌映射", "success");
+    toast("五个品牌生态的出厂映射已恢复");
+  } catch (error) {
+    setBrandOnboardStatus("恢复失败", "failure");
+    toast(error.message, true);
+  } finally {
+    brandState.busy = false;
+    renderBrandPicker();
+    renderBrandBindings();
+  }
+}
+
 function renderDemoReadiness(payload) {
   const pill = $("#demo-ready-pill");
   const list = $("#demo-check-list");
@@ -1604,6 +1888,7 @@ function switchView(view) {
   });
   if (view === "events") loadEvents();
   if (view === "assistant") loadConversation();
+  if (view === "demo") loadBrandInventory();
 }
 
 function selectFloorDevice(deviceId) {
@@ -2110,6 +2395,28 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#cancel-chat-plan").addEventListener("click", () => chatPlanAction("/api/chat/cancel"));
   $("#demo-selfcheck")?.addEventListener("click", runDemoSelfCheck);
   $("#demo-reset")?.addEventListener("click", runDemoReset);
+  $("#brand-picker")?.addEventListener("change", (event) => {
+    brandState.selectedBrandId = event.target.value;
+    renderBrandPairing(selectedBrand());
+    clearBrandDiscovery("品牌已切换，请点击“扫描设备”");
+    setBrandOnboardStatus("等待扫描", "idle");
+  });
+  $("#brand-discover")?.addEventListener("click", () => discoverBrandDevices());
+  $("#brand-adopt")?.addEventListener("click", adoptSelectedBrandDevices);
+  $("#brand-reset")?.addEventListener("click", resetBrandBindings);
+  $("#brand-candidate-list")?.addEventListener("change", (event) => {
+    const input = event.target.closest("[data-brand-candidate]");
+    if (!input) return;
+    input.closest(".brand-candidate")?.classList.toggle("is-selected", input.checked);
+    const selected = $$('[data-brand-candidate]:checked').length;
+    const button = $("#brand-adopt");
+    if (button) button.disabled = brandState.busy || selected === 0;
+    setBrandOnboardStatus(selected ? `已选择 ${selected} 台设备` : "请选择待接入设备", selected ? "success" : "idle");
+  });
+  $("#brand-bound-list")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-brand-release]");
+    if (button) releaseBrandDevice(button.dataset.brandRelease);
+  });
   $("#demo-scenario-list")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-demo-scenario]");
     if (button) runDemoScenario(button.dataset.demoScenario);

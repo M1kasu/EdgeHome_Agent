@@ -150,6 +150,24 @@ class DashboardProjectionTests(unittest.TestCase):
         self.assertIn("device.ui.workflow_actions", frontend)
         self.assertIn("controlDevice(device, wfPayload(step)", frontend)
 
+    def test_brand_onboarding_frontend_is_wired_to_runtime_apis(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        app = (root / "workbench" / "app.js").read_text(encoding="utf-8")
+
+        for endpoint in (
+            'api("/api/brands")',
+            'api("/api/brands/discover"',
+            'api("/api/brands/adopt"',
+            'api("/api/brands/release"',
+            'api("/api/brands/reset"',
+        ):
+            with self.subTest(endpoint=endpoint):
+                self.assertIn(endpoint, app)
+        self.assertIn('#brand-picker")?.addEventListener("change"', app)
+        self.assertIn('data-brand-candidate', app)
+        self.assertIn('data-brand-release', app)
+        self.assertIn('if (view === "demo") loadBrandInventory()', app)
+
 
 if __name__ == "__main__":
     unittest.main()

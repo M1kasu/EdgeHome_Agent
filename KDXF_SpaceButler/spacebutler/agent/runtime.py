@@ -113,6 +113,7 @@ class AgentRuntime:
 
     def history(self) -> dict[str, object]:
         with self._lock:
+            llm_provider, llm_model = _llm_identity(self._llm)
             return {
                 "conversation_id": "agent",
                 "messages": list(self._messages[-30:]),
@@ -120,6 +121,8 @@ class AgentRuntime:
                 "active_plan": self._plan_view(),
                 "busy": False,
                 "llm_available": bool(self._llm and self._llm.available()),
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
                 "orchestrator": "langgraph",
                 "graph_trace": list(self._last_graph_trace),
             }
@@ -605,6 +608,7 @@ class AgentRuntime:
 
     def status(self) -> dict[str, object]:
         snapshot = self._world.snapshot()
+        llm_provider, llm_model = _llm_identity(self._llm)
         goal, status = self._world.active_goal()
         preference = (
             self._preferences.estimate(goal.activity, goal.room, "brightness")
@@ -617,6 +621,8 @@ class AgentRuntime:
                 "preferences": self._preferences.summary(),
                 "last_outcome": self._plan_view(),
                 "llm_available": bool(self._llm and self._llm.available()),
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
                 "goal_status_detail": status.value,
                 "llm_contribution": self._world.contribution().to_dict(),
                 "runtime": self.runtime_health(),
@@ -642,6 +648,20 @@ class AgentRuntime:
             "last_error": self._last_runtime_error,
             "status": "ready" if thread_alive and recent_tick and self._fatal_error is None else "degraded",
         }
+
+def _llm_identity(client: object | None) -> tuple[str, str]:
+    if client is None:
+        return "", ""
+    provider = str(getattr(client, "provider_label", "") or "")
+    model = str(getattr(client, "model", "") or getattr(client, "_model", "") or "")
+    if provider:
+        return provider, model
+    channels = getattr(client, "channels", None)
+    if isinstance(channels, list):
+        ready = next((item for item in channels if isinstance(item, dict) and item.get("ready")), None)
+        if isinstance(ready, dict):
+            return str(ready.get("label", "")), str(ready.get("model", ""))
+    return "LLM", model
 
 
 def _action_text(action: object) -> str:

@@ -105,6 +105,8 @@ class ConversationAgent:
                 "active_plan": deepcopy(active),
                 "busy": self._busy,
                 "llm_available": self._llm_client is not None,
+                "llm_provider": getattr(self._llm_client, "provider_label", "") if self._llm_client else "",
+                "llm_model": getattr(self._llm_client, "model", "") if self._llm_client else "",
             }
 
     def preview(self, text: str) -> dict[str, object]:
@@ -121,6 +123,8 @@ class ConversationAgent:
         return {
             "plan": deepcopy(plan),
             "llm_available": self._llm_client is not None,
+            "llm_provider": getattr(self._llm_client, "provider_label", "") if self._llm_client else "",
+            "llm_model": getattr(self._llm_client, "model", "") if self._llm_client else "",
         }
 
     def submit(self, text: str) -> dict[str, object]:

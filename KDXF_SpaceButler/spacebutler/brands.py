@@ -30,6 +30,7 @@ BRAND_RECORDS: Final[tuple[dict[str, object], ...]] = (
         "protocol": "MIoT-Spec",
         "transport": "Wi-Fi 本地直连",
         "accent": "#ff6900",
+        "device_types": ("light", "presence"),
         "pairing_steps": (
             "广播 mDNS _miio._udp 探测局域网节点",
             "校验 did / token 配对凭据",
@@ -43,6 +44,7 @@ BRAND_RECORDS: Final[tuple[dict[str, object], ...]] = (
         "protocol": "Zigbee 3.0 Cluster",
         "transport": "Aqara 网关",
         "accent": "#00a3a1",
+        "device_types": ("light", "curtain", "presence", "contact", "illuminance"),
         "pairing_steps": (
             "网关进入 Zigbee 允许入网窗口",
             "设备上报 Node Descriptor 与端点列表",
@@ -56,6 +58,7 @@ BRAND_RECORDS: Final[tuple[dict[str, object], ...]] = (
         "protocol": "美居 IoT",
         "transport": "美居云",
         "accent": "#1a63b8",
+        "device_types": ("climate", "temperature"),
         "pairing_steps": (
             "美居账号 OAuth 授权",
             "拉取家庭设备列表与 applianceCode",
@@ -69,6 +72,7 @@ BRAND_RECORDS: Final[tuple[dict[str, object], ...]] = (
         "protocol": "HarmonyOS Connect",
         "transport": "华为中枢",
         "accent": "#3d5afe",
+        "device_types": ("switch",),
         "pairing_steps": (
             "碰一碰 / 中枢发现设备 deviceId",
             "读取 profile 的 serviceId 能力集",
@@ -82,6 +86,7 @@ BRAND_RECORDS: Final[tuple[dict[str, object], ...]] = (
         "protocol": "Zigbee Light Link",
         "transport": "Hue Bridge",
         "accent": "#8e44ad",
+        "device_types": ("light",),
         "pairing_steps": (
             "Bridge 按钮授权生成 username",
             "touchlink 配对灯具并分配 light id",
@@ -93,7 +98,7 @@ BRAND_RECORDS: Final[tuple[dict[str, object], ...]] = (
 
 
 # 出厂默认归属。运行时以 BrandBindingStore 中的绑定为准；释放后设备变为「待接入」，
-# 可以被任意生态重新发现和纳管。
+# 只能被声明支持该设备类型的生态重新发现和纳管。
 DEFAULT_DEVICE_BRANDS: Final[dict[str, str]] = {
     "living_room_main_light": "mijia",
     "living_room_curtain": "aqara",
@@ -116,15 +121,29 @@ _BRAND_BY_ID: Final[dict[str, dict[str, object]]] = {
 def brand_record(brand_id: str) -> dict[str, object] | None:
     """Look up one brand definition."""
     record = _BRAND_BY_ID.get(brand_id)
-    return dict(record) if record is not None else None
+    return _public_brand_record(record) if record is not None else None
+
+
+def _public_brand_record(record: dict[str, object]) -> dict[str, object]:
+    """Return a JSON-friendly copy of one immutable brand definition."""
+    return {
+        **record,
+        "pairing_steps": list(record.get("pairing_steps", ())),
+        "device_types": list(record.get("device_types", ())),
+    }
 
 
 def brand_ecosystems() -> list[dict[str, object]]:
     """Every ecosystem the adapter layer can translate for, for the onboarding UI."""
-    return [
-        {**record, "pairing_steps": list(record.get("pairing_steps", ()))}
-        for record in BRAND_RECORDS
-    ]
+    return [_public_brand_record(record) for record in BRAND_RECORDS]
+
+
+def brand_supports_device_type(brand_id: str, device_type: str) -> bool:
+    """Whether this adapter can honestly represent the given device type."""
+    record = _BRAND_BY_ID.get(brand_id)
+    if record is None:
+        return False
+    return device_type in set(record.get("device_types", ()))
 
 
 def brand_for_device(
@@ -243,7 +262,7 @@ def brand_summary(bindings: dict[str, str] | None = None) -> list[dict[str, obje
     for brand_id in table.values():
         counts[brand_id] = counts.get(brand_id, 0) + 1
     return [
-        {**record, "pairing_steps": list(record.get("pairing_steps", ())),
+        {**_public_brand_record(record),
          "device_count": counts.get(str(record["brand_id"]), 0)}
         for record in BRAND_RECORDS
         if counts.get(str(record["brand_id"]), 0) > 0

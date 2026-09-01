@@ -5,11 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import json
+import os
 import socket
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from .llm.client import _candidate_endpoints, _preferred_endpoint
 from .memory import HouseholdMemory
 
 
@@ -32,10 +35,41 @@ class EdgeLlmClient:
         base_url: str,
         model: str = "/models/Home-Llama-3.2-3B.q4_k_m.gguf",
         timeout_seconds: float = 30,
+        api_key: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self._api_key = api_key
+
+    @classmethod
+    def from_env(cls) -> "EdgeLlmClient | None":
+        """Reuse the configured planning API for conversational intent handling."""
+        base_url = os.environ.get("SPACEBUTLER_LLM_BASE_URL")
+        if not base_url:
+            return None
+        timeout = os.environ.get("SPACEBUTLER_LLM_TIMEOUT")
+        return cls(
+            base_url=base_url,
+            model=os.environ.get("SPACEBUTLER_LLM_MODEL") or "/models/Home-Llama-3.2-3B.q4_k_m.gguf",
+            timeout_seconds=float(timeout) if timeout else 40.0,
+            api_key=os.environ.get("SPACEBUTLER_LLM_API_KEY") or None,
+        )
+
+    @property
+    def provider_label(self) -> str:
+        host = (urlparse(self.base_url).hostname or "").lower()
+        return "DeepSeek" if host == "api.deepseek.com" else (host or "OpenAI 兼容 API")
+
+    def available(self) -> bool:
+        for endpoint in _candidate_endpoints(self.base_url, "models"):
+            try:
+                with urlopen(Request(endpoint, headers=self._headers()), timeout=3) as response:
+                    if response.status == 200:
+                        return True
+            except (OSError, HTTPError, URLError):
+                continue
+        return False
 
     def context_window(self) -> int | None:
         """Per-slot context size, or None when the server does not report it.
@@ -45,7 +79,7 @@ class EdgeLlmClient:
         就绪自检靠这个值在开拍前拦住那种情况。
         """
         try:
-            with urlopen(f"{self.base_url}/props", timeout=3) as response:
+            with urlopen(Request(f"{self.base_url}/props", headers=self._headers()), timeout=3) as response:
                 if response.status != 200:
                     return None
                 payload = json.loads(response.read().decode("utf-8"))
@@ -107,10 +141,12 @@ class EdgeLlmClient:
             "max_tokens": max_tokens,
             "response_format": {"type": "json_object"},
         }
+        if self.provider_label == "DeepSeek":
+            payload["thinking"] = {"type": "disabled"}
         request = Request(
-            f"{self.base_url}/v1/chat/completions",
+            _preferred_endpoint(self.base_url, "chat/completions"),
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers=self._headers(),
             method="POST",
         )
         try:
@@ -128,6 +164,12 @@ class EdgeLlmClient:
         except (KeyError, IndexError, TypeError) as error:
             raise RuntimeError("edge LLM response has no assistant content") from error
         return _parse_json_object(str(content))
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
 
 
 class EdgeLanguageRouter:

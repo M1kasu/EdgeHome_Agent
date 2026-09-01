@@ -53,18 +53,27 @@ def main() -> int:
     wait_until_ready(ha_url, timeout_seconds=120)
     token = obtain_token(ha_url, auth_store)
     configure_esphome_with_retry(ha_url, token, noise_psk)
+    configured_client = LlmClient.from_env()
     language_router = None
     edge_llm_client = None
-    try:
-        with urlopen(f"{edge_llm_url.rstrip('/')}/health", timeout=3) as response:
-            if response.status == 200:
-                edge_llm_client = EdgeLlmClient(edge_llm_url, timeout_seconds=60)
-                language_router = EdgeLanguageRouter(edge_llm_client)
-    except OSError:
-        pass
-    # 双通道：云端优先（快），本地边缘兜底（断网/限流/未配 Key 时仍可规划）。
-    cloud_client = ClaudeClient.from_env()
-    planning_client = build_router(cloud_client, LlmClient.from_env())
+    if configured_client is not None and configured_client.is_remote:
+        # 显式配置云 API 时，规划和对话意图共用同一个模型，不再暗中等待本地 llama.cpp。
+        edge_llm_client = EdgeLlmClient.from_env()
+        if edge_llm_client is not None and edge_llm_client.available():
+            language_router = EdgeLanguageRouter(edge_llm_client)
+        planning_client = configured_client
+        cloud_client = None
+    else:
+        # 未配远程 API 时保持旧的边缘部署能力：Claude 优先，llama.cpp 兜底。
+        try:
+            with urlopen(f"{edge_llm_url.rstrip('/')}/health", timeout=3) as response:
+                if response.status == 200:
+                    edge_llm_client = EdgeLlmClient(edge_llm_url, timeout_seconds=60)
+                    language_router = EdgeLanguageRouter(edge_llm_client)
+        except OSError:
+            pass
+        cloud_client = ClaudeClient.from_env()
+        planning_client = build_router(cloud_client, configured_client)
     for channel in getattr(planning_client, "channels", []):
         print(f"LLM channel: {channel['label']} model={channel['model'] or '-'} "
               f"ready={channel['ready']}", flush=True)
